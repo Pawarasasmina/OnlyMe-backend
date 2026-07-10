@@ -26,6 +26,10 @@ export const register = asyncHandler(async (req, res) => {
 
   const { name, username, email, password, role } = req.body;
 
+  if (role && !["fan", "creator"].includes(role)) {
+    throw new ApiError(400, "You can only register as a fan or creator");
+  }
+
   const existingUser = await User.findOne({
     $or: [{ email: email.toLowerCase() }, { username: username.toLowerCase() }],
   });
@@ -39,7 +43,7 @@ export const register = asyncHandler(async (req, res) => {
     username,
     email,
     password,
-    role,
+    role: role || "fan",
   });
 
   const tokens = issueAuthTokens(user);
