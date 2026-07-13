@@ -26,6 +26,10 @@ export const protect = asyncHandler(async (req, _res, next) => {
     throw new ApiError(401, "User not found");
   }
 
+  if (user.status !== "active") {
+    throw new ApiError(403, "This account is suspended");
+  }
+
   req.user = user;
   next();
 });
