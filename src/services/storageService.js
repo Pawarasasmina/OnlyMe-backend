@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
 import { v2 as cloudinary } from "cloudinary";
 import { env } from "../config/env.js";
 import ApiError from "../utils/ApiError.js";
@@ -24,6 +27,8 @@ export function createUploadSignature(userId) {
     { folder, timestamp },
     env.cloudinaryApiSecret
   );
+
+  const filename = file?.filename ?? "";
 
   return {
     signature,

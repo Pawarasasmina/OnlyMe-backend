@@ -1,4 +1,7 @@
 import User from "../models/User.js";
+import AdminProfile from "../models/AdminProfile.js";
+import CreatorProfile from "../models/CreatorProfile.js";
+import FanProfile from "../models/FanProfile.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -29,17 +32,30 @@ function sanitizeUser(user) {
   };
 }
 
-export const register = asyncHandler(async (req, res) => {
-  validateRegisterPayload(req.body);
+async function createRoleProfile(user) {
+  if (user.role === "creator") {
+    await CreatorProfile.create({ user: user._id });
+  }
 
-  const { name, username, email, password, role } = req.body;
+  if (user.role === "fan") {
+    await FanProfile.create({ user: user._id });
+  }
+
+  if (user.role === "admin") {
+    await AdminProfile.create({ user: user._id });
+  }
+}
+
+export const register = asyncHandler(async (req, res) => {
+  const { name, username, email, password } = validateRegisterPayload(req.body);
+  const { role } = req.body;
 
   if (role && !["fan", "creator"].includes(role)) {
     throw new ApiError(400, "You can only register as a fan or creator");
   }
 
   const existingUser = await User.findOne({
-    $or: [{ email: email.toLowerCase() }, { username: username.toLowerCase() }],
+    $or: [{ email }, { username }],
   });
 
   if (existingUser) {
@@ -53,6 +69,7 @@ export const register = asyncHandler(async (req, res) => {
     password,
     role: role || "fan",
   });
+  await createRoleProfile(user);
 
   const tokens = issueAuthTokens(user);
 
@@ -73,6 +90,14 @@ export const login = asyncHandler(async (req, res) => {
 
   if (!user || !(await user.comparePassword(password))) {
     throw new ApiError(401, "Invalid email or password");
+  }
+
+  if (user.role === "admin") {
+    await AdminProfile.findOneAndUpdate(
+      { user: user._id },
+      { $set: { lastLoginAt: new Date() }, $setOnInsert: { user: user._id } },
+      { upsert: true }
+    );
   }
 
   const tokens = issueAuthTokens(user);
