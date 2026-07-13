@@ -5,6 +5,14 @@ import { sendResponse } from "../utils/response.js";
 import { validateLoginPayload, validateRegisterPayload } from "../validators/authValidator.js";
 import { issueAuthTokens } from "../services/tokenService.js";
 import { env } from "../config/env.js";
+import jwt from "jsonwebtoken";
+
+const refreshCookieOptions = {
+  httpOnly: true,
+  sameSite: "lax",
+  secure: env.nodeEnv === "production",
+  maxAge: 30 * 24 * 60 * 60 * 1000,
+};
 
 function sanitizeUser(user) {
   return {
@@ -48,11 +56,7 @@ export const register = asyncHandler(async (req, res) => {
 
   const tokens = issueAuthTokens(user);
 
-  res.cookie("refreshToken", tokens.refreshToken, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: env.nodeEnv === "production",
-  });
+  res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
 
   return sendResponse(res, 201, "Registration successful", {
     user: sanitizeUser(user),
@@ -73,11 +77,7 @@ export const login = asyncHandler(async (req, res) => {
 
   const tokens = issueAuthTokens(user);
 
-  res.cookie("refreshToken", tokens.refreshToken, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: env.nodeEnv === "production",
-  });
+  res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
 
   return sendResponse(res, 200, "Login successful", {
     user: sanitizeUser(user),
@@ -86,8 +86,35 @@ export const login = asyncHandler(async (req, res) => {
 });
 
 export const logout = asyncHandler(async (_req, res) => {
-  res.clearCookie("refreshToken");
+  res.clearCookie("refreshToken", refreshCookieOptions);
   return sendResponse(res, 200, "Logout successful");
+});
+
+export const refreshSession = asyncHandler(async (req, res) => {
+  const refreshToken = req.cookies.refreshToken;
+  if (!refreshToken) {
+    throw new ApiError(401, "Refresh token is required");
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(refreshToken, env.refreshSecret);
+  } catch {
+    res.clearCookie("refreshToken", refreshCookieOptions);
+    throw new ApiError(401, "Refresh token is invalid or expired");
+  }
+
+  const user = await User.findById(decoded.sub);
+  if (!user || user.status !== "active") {
+    res.clearCookie("refreshToken", refreshCookieOptions);
+    throw new ApiError(401, "User is not available");
+  }
+
+  const tokens = issueAuthTokens(user);
+  res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
+  return sendResponse(res, 200, "Session refreshed", {
+    accessToken: tokens.accessToken,
+  });
 });
 
 export const getMe = asyncHandler(async (req, res) => {
