@@ -28,8 +28,6 @@ export function createUploadSignature(userId) {
     env.cloudinaryApiSecret
   );
 
-  const filename = file?.filename ?? "";
-
   return {
     signature,
     timestamp,
@@ -38,6 +36,60 @@ export function createUploadSignature(userId) {
     apiKey: env.cloudinaryApiKey,
     uploadUrl: `https://api.cloudinary.com/v1_1/${env.cloudinaryCloudName}/image/upload`,
   };
+}
+
+export async function storeFile(file) {
+  ensureCloudinaryIsConfigured();
+
+  if (!file?.path) {
+    throw new ApiError(400, "A file is required");
+  }
+
+  try {
+    const result = await cloudinary.uploader.upload(file.path, {
+      resource_type: "image",
+      folder: "onlyme/profiles",
+    });
+
+    return {
+      id: result.public_id,
+      url: result.secure_url,
+    };
+  } finally {
+    await fs.unlink(file.path).catch(() => {});
+  }
+}
+
+function publicIdFromCloudinaryUrl(fileUrl) {
+  try {
+    const url = new URL(fileUrl);
+    if (url.hostname !== "res.cloudinary.com") return null;
+
+    const uploadMarker = "/upload/";
+    const uploadIndex = url.pathname.indexOf(uploadMarker);
+    if (uploadIndex === -1) return null;
+
+    const assetPath = decodeURIComponent(url.pathname.slice(uploadIndex + uploadMarker.length));
+    const withoutVersion = assetPath.replace(/^v\d+\//, "");
+    return withoutVersion.replace(/\.[^/.]+$/, "");
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteStoredFile(fileUrl) {
+  if (!fileUrl) return;
+
+  const publicId = publicIdFromCloudinaryUrl(fileUrl);
+  if (publicId) {
+    await deleteAsset(publicId);
+    return;
+  }
+
+  const filename = path.basename(fileUrl);
+  if (filename && filename !== "." && filename !== path.sep) {
+    await fs.unlink(path.resolve("uploads", filename)).catch(() => {});
+  }
 }
 
 export async function deleteAsset(publicId, resourceType = "image") {
