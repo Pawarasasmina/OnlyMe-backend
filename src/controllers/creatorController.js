@@ -28,7 +28,7 @@ async function buildCreatorView(user) {
 }
 
 export const listCreators = asyncHandler(async (_req, res) => {
-  const users = await User.find({ role: "creator", status: "active" })
+  const users = await User.find({ role: "creator", status: "active", creatorApprovalStatus: "approved" })
     .select("name username avatar isVerified")
     .sort({ createdAt: -1 })
     .lean();
@@ -42,6 +42,7 @@ export const getCreatorByUsername = asyncHandler(async (req, res) => {
     username: req.params.username.toLowerCase(),
     role: "creator",
     status: "active",
+    creatorApprovalStatus: "approved",
   })
     .select("name username avatar isVerified")
     .lean();

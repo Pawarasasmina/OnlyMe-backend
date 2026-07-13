@@ -144,14 +144,6 @@ function calculateCompletion(user, profile) {
   return { percentage: 100, completed: 1, total: 1 };
 }
 
-async function assertUsernameAvailable(username, userId) {
-  const existingUser = await User.findOne({ username, _id: { $ne: userId } });
-
-  if (existingUser) {
-    throw new ApiError(409, "That username is already taken");
-  }
-}
-
 export const getMyProfile = asyncHandler(async (req, res) => {
   const profile = await ensureRoleProfile(req.user);
 
@@ -162,10 +154,6 @@ export const updateMyProfile = asyncHandler(async (req, res) => {
   const { common, profile } = validateRoleProfilePayload(req.user.role, req.body, req.user);
   const commonUpdates = stripUndefined(common);
   const profileUpdates = stripUndefined(profile);
-
-  if (commonUpdates.username) {
-    await assertUsernameAvailable(commonUpdates.username, req.user._id);
-  }
 
   if (Object.keys(commonUpdates).length) {
     await User.updateOne({ _id: req.user._id }, { $set: commonUpdates });
@@ -185,6 +173,30 @@ export const updateMyProfile = asyncHandler(async (req, res) => {
   const updatedProfile = await ensureRoleProfile(user);
 
   return sendResponse(res, 200, "Profile updated", serializeOwnProfile(user, updatedProfile));
+});
+
+export const changeMyPassword = asyncHandler(async (req, res) => {
+  const currentPassword = String(req.body.currentPassword || "");
+  const newPassword = String(req.body.newPassword || "");
+
+  if (!currentPassword || !newPassword) {
+    throw new ApiError(400, "Current password and new password are required");
+  }
+  if (newPassword.length < 8 || newPassword.length > 128) {
+    throw new ApiError(400, "New password must be between 8 and 128 characters");
+  }
+  if (currentPassword === newPassword) {
+    throw new ApiError(400, "New password must be different from the current password");
+  }
+
+  const user = await User.findById(req.user._id).select("+password");
+  if (!user || !(await user.comparePassword(currentPassword))) {
+    throw new ApiError(400, "Current password is incorrect");
+  }
+
+  user.password = newPassword;
+  await user.save();
+  return sendResponse(res, 200, "Password changed successfully");
 });
 
 export const uploadMyAvatar = asyncHandler(async (req, res) => {
@@ -282,7 +294,12 @@ export const getMyProfileCompletion = asyncHandler(async (req, res) => {
 
 export const getPublicCreatorProfile = asyncHandler(async (req, res) => {
   const username = normalizeUsername(req.params.username);
-  const user = await User.findOne({ username, role: "creator", status: "active" });
+  const user = await User.findOne({
+    username,
+    role: "creator",
+    status: "active",
+    creatorApprovalStatus: "approved",
+  });
 
   if (!user) {
     throw new ApiError(404, "Creator profile not found");

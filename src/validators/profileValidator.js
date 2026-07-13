@@ -146,7 +146,7 @@ export function validateRoleProfilePayload(role, payload, user) {
   }
 
   if (payload.username !== undefined) {
-    common.username = validateUsername(payload.username);
+    throw new ApiError(400, "Username cannot be changed after registration");
   }
 
   const preferredLanguage =

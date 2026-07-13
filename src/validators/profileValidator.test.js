@@ -14,6 +14,13 @@ test("rejects unsafe username formats", () => {
   assert.throws(() => validateUsername("bad handle"), /letters, numbers/);
 });
 
+test("rejects username changes after registration", () => {
+  assert.throws(
+    () => validateRoleProfilePayload("fan", { username: "another_name" }, { isVerified: false }),
+    /cannot be changed/i
+  );
+});
+
 test("rejects creator-only NSFW toggle when user is not verified", () => {
   assert.throws(
     () =>
@@ -21,7 +28,6 @@ test("rejects creator-only NSFW toggle when user is not verified", () => {
         "creator",
         {
           displayName: "Creator",
-          username: "creator_test",
           nsfwEnabled: true,
         },
         { isVerified: false }
@@ -37,7 +43,6 @@ test("validates creator subscription and PPM price ranges", () => {
         "creator",
         {
           displayName: "Creator",
-          username: "creator_test",
           subscriptionPriceCents: 100,
         },
         { isVerified: true }
@@ -51,7 +56,6 @@ test("validates creator subscription and PPM price ranges", () => {
         "creator",
         {
           displayName: "Creator",
-          username: "creator_test",
           ppmEnabled: true,
           ppmPrice: 5,
         },
@@ -66,7 +70,6 @@ test("keeps fan updates limited to fan profile fields", () => {
     "fan",
     {
       displayName: "Fan User",
-      username: "fan_user",
       bio: "Hello",
       subscriptionPriceCents: 99999,
       role: "admin",
@@ -75,7 +78,7 @@ test("keeps fan updates limited to fan profile fields", () => {
   );
 
   assert.equal(result.common.name, "Fan User");
-  assert.equal(result.common.username, "fan_user");
+  assert.equal(result.common.username, undefined);
   assert.equal(result.profile.bio, "Hello");
   assert.equal(result.profile.subscriptionPriceCents, undefined);
   assert.equal(result.profile.role, undefined);

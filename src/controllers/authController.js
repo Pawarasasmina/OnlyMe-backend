@@ -24,6 +24,7 @@ function sanitizeUser(user) {
     username: user.username,
     email: user.email,
     role: user.role,
+    creatorApprovalStatus: user.creatorApprovalStatus,
     avatar: user.avatar,
     isVerified: user.isVerified,
     status: user.status,
@@ -34,7 +35,7 @@ function sanitizeUser(user) {
 
 async function createRoleProfile(user) {
   if (user.role === "creator") {
-    await CreatorProfile.create({ user: user._id });
+    await CreatorProfile.create({ user: user._id, verificationStatus: "pending" });
   }
 
   if (user.role === "fan") {
@@ -68,6 +69,7 @@ export const register = asyncHandler(async (req, res) => {
     email,
     password,
     role: role || "fan",
+    creatorApprovalStatus: role === "creator" ? "pending" : null,
   });
   await createRoleProfile(user);
 

@@ -4,6 +4,7 @@ import {
   listContentForModeration,
   listUsers,
   updateContentStatus,
+  updateCreatorApproval,
   updateUserStatus,
 } from "../controllers/adminController.js";
 import { protect } from "../middleware/authMiddleware.js";
@@ -15,6 +16,7 @@ router.use(protect, authorize("admin"));
 router.get("/dashboard", getAdminDashboard);
 router.get("/users", listUsers);
 router.patch("/users/:userId/status", updateUserStatus);
+router.patch("/users/:userId/creator-approval", updateCreatorApproval);
 router.get("/content", listContentForModeration);
 router.patch("/content/:contentId/status", updateContentStatus);
 

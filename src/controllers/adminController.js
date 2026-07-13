@@ -2,25 +2,27 @@ import mongoose from "mongoose";
 import Content from "../models/Content.js";
 import Subscription from "../models/Subscription.js";
 import User from "../models/User.js";
+import CreatorProfile from "../models/CreatorProfile.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 
 export const getAdminDashboard = asyncHandler(async (_req, res) => {
-  const [totalUsers, fans, creators, admins, activeUsers, publishedContent, draftContent, activeSubscriptions] =
+  const [totalUsers, fans, creators, admins, activeUsers, pendingCreators, publishedContent, draftContent, activeSubscriptions] =
     await Promise.all([
       User.countDocuments(),
       User.countDocuments({ role: "fan" }),
       User.countDocuments({ role: "creator" }),
       User.countDocuments({ role: "admin" }),
       User.countDocuments({ status: "active" }),
+      User.countDocuments({ role: "creator", creatorApprovalStatus: { $in: ["pending", null] } }),
       Content.countDocuments({ status: "published" }),
       Content.countDocuments({ status: "draft" }),
       Subscription.countDocuments({ status: "active" }),
     ]);
 
   return sendResponse(res, 200, "Admin dashboard fetched", {
-    stats: { totalUsers, fans, creators, admins, activeUsers, publishedContent, draftContent, activeSubscriptions },
+    stats: { totalUsers, fans, creators, admins, activeUsers, pendingCreators, publishedContent, draftContent, activeSubscriptions },
   });
 });
 
@@ -30,7 +32,7 @@ export const listUsers = asyncHandler(async (req, res) => {
   if (["active", "suspended"].includes(req.query.status)) filter.status = req.query.status;
 
   const users = await User.find(filter)
-    .select("name username email role status isVerified avatar createdAt")
+    .select("name username email role status creatorApprovalStatus isVerified avatar createdAt")
     .sort({ createdAt: -1 })
     .limit(200)
     .lean();
@@ -50,10 +52,42 @@ export const updateUserStatus = asyncHandler(async (req, res) => {
     req.params.userId,
     { $set: { status: req.body.status } },
     { new: true, runValidators: true }
-  ).select("name username email role status isVerified avatar createdAt");
+  ).select("name username email role status creatorApprovalStatus isVerified avatar createdAt");
   if (!user) throw new ApiError(404, "User not found");
 
   return sendResponse(res, 200, "User status updated", { user });
+});
+
+export const updateCreatorApproval = asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.userId)) throw new ApiError(400, "Invalid user ID");
+  if (!["approved", "rejected"].includes(req.body.approvalStatus)) {
+    throw new ApiError(400, "Approval status must be approved or rejected");
+  }
+
+  const user = await User.findOne({ _id: req.params.userId, role: "creator" });
+  if (!user) throw new ApiError(404, "Creator account not found");
+
+  user.creatorApprovalStatus = req.body.approvalStatus;
+  user.isVerified = req.body.approvalStatus === "approved";
+  await user.save();
+
+  await CreatorProfile.findOneAndUpdate(
+    { user: user._id },
+    {
+      $set: { verificationStatus: req.body.approvalStatus === "approved" ? "verified" : "rejected" },
+      $setOnInsert: { user: user._id },
+    },
+    { upsert: true, runValidators: true }
+  );
+
+  return sendResponse(res, 200, `Creator application ${req.body.approvalStatus}`, {
+    user: {
+      id: user._id,
+      role: user.role,
+      creatorApprovalStatus: user.creatorApprovalStatus,
+      isVerified: user.isVerified,
+    },
+  });
 });
 
 export const listContentForModeration = asyncHandler(async (_req, res) => {

@@ -33,6 +33,11 @@ const userSchema = new mongoose.Schema(
       enum: ["fan", "creator", "admin"],
       default: "fan",
     },
+    creatorApprovalStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected", null],
+      default: null,
+    },
     avatar: {
       type: String,
       default: "",
