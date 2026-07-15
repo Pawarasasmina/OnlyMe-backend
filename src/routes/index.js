@@ -1,4 +1,4 @@
-import { Router } from "express";
+﻿import { Router } from "express";
 import authRoutes from "./authRoutes.js";
 import userRoutes from "./userRoutes.js";
 import creatorRoutes from "./creatorRoutes.js";
@@ -6,6 +6,8 @@ import contentRoutes from "./contentRoutes.js";
 import adminRoutes from "./adminRoutes.js";
 import profileRoutes from "./profileRoutes.js";
 import publicProfileRoutes from "./publicProfileRoutes.js";
+import creatorVerificationRoutes from "./creatorVerificationRoutes.js";
+import adminVerificationRoutes from "./adminVerificationRoutes.js";
 import { sendResponse } from "../utils/response.js";
 
 const router = Router();
@@ -15,8 +17,11 @@ router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
 router.use("/profile", profileRoutes);
 router.use("/", publicProfileRoutes);
+router.use("/creator/verification", creatorVerificationRoutes);
 router.use("/creator", creatorRoutes);
 router.use("/content", contentRoutes);
+router.use("/admin/creator-verifications", adminVerificationRoutes);
 router.use("/admin", adminRoutes);
 
 export default router;
+

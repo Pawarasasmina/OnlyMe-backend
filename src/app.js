@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import path from "node:path";
 import cors from "cors";
 import helmet from "helmet";
@@ -9,6 +9,9 @@ import routes from "./routes/index.js";
 import { env } from "./config/env.js";
 import { errorHandler } from "./middleware/errorMiddleware.js";
 import { notFoundHandler } from "./middleware/notFoundMiddleware.js";
+import { assertPrivateStorageConfiguration } from "./services/privateDocumentStorageService.js";
+
+assertPrivateStorageConfiguration();
 
 const app = express();
 
@@ -38,3 +41,4 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 export default app;
+

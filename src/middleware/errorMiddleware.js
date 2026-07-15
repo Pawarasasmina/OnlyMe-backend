@@ -1,8 +1,8 @@
-export function errorHandler(err, _req, res, _next) {
+﻿export function errorHandler(err, _req, res, _next) {
   if (err.code === "LIMIT_FILE_SIZE") {
     return res.status(400).json({
       success: false,
-      message: "Uploaded image is too large",
+      message: "Uploaded file is too large",
       data: {},
     });
   }
@@ -15,3 +15,4 @@ export function errorHandler(err, _req, res, _next) {
     data: {},
   });
 }
+

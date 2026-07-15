@@ -1,4 +1,4 @@
-import dotenv from "dotenv";
+﻿import dotenv from "dotenv";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,4 +19,7 @@ export const env = {
   cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || "",
   cloudinaryApiKey: process.env.CLOUDINARY_API_KEY || "",
   cloudinaryApiSecret: process.env.CLOUDINARY_API_SECRET || "",
+  verificationStorageRoot: process.env.VERIFICATION_STORAGE_ROOT || "./private/creator-verifications",
+  verificationMaxFileSize: Math.max(1024, Number(process.env.VERIFICATION_MAX_FILE_SIZE_BYTES) || 10 * 1024 * 1024),
 };
+

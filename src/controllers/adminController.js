@@ -1,8 +1,7 @@
-import mongoose from "mongoose";
+﻿import mongoose from "mongoose";
 import Content from "../models/Content.js";
 import Subscription from "../models/Subscription.js";
 import User from "../models/User.js";
-import CreatorProfile from "../models/CreatorProfile.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -58,36 +57,8 @@ export const updateUserStatus = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "User status updated", { user });
 });
 
-export const updateCreatorApproval = asyncHandler(async (req, res) => {
-  if (!mongoose.isValidObjectId(req.params.userId)) throw new ApiError(400, "Invalid user ID");
-  if (!["approved", "rejected"].includes(req.body.approvalStatus)) {
-    throw new ApiError(400, "Approval status must be approved or rejected");
-  }
-
-  const user = await User.findOne({ _id: req.params.userId, role: "creator" });
-  if (!user) throw new ApiError(404, "Creator account not found");
-
-  user.creatorApprovalStatus = req.body.approvalStatus;
-  user.isVerified = req.body.approvalStatus === "approved";
-  await user.save();
-
-  await CreatorProfile.findOneAndUpdate(
-    { user: user._id },
-    {
-      $set: { verificationStatus: req.body.approvalStatus === "approved" ? "verified" : "rejected" },
-      $setOnInsert: { user: user._id },
-    },
-    { upsert: true, runValidators: true }
-  );
-
-  return sendResponse(res, 200, `Creator application ${req.body.approvalStatus}`, {
-    user: {
-      id: user._id,
-      role: user.role,
-      creatorApprovalStatus: user.creatorApprovalStatus,
-      isVerified: user.isVerified,
-    },
-  });
+export const updateCreatorApproval = asyncHandler(async (_req, _res) => {
+  throw new ApiError(410, "Direct creator approval is disabled. Use the creator verification review endpoint.");
 });
 
 export const listContentForModeration = asyncHandler(async (_req, res) => {
@@ -115,3 +86,6 @@ export const updateContentStatus = asyncHandler(async (req, res) => {
 
   return sendResponse(res, 200, "Content status updated", { content });
 });
+
+
+
