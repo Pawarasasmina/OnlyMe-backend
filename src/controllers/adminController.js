@@ -15,8 +15,8 @@ export const getAdminDashboard = asyncHandler(async (_req, res) => {
       User.countDocuments({ role: "admin" }),
       User.countDocuments({ status: "active" }),
       User.countDocuments({ role: "creator", creatorApprovalStatus: { $in: ["pending", null] } }),
-      Content.countDocuments({ status: "published" }),
-      Content.countDocuments({ status: "draft" }),
+      Content.countDocuments({ status: { $in: ["PUBLISHED", "published"] } }),
+      Content.countDocuments({ status: { $in: ["DRAFT", "draft"] } }),
       Subscription.countDocuments({ status: "active" }),
     ]);
 
@@ -70,21 +70,8 @@ export const listContentForModeration = asyncHandler(async (_req, res) => {
   return sendResponse(res, 200, "Content moderation list fetched", { items });
 });
 
-export const updateContentStatus = asyncHandler(async (req, res) => {
-  if (!mongoose.isValidObjectId(req.params.contentId)) throw new ApiError(400, "Invalid content ID");
-  if (!["draft", "published"].includes(req.body.status)) {
-    throw new ApiError(400, "Status must be draft or published");
-  }
-
-  const update = {
-    status: req.body.status,
-    publishedAt: req.body.status === "published" ? new Date() : null,
-  };
-  const content = await Content.findByIdAndUpdate(req.params.contentId, { $set: update }, { new: true })
-    .populate("creator", "name username avatar");
-  if (!content) throw new ApiError(404, "Content not found");
-
-  return sendResponse(res, 200, "Content status updated", { content });
+export const updateContentStatus = asyncHandler(async (_req, _res) => {
+  throw new ApiError(410, "Direct status changes are disabled. Use the manual content moderation endpoints.");
 });
 
 

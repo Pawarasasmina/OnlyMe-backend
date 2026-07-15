@@ -8,7 +8,9 @@
     "start": "node src/server.js",
     "lint": "eslint .",
     "test": "node --test",
-    "migrate:creator-verification": "node src/scripts/migrateCreatorVerification.js"
+    "migrate:creator-verification": "node src/scripts/migrateCreatorVerification.js",
+    "migrate:content:dry-run": "node src/scripts/migrateContentWorkflow.js --dry-run",
+    "migrate:content": "node src/scripts/migrateContentWorkflow.js --apply"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

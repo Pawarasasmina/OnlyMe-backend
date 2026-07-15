@@ -9,7 +9,7 @@ import ApiError from "../utils/ApiError.js";
 async function buildCreatorView(user) {
   const [profile, posts, members] = await Promise.all([
     CreatorProfile.findOne({ user: user._id }).lean(),
-    Content.countDocuments({ creator: user._id, status: "published" }),
+    Content.countDocuments({ creator: user._id, status: { $in: ["PUBLISHED", "published"] } }),
     Subscription.countDocuments({ creator: user._id, status: "active" }),
   ]);
 

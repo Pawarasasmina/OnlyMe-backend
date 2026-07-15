@@ -1,6 +1,7 @@
 import multer from "multer";
 import path from "node:path";
 import ApiError from "../utils/ApiError.js";
+import { env } from "../config/env.js";
 
 const storage = multer.diskStorage({
   destination: "uploads/",
@@ -38,4 +39,17 @@ export const uploadCoverImage = multer({
   storage,
   fileFilter: imageFileFilter,
   limits: { fileSize: 8 * 1024 * 1024 },
+});
+
+const allowedContentTypes = new Set([
+  "image/jpeg", "image/png", "image/webp", "video/mp4", "video/quicktime",
+  "audio/mpeg", "audio/wav", "audio/x-wav", "audio/aac", "audio/flac", "audio/x-flac",
+]);
+export const uploadContentMedia = multer({
+  storage,
+  limits: { files: 1, fileSize: env.contentMaxFileSize },
+  fileFilter: (_req, file, callback) => {
+    if (!allowedContentTypes.has(file.mimetype)) return callback(new ApiError(400, "Unsupported content media type"));
+    callback(null, true);
+  },
 });

@@ -30,4 +30,12 @@ Express API starter for the OnlyMe platform.
 - `GET /api/fans/:username` - fetch a public fan profile when the fan has enabled public visibility.
 
 Profile updates never accept role, status, verification approval, wallet, earnings, password, or system timestamps from clients.
-Uploaded files are stored in the existing local `uploads/` directory and exposed through `/uploads/:filename`.
+Profile uploads use a temporary local `uploads/` file before Cloudinary storage; verification documents use separate private local storage. Content media uses Cloudinary directly.
+
+## Content workflow
+
+New content uses an explicit `DRAFT -> PENDING_REVIEW -> PUBLISHED | CHANGES_REQUESTED | REJECTED` workflow. Direct publishing is disabled. Creator mutations require an approved creator account; admin decisions use `/api/admin/content-moderation` and require a pending-review record. Subscriber-only and pay-per-view public responses are locked and omit protected media identifiers and URLs.
+
+Content uploads use Cloudinary authenticated delivery and draft-specific signed uploads. Set `CONTENT_MAX_FILE_SIZE_BYTES`; protected delivery must remain configured as authenticated in Cloudinary. No subscription or PPV entitlement is granted in this phase.
+
+Inspect legacy content without writing: `npm run migrate:content:dry-run`. Apply manually after review and backup: `npm run migrate:content`. The migration is never run during application startup.

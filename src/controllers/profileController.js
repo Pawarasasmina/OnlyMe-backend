@@ -3,6 +3,8 @@ import AdminProfile from "../models/AdminProfile.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
 import User from "../models/User.js";
+import Content from "../models/Content.js";
+import { serializeContent } from "../services/contentAccessService.js";
 import { deleteStoredFile, storeFile } from "../services/storageService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -311,6 +313,8 @@ export const getPublicCreatorProfile = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Creator profile not found");
   }
 
+  const posts = await Content.find({ creator: user._id, status: { $in: ["PUBLISHED", "published"] } })
+    .sort({ publishedAt: -1 }).limit(20).populate("creator", "name username avatar").lean();
   return sendResponse(res, 200, "Creator profile fetched", {
     creator: {
       displayName: user.name,
@@ -328,7 +332,7 @@ export const getPublicCreatorProfile = asyncHandler(async (req, res) => {
       messagingEnabled: profile.messagingEnabled,
       joinedAt: user.createdAt,
     },
-    posts: [],
+    posts: posts.map((post) => serializeContent(post, null)),
   });
 });
 
