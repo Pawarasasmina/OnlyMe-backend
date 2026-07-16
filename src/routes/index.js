@@ -10,6 +10,9 @@ import creatorVerificationRoutes from "./creatorVerificationRoutes.js";
 import adminVerificationRoutes from "./adminVerificationRoutes.js";
 import adminContentRoutes from "./adminContentRoutes.js";
 import fanRoutes from "./fanRoutes.js";
+import unifiedProfileRoutes from "./unifiedProfileRoutes.js";
+import publicationRoutes from "./publicationRoutes.js";
+import adminPublicationRoutes from "./adminPublicationRoutes.js";
 import { sendResponse } from "../utils/response.js";
 
 const router = Router();
@@ -18,12 +21,15 @@ router.get("/health", (_req, res) => sendResponse(res, 200, "OnlyMe API is runni
 router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
 router.use("/profile", profileRoutes);
+router.use("/profiles", unifiedProfileRoutes);
+router.use("/publications", publicationRoutes);
 router.use("/", publicProfileRoutes);
 router.use("/creator/verification", creatorVerificationRoutes);
 router.use("/creator", creatorRoutes);
 router.use("/content", contentRoutes);
 router.use("/admin/creator-verifications", adminVerificationRoutes);
 router.use("/admin/content-moderation", adminContentRoutes);
+router.use("/admin/publication-moderation", adminPublicationRoutes);
 router.use("/admin", adminRoutes);
 router.use("/fan", fanRoutes);
 

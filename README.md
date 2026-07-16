@@ -39,3 +39,16 @@ New content uses an explicit `DRAFT -> PENDING_REVIEW -> PUBLISHED | CHANGES_REQ
 Content uploads use Cloudinary authenticated delivery and draft-specific signed uploads. Set `CONTENT_MAX_FILE_SIZE_BYTES`; protected delivery must remain configured as authenticated in Cloudinary. No subscription or PPV entitlement is granted in this phase.
 
 Inspect legacy content without writing: `npm run migrate:content:dry-run`. Apply manually after review and backup: `npm run migrate:content`. The migration is never run during application startup.
+# Structured publications (Phase 3)
+
+The structured publication domain is separate from legacy `Content` and supports `SEEN`, `WORLD`, and `PREMIUM_WORLD` aggregates with ordered chapters. Submitted aggregates are frozen in an embedded snapshot and moderated as one container. Published editing is intentionally unavailable until a future revision workflow is implemented.
+
+Creator APIs are mounted at `/api/publications`; admin moderation is mounted at `/api/admin/publication-moderation`. Paid kinds return preview-only public responses with `paymentAvailable: false`; no payment or entitlement behavior is simulated.
+
+Legacy classification is analysis-only:
+
+```sh
+npm run analyze:publications -- --output=reports/publication-analysis.json
+```
+
+The report is written with create-only semantics and the command has no apply mode. Existing `Content` records are never modified.

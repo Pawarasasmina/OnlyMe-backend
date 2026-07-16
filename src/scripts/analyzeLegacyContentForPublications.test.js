@@ -1,0 +1,5 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { buildLegacyAnalysis, classifyLegacyContent } from "./analyzeLegacyContentForPublications.js";
+test("analysis classifies conservatively and reports ambiguity", () => { assert.equal(classifyLegacyContent({ creator: "c", status: "published", accessLevel: "PAY_PER_VIEW" }).candidate, "WORLD"); assert.equal(classifyLegacyContent({ creator: "c", status: "DRAFT", accessLevel: "UNKNOWN" }).candidate, "AMBIGUOUS"); });
+test("analysis is deterministic, dry-run only, and reports planet conflicts", () => { const items = Array.from({ length: 4 }, (_, index) => ({ _id: `id-${index}`, creator: "creator", status: "published", accessLevel: "PAY_PER_VIEW", contentType: "TEXT" })); const one = buildLegacyAnalysis(items, new Set(["creator"])); const two = buildLegacyAnalysis(items, new Set(["creator"])); assert.deepEqual(one, two); assert.equal(one.planetLimitConflicts.length, 1); assert.equal(one.records.every((item) => item.requiresManualClassification), true); });

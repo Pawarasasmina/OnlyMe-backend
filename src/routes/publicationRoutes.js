@@ -1,0 +1,8 @@
+import { Router } from "express";
+import { archive, createChapter, createDraft, deleteChapter, editChapter, getMine, getPublishedPublication, listMine, listPublishedSeens, reorder, resubmit, submit, updateDraft, uploadMedia } from "../controllers/publicationController.js";
+import { optionalProtect, protect } from "../middleware/authMiddleware.js";
+import { authorize } from "../middleware/roleMiddleware.js";
+import { requireApprovedCreator } from "../middleware/creatorApprovalMiddleware.js";
+import { uploadContentMedia } from "../middleware/uploadMiddleware.js";
+const router = Router(); const creator = [protect, authorize("creator"), requireApprovedCreator];
+router.get("/seen", optionalProtect, listPublishedSeens); router.get("/mine", ...creator, listMine); router.get("/mine/:id", ...creator, getMine); router.post("/drafts", ...creator, createDraft); router.put("/mine/:id", ...creator, updateDraft); router.post("/mine/:id/chapters", ...creator, createChapter); router.put("/mine/:id/chapters/:chapterId", ...creator, editChapter); router.delete("/mine/:id/chapters/:chapterId", ...creator, deleteChapter); router.post("/mine/:id/reorder-chapters", ...creator, reorder); router.post("/mine/:id/media-upload", ...creator, uploadContentMedia.single("file"), uploadMedia); router.post("/mine/:id/submit", ...creator, submit); router.post("/mine/:id/resubmit", ...creator, resubmit); router.post("/mine/:id/archive", ...creator, archive); router.get("/:id", optionalProtect, getPublishedPublication); export default router;

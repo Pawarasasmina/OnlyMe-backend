@@ -1,0 +1,6 @@
+import mongoose from "mongoose";
+import { PUBLICATION_ACTIONS, PUBLICATION_STATUSES } from "../constants/publicationConstants.js";
+const schema = new mongoose.Schema({ publication: { type: mongoose.Schema.Types.ObjectId, ref: "Publication", required: true, index: true }, creator: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }, action: { type: String, enum: PUBLICATION_ACTIONS, required: true }, previousStatus: { type: String, enum: PUBLICATION_STATUSES, required: true }, newStatus: { type: String, enum: PUBLICATION_STATUSES, required: true }, revisionVersion: { type: Number, required: true }, admin: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }, creatorVisibleMessage: { type: String, default: "", maxlength: 2000 }, internalNote: { type: String, default: "", maxlength: 2000 }, reasonCodes: [{ type: String, maxlength: 80 }], transitionId: { type: String, required: true, unique: true } }, { timestamps: { createdAt: true, updatedAt: false } });
+schema.index({ publication: 1, createdAt: 1 });
+for (const operation of ["updateOne", "updateMany", "findOneAndUpdate", "deleteOne", "deleteMany", "findOneAndDelete"]) schema.pre(operation, function immutable() { throw new Error("Publication review history is immutable"); });
+export default mongoose.model("PublicationReviewHistory", schema);

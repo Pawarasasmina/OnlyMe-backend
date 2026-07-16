@@ -33,3 +33,22 @@ export const protect = asyncHandler(async (req, _res, next) => {
   req.user = user;
   next();
 });
+
+export const optionalProtect = asyncHandler(async (req, _res, next) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
+  if (!token) return next();
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, env.accessSecret);
+  } catch {
+    throw new ApiError(401, "Invalid or expired authentication token");
+  }
+
+  const user = await User.findById(decoded.sub);
+  if (!user) throw new ApiError(401, "User not found");
+  if (user.status !== "active") throw new ApiError(403, "This account is suspended");
+  req.user = user;
+  return next();
+});
