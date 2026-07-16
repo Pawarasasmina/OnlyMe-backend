@@ -9,6 +9,7 @@ import publicProfileRoutes from "./publicProfileRoutes.js";
 import creatorVerificationRoutes from "./creatorVerificationRoutes.js";
 import adminVerificationRoutes from "./adminVerificationRoutes.js";
 import adminContentRoutes from "./adminContentRoutes.js";
+import fanRoutes from "./fanRoutes.js";
 import { sendResponse } from "../utils/response.js";
 
 const router = Router();
@@ -24,6 +25,7 @@ router.use("/content", contentRoutes);
 router.use("/admin/creator-verifications", adminVerificationRoutes);
 router.use("/admin/content-moderation", adminContentRoutes);
 router.use("/admin", adminRoutes);
+router.use("/fan", fanRoutes);
 
 export default router;
 
