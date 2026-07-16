@@ -6,6 +6,9 @@ const transactionSchema = new mongoose.Schema(
     amount: { type: Number, required: true },
     type: { type: String, default: "credit" },
     status: { type: String, default: "pending" },
+    description: { type: String, default: "" },
+    creator: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    content: { type: mongoose.Schema.Types.ObjectId, ref: "Content", default: null },
   },
   { timestamps: true }
 );

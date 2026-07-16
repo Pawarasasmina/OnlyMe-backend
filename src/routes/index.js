@@ -4,6 +4,7 @@ import userRoutes from "./userRoutes.js";
 import creatorRoutes from "./creatorRoutes.js";
 import contentRoutes from "./contentRoutes.js";
 import adminRoutes from "./adminRoutes.js";
+import fanRoutes from "./fanRoutes.js";
 import { sendResponse } from "../utils/response.js";
 
 const router = Router();
@@ -14,5 +15,6 @@ router.use("/users", userRoutes);
 router.use("/creator", creatorRoutes);
 router.use("/content", contentRoutes);
 router.use("/admin", adminRoutes);
+router.use("/fan", fanRoutes);
 
 export default router;
