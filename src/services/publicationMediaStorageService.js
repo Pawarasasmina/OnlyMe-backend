@@ -10,7 +10,7 @@ const mediaRule = (type) => type === "IMAGE" ? { resourceType: "image", formats:
 export async function uploadPublicationFile({ blockId, chapterId, creatorId, file, mediaType, publicationId }) {
   configured(); const rule = mediaRule(mediaType); if (!rule || !file?.path) throw new ApiError(400, "Valid publication media is required");
   const folder = `onlyme/publications/${creatorId}/${publicationId}/${chapterId}/${blockId}`;
-  try { const asset = await cloudinary.uploader.upload(file.path, { resource_type: rule.resourceType, type: "authenticated", folder, allowed_formats: rule.formats, context: { purpose: "publication", creator: String(creatorId), publication: String(publicationId), chapter: String(chapterId), block: String(blockId) } }); return { assetId: asset.public_id }; }
+  try { const asset = await cloudinary.uploader.upload(file.path, { resource_type: rule.resourceType, type: "authenticated", folder, allowed_formats: rule.formats, context: { purpose: "publication", creator: String(creatorId), publication: String(publicationId), chapter: String(chapterId), block: String(blockId) } }); const format=String(asset.format||"").toLowerCase();return { assetId: asset.public_id, resourceType: asset.resource_type, mediaType, format, bytes: asset.bytes, width: asset.width, height: asset.height, duration: asset.duration, secureUrl: cloudinary.url(asset.public_id,{secure:true,sign_url:true,type:"authenticated",resource_type:asset.resource_type,format:format||undefined}) }; }
   finally { await fs.unlink(file.path).catch(() => {}); }
 }
 

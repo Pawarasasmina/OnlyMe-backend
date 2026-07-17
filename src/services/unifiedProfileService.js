@@ -36,7 +36,7 @@ function completion(owner, roleProfile) {
   return { completed, total: checks.length, percentage: Math.round((completed / checks.length) * 100) };
 }
 
-export function serializeUnifiedProfile({ content = [], owner, planets = [], publishedContentCount = content.length, roleProfile, seens = [], viewer }) {
+export function serializeUnifiedProfile({ content = [], owner, planets = [], publishedContentCount = content.length, roleProfile, seens = [], sharedSeens = [], viewer }) {
   const capabilities = profileViewerCapabilities(owner, viewer);
   const contentViewer = capabilities.isOwner ? viewer : null;
   const socialLinks = owner.role === "creator"
@@ -68,6 +68,7 @@ export function serializeUnifiedProfile({ content = [], owner, planets = [], pub
     publicMetrics: { publishedContentCount },
     publicContent: content.map((item) => serializeContent(item, contentViewer)),
     seens: seens.map((item) => serializePublication(item, contentViewer)).filter(Boolean),
+    sharedSeens: sharedSeens.map((item) => serializePublication(item, contentViewer)).filter(Boolean),
     planets: planets.map((item) => serializePublication(item, contentViewer)).filter(Boolean).slice(0, 3),
     viewerCapabilities: capabilities,
     ...(capabilities.isOwner ? { profileCompletion: completion(owner, roleProfile) } : {}),
