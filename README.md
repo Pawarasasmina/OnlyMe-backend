@@ -30,6 +30,12 @@ Express API starter for the OnlyMe platform.
 - `GET /api/fans/:username` - fetch a public fan profile when the fan has enabled public visibility.
 
 Profile updates never accept role, status, verification approval, wallet, earnings, password, or system timestamps from clients.
+
+## Internal Stars financial foundation
+
+Phase 6A uses immutable `StarsLedgerEntry` records as the source of truth and `Wallet.balance` as a transactionally updated integer-Stars projection. Legacy `Transaction` and `Subscription` collections remain read-only compatibility data. Financial commands require a transaction-capable MongoDB deployment (replica set or managed cluster) and fail with `TRANSACTIONS_REQUIRED` on standalone MongoDB; they never use transaction fallback. Admin test credits are disabled unless `ENABLE_ADMIN_STAR_CREDITS=true` and are never automatic.
+
+Read-only audits: `npm run analyze:financial-migration` and `npm run analyze:wallet-reconciliation`. These commands never create opening balances or change records. Resolve duplicate wallets, unsupported currency values, fractions, negatives, and projection mismatches manually before any approved migration.
 Profile uploads use a temporary local `uploads/` file before Cloudinary storage; verification documents use separate private local storage. Content media uses Cloudinary directly.
 
 ## Content workflow

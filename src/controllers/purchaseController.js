@@ -1,0 +1,1 @@
+import{purchaseWorld}from"../services/worldPurchaseService.js";import{asyncHandler}from"../utils/asyncHandler.js";import{sendResponse}from"../utils/response.js";export const purchase=asyncHandler(async(req,res)=>sendResponse(res,200,"World purchased",await purchaseWorld({user:req.user,publicationId:req.params.publicationId,key:req.body.idempotencyKey})));

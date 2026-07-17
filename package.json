@@ -7,11 +7,13 @@
     "dev": "nodemon --watch src --watch .env --watch src/controllers/.env --ext js,mjs,cjs,json,env src/server.js",
     "start": "node src/server.js",
     "lint": "eslint .",
-    "test": "node --test",
+    "test": "node --test --test-concurrency=1",
     "migrate:creator-verification": "node src/scripts/migrateCreatorVerification.js",
     "migrate:content:dry-run": "node src/scripts/migrateContentWorkflow.js --dry-run",
     "migrate:content": "node src/scripts/migrateContentWorkflow.js --apply",
-    "analyze:publications": "node src/scripts/analyzeLegacyContentForPublications.js"
+    "analyze:publications": "node src/scripts/analyzeLegacyContentForPublications.js",
+    "analyze:financial-migration": "node src/scripts/analyzeFinancialMigration.js",
+    "analyze:wallet-reconciliation": "node src/scripts/analyzeWalletReconciliation.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

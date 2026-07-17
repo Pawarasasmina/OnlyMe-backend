@@ -9,10 +9,12 @@
 
   const statusCode = err.statusCode || 500;
 
+  const exposeMessage = statusCode < 500 || process.env.NODE_ENV !== "production";
   return res.status(statusCode).json({
     success: false,
-    message: err.message || "Internal server error",
+    message: exposeMessage ? (err.message || "Internal server error") : "Internal server error",
     data: {},
+    ...(err.code ? { code: err.code } : {}),
   });
 }
 

@@ -1,0 +1,1 @@
+import test from"node:test";import assert from"node:assert/strict";import{LEDGER_ENTRY_TYPES}from"../constants/financialConstants.js";test("refund foundation uses linked credit and earning reversal entry types",()=>{assert.ok(LEDGER_ENTRY_TYPES.includes("REFUND_CREDIT"));assert.ok(LEDGER_ENTRY_TYPES.includes("CREATOR_EARNING_REVERSAL"))});

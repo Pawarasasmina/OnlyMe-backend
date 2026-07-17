@@ -14,13 +14,15 @@ const profileModelFor = (role) => role === "creator" ? CreatorProfile : FanProfi
 async function loadProfile(owner, viewer) {
   const Model = profileModelFor(owner.role);
   const publishedFilter = { creator: owner._id, status: { $in: ["PUBLISHED", "published"] } };
+  const profileOwner = Boolean(viewer?._id && String(viewer._id) === String(owner._id));
+  const planetStatus = profileOwner ? { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } : "PUBLISHED";
   const [roleProfile, content, publishedContentCount, seens, planets] = await Promise.all([
     Model.findOne({ user: owner._id }).lean(),
     Content.find(publishedFilter)
       .sort({ publishedAt: -1, _id: -1 }).limit(30).populate("creator", "name username avatar").lean(),
     Content.countDocuments(publishedFilter),
     Publication.find({ creator: owner._id, kind: "SEEN", status: "PUBLISHED" }).sort({ publishedAt: -1 }).limit(30).populate("creator", "name username avatar").lean(),
-    Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: "PUBLISHED" }).sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
+    Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: planetStatus }).select("+submittedSnapshot").sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
   ]);
   if (!roleProfile) throw new ApiError(404, "Profile not found");
   return serializeUnifiedProfile({ owner, roleProfile, content, planets, publishedContentCount, seens, viewer });
