@@ -4,6 +4,8 @@ import FanProfile from "../models/FanProfile.js";
 import User from "../models/User.js";
 import Publication from "../models/Publication.js";
 import SeenEngagement from "../models/SeenEngagement.js";
+import WallEngagement from "../models/WallEngagement.js";
+import WallPost from "../models/WallPost.js";
 import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -17,7 +19,7 @@ async function loadProfile(owner, viewer) {
   const publishedFilter = { creator: owner._id, status: { $in: ["PUBLISHED", "published"] } };
   const profileOwner = Boolean(viewer?._id && String(viewer._id) === String(owner._id));
   const planetStatus = profileOwner ? { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } : "PUBLISHED";
-  const [roleProfile, content, publishedContentCount, seens, planets, shares] = await Promise.all([
+  const [roleProfile, content, publishedContentCount, seens, planets, shares, wallShares] = await Promise.all([
     Model.findOne({ user: owner._id }).lean(),
     Content.find(publishedFilter)
       .sort({ publishedAt: -1, _id: -1 }).limit(30).populate("creator", "name username avatar").lean(),
@@ -25,12 +27,16 @@ async function loadProfile(owner, viewer) {
     Publication.find({ creator: owner._id, kind: "SEEN", status: "PUBLISHED" }).sort({ publishedAt: -1 }).limit(30).populate("creator", "name username avatar").lean(),
     Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: planetStatus }).select("+submittedSnapshot").sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
     SeenEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("publication").lean(),
+    WallEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("post").lean(),
   ]);
   if (!roleProfile) throw new ApiError(404, "Profile not found");
   const sharedSeens = shares.length ? await Publication.find({ _id: { $in: shares.map((item) => item.publication) }, kind: "SEEN", status: "PUBLISHED" }).populate("creator", "name username avatar").lean() : [];
   const shareOrder = new Map(shares.map((item, index) => [String(item.publication), index]));
   sharedSeens.sort((left, right) => shareOrder.get(String(left._id)) - shareOrder.get(String(right._id)));
-  return serializeUnifiedProfile({ owner, roleProfile, content, planets, publishedContentCount, seens, sharedSeens, viewer });
+  const sharedWallPosts = wallShares.length ? await WallPost.find({ _id: { $in: wallShares.map((item) => item.post) }, status: "PUBLISHED" }).populate("creator", "name username avatar").lean() : [];
+  const wallOrder = new Map(wallShares.map((item, index) => [String(item.post), index]));
+  sharedWallPosts.sort((left, right) => wallOrder.get(String(left._id)) - wallOrder.get(String(right._id)));
+  return serializeUnifiedProfile({ owner, roleProfile, content, planets, publishedContentCount, seens, sharedSeens, sharedWallPosts, viewer });
 }
 
 export const getOwnUnifiedProfile = asyncHandler(async (req, res) => {

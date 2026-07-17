@@ -1,0 +1,13 @@
+import { Router } from "express";
+import { createStory, deleteStory, listStories, reactStory, viewStory } from "../controllers/storyController.js";
+import { protect } from "../middleware/authMiddleware.js";
+import { authorize } from "../middleware/roleMiddleware.js";
+import { requireApprovedCreator } from "../middleware/creatorApprovalMiddleware.js";
+import { uploadProfileImage } from "../middleware/uploadMiddleware.js";
+const router = Router();
+router.get("/active", protect, authorize("fan", "creator"), listStories);
+router.post("/", protect, authorize("creator"), requireApprovedCreator, uploadProfileImage.single("image"), createStory);
+router.post("/:id/views", protect, authorize("fan"), viewStory);
+router.post("/:id/reactions", protect, authorize("fan"), reactStory);
+router.delete("/:id", protect, authorize("creator"), deleteStory);
+export default router;
