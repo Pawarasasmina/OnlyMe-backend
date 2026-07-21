@@ -10,11 +10,11 @@ export function publicationAccess(publication, viewer, { entitlement = null } = 
   if (viewer?.role === "admin") return "ADMIN";
   if (viewer?._id && String(viewer._id) === String(ownerId)) return "OWNER";
   if (item.status === "REMOVED" || !item.publishedSnapshot) return "NOT_VISIBLE";
-  if (!["PUBLISHED","ARCHIVED"].includes(item.status)) return "NOT_VISIBLE";
+  if (!["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED", "ARCHIVED"].includes(item.status)) return "NOT_VISIBLE";
   if (item.kind === "SEEN") return "PUBLIC_FULL";
   if (item.kind === "WORLD" && entitlement === "ENTITLED_WORLD") return "ENTITLED_WORLD";
   if (item.kind === "PREMIUM_WORLD" && entitlement === "ACTIVE_PREMIUM_MEMBER") return "ACTIVE_PREMIUM_MEMBER";
-  if (item.status !== "PUBLISHED") return "NOT_VISIBLE";
+  if (item.status === "ARCHIVED") return "NOT_VISIBLE";
   return "PUBLIC_PREVIEW";
 }
 
@@ -32,4 +32,4 @@ export function serializePublication(publication, viewer, { admin = false, entit
 }
 
 export const isSeenPlacement = (publication) => publication.kind === "SEEN" && publication.status === "PUBLISHED";
-export const isPlanetPlacement = (publication) => ["WORLD", "PREMIUM_WORLD"].includes(publication.kind) && publication.status === "PUBLISHED";
+export const isPlanetPlacement = (publication) => ["WORLD", "PREMIUM_WORLD"].includes(publication.kind) && Boolean(publication.publishedSnapshot) && ["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED"].includes(publication.status);

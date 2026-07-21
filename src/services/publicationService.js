@@ -36,5 +36,107 @@ export async function reorderChapters(creatorId, id, payload) { const publicatio
 async function submit(creatorId, id, expectedStatus, action, version) { const publication = await editable(creatorId, id); if (publication.status !== expectedStatus) throw new ApiError(409, `Publication must be ${expectedStatus}`); const chapters = await Chapter.find({ publication: id }).sort({ order: 1 }).lean(); assertCompletePublication(publication, chapters); const snapshot = { version: publication.draftVersion, metadata: metadataSnapshot(publication), chapters: chapters.map(chapterSnapshot), frozenAt: new Date() }; const transitionId = crypto.randomUUID(); const updated = await Publication.findOneAndUpdate({ _id: id, creator: creatorId, status: expectedStatus, statusVersion: version }, { $set: { status: "PENDING_REVIEW", submittedSnapshot: snapshot, submittedVersion: publication.draftVersion, submittedAt: new Date(), creatorVisibleFeedback: "", lastTransitionId: transitionId }, $inc: { statusVersion: 1 } }, { new: true }).select("+submittedSnapshot"); if (!updated) throw new ApiError(409, "Publication changed or was already submitted"); await history(updated, action, expectedStatus, transitionId); return updated; }
 export const submitPublication = (creatorId, id, payload) => submit(creatorId, id, "DRAFT", "SUBMITTED", expectedVersion(payload));
 export const resubmitPublication = (creatorId, id, payload) => submit(creatorId, id, "CHANGES_REQUESTED", "RESUBMITTED", expectedVersion(payload));
+export async function startPublishedRevision(creatorId, id, payload) {
+  ensureId(id);
+  const version = expectedVersion(payload);
+  const transitionId = crypto.randomUUID();
+  const updated = await Publication.findOneAndUpdate(
+    {
+      _id: id,
+      creator: creatorId,
+      status: "PUBLISHED",
+      statusVersion: version,
+      publishedSnapshot: { $exists: true },
+    },
+    {
+      $set: {
+        status: "CHANGES_REQUESTED",
+        creatorVisibleFeedback: "",
+        lastTransitionId: transitionId,
+      },
+      $inc: { statusVersion: 1 },
+    },
+    { new: true },
+  ).select("+submittedSnapshot");
+  if (!updated)
+    throw new ApiError(409, "Published planet changed or is already being revised");
+  await history(updated, "REVISION_STARTED", "PUBLISHED", transitionId);
+  return updated;
+}
+export async function cancelPublishedRevision(creatorId, id, payload) {
+  ensureId(id);
+  const version = expectedVersion(payload);
+  return withTransactionFallback(async (session) => {
+    const current = await Publication.findOne({
+      _id: id,
+      creator: creatorId,
+      status: "CHANGES_REQUESTED",
+      statusVersion: version,
+      publishedSnapshot: { $exists: true },
+    }).session(session);
+    if (!current?.publishedSnapshot)
+      throw new ApiError(409, "This planet revision cannot be canceled");
+
+    const snapshot = plain(current.publishedSnapshot);
+    const metadata = snapshot.metadata || {};
+    const transitionId = crypto.randomUUID();
+    const restoredMetadata = {
+      title: metadata.title || "",
+      summary: metadata.summary || "",
+      description: metadata.description || "",
+      category: metadata.category || "",
+      tags: metadata.tags || [],
+      planet: metadata.planet,
+      pricing: metadata.pricing,
+      previewPolicy: metadata.previewPolicy,
+      status: "PUBLISHED",
+      creatorVisibleFeedback: "",
+      submittedSnapshot: current.publishedSnapshot,
+      submittedVersion: current.publishedVersion,
+      lastTransitionId: transitionId,
+    };
+    const unsetMetadata = {};
+    for (const field of ["coverMedia", "introMedia"]) {
+      if (metadata[field]) restoredMetadata[field] = metadata[field];
+      else unsetMetadata[field] = 1;
+    }
+    const restored = await Publication.findOneAndUpdate(
+      {
+        _id: id,
+        creator: creatorId,
+        status: "CHANGES_REQUESTED",
+        statusVersion: version,
+      },
+      {
+        $set: restoredMetadata,
+        $unset: unsetMetadata,
+        $inc: { statusVersion: 1, draftVersion: 1 },
+      },
+      { new: true, runValidators: true, session },
+    ).select("+submittedSnapshot");
+    if (!restored)
+      throw new ApiError(409, "Planet changed while canceling the revision");
+
+    await Chapter.deleteMany({ publication: id }).session(session);
+    if (snapshot.chapters?.length) {
+      await Chapter.insertMany(
+        snapshot.chapters.map((chapter, order) => ({
+          publication: id,
+          stableChapterId: chapter.stableChapterId,
+          order,
+          title: chapter.title,
+          blocks: chapter.blocks || [],
+          isPreview: Boolean(chapter.isPreview),
+          releaseMode: chapter.releaseMode || "IMMEDIATE",
+          releaseAt: chapter.releaseAt || null,
+          draftVersion: Math.max(1, Number(chapter.draftVersion) || 1),
+        })),
+        { session },
+      );
+    }
+    await history(restored, "REVISION_CANCELED", "CHANGES_REQUESTED", transitionId, session);
+    return restored;
+  });
+}
 export async function archivePublication(creatorId, id, payload) { ensureId(id); const version = expectedVersion(payload); const current = await Publication.findOne({ _id: id, creator: creatorId }); if (!current) throw new ApiError(404, "Publication not found"); if (!["DRAFT", "CHANGES_REQUESTED", "REJECTED", "PUBLISHED"].includes(current.status)) throw new ApiError(409, "Publication cannot be archived"); const updated = await Publication.findOneAndUpdate({ _id: id, creator: creatorId, status: current.status, statusVersion: version }, { $set: { status: "ARCHIVED", archivedAt: new Date() }, $inc: { statusVersion: 1 } }, { new: true }); if (!updated) throw new ApiError(409, "Publication changed before archive"); await history(updated, "ARCHIVED", current.status); return updated; }
 export async function ownerPublication(creatorId, id) { ensureId(id); const publication = await Publication.findOne({ _id: id, creator: creatorId }).select("+submittedSnapshot"); if (!publication) throw new ApiError(404, "Publication not found"); const chapters = await Chapter.find({ publication: id }).sort({ order: 1 }).lean(); return { publication, chapters }; }

@@ -19,14 +19,14 @@ async function loadProfile(owner, viewer) {
   const Model = profileModelFor(owner.role);
   const publishedFilter = { creator: owner._id, status: { $in: ["PUBLISHED", "published"] } };
   const profileOwner = Boolean(viewer?._id && String(viewer._id) === String(owner._id));
-  const planetStatus = profileOwner ? { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } : "PUBLISHED";
+  const planetStatus = profileOwner ? { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } : { $in: ["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED"] };
   const [roleProfile, content, publishedContentCount, seens, planets, shares, wallShares, followerCount, followingCount, viewerRelationships] = await Promise.all([
     Model.findOne({ user: owner._id }).lean(),
     Content.find(publishedFilter)
       .sort({ publishedAt: -1, _id: -1 }).limit(30).populate("creator", "name username avatar").lean(),
     Content.countDocuments(publishedFilter),
     Publication.find({ creator: owner._id, kind: "SEEN", status: "PUBLISHED" }).sort({ publishedAt: -1 }).limit(30).populate("creator", "name username avatar").lean(),
-    Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: planetStatus }).select("+submittedSnapshot").sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
+    Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
     SeenEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("publication text").lean(),
     WallEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("post text").lean(),
     ProfileRelationship.countDocuments({ target: owner._id, type: "FOLLOW" }),
@@ -88,6 +88,33 @@ export const toggleProfileSeeSignal = asyncHandler(async (req, res) => sendRespo
 export const getOwnUnifiedProfile = asyncHandler(async (req, res) => {
   if (!["fan", "creator"].includes(req.user.role)) throw new ApiError(404, "Profile not found");
   return sendResponse(res, 200, "Profile fetched", await loadProfile(req.user, req.user));
+});
+
+export const getOwnProfileConnections = asyncHandler(async (req, res) => {
+  if (req.user.role !== "creator") throw new ApiError(403, "This list is available to creator accounts");
+  const type = req.query.type;
+  if (!["followers", "following"].includes(type)) throw new ApiError(400, "Connection type must be followers or following");
+
+  const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(50, Math.max(1, Number.parseInt(req.query.limit, 10) || 30));
+  const userPath = type === "followers" ? "actor" : "target";
+  const filter = type === "followers"
+    ? { target: req.user._id, type: "FOLLOW" }
+    : { actor: req.user._id, type: "FOLLOW" };
+  const [relationships, total] = await Promise.all([
+    ProfileRelationship.find(filter)
+      .sort({ createdAt: -1, _id: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .populate({ path: userPath, match: { status: "active" }, select: "name username avatar isVerified role" })
+      .lean(),
+    ProfileRelationship.countDocuments(filter),
+  ]);
+  const accounts = relationships.flatMap((relationship) => {
+    const account = relationship[userPath];
+    return account ? [{ id: account._id, name: account.name, username: account.username, avatar: account.avatar || "", verified: Boolean(account.isVerified), role: account.role }] : [];
+  });
+  return sendResponse(res, 200, "Profile connections fetched", { accounts, pagination: { page, limit, total, hasMore: page * limit < total } });
 });
 
 export const getUnifiedProfileByUsername = asyncHandler(async (req, res) => {

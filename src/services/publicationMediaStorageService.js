@@ -5,7 +5,7 @@ import ApiError from "../utils/ApiError.js";
 
 cloudinary.config({ cloud_name: env.cloudinaryCloudName, api_key: env.cloudinaryApiKey, api_secret: env.cloudinaryApiSecret, secure: true });
 const configured = () => { if (!env.cloudinaryCloudName || !env.cloudinaryApiKey || !env.cloudinaryApiSecret) throw new ApiError(503, "Cloudinary publication storage is not configured"); };
-const mediaRule = (type) => type === "IMAGE" ? { resourceType: "image", formats: ["jpg", "jpeg", "png", "webp"] } : ["VIDEO"].includes(type) ? { resourceType: "video", formats: ["mp4", "mov"] } : ["AUDIO", "VOICE"].includes(type) ? { resourceType: "video", formats: ["mp3", "wav", "aac", "flac"] } : null;
+const mediaRule = (type) => type === "IMAGE" ? { resourceType: "image", formats: ["jpg", "jpeg", "png", "webp"] } : ["VIDEO"].includes(type) ? { resourceType: "video", formats: ["mp4", "mov"] } : ["AUDIO", "VOICE"].includes(type) ? { resourceType: "video", formats: ["mp3", "wav", "aac", "flac", "webm", "ogg", "mp4", "m4a"] } : null;
 
 export async function uploadPublicationFile({ blockId, chapterId, creatorId, file, mediaType, publicationId }) {
   configured(); const rule = mediaRule(mediaType); if (!rule || !file?.path) throw new ApiError(400, "Valid publication media is required");
