@@ -23,7 +23,7 @@ export function profileViewerCapabilities(owner, viewer) {
     canAccessSettings: isOwner,
     canViewDrafts: approved,
     canMessage: false,
-    canFollow: false,
+    canFollow: Boolean(viewer?._id && !isOwner && owner.role === "creator" && ["fan", "creator"].includes(viewer.role)),
     canSeePrivateAccountSummary: isOwner,
   };
 }
@@ -36,7 +36,7 @@ function completion(owner, roleProfile) {
   return { completed, total: checks.length, percentage: Math.round((completed / checks.length) * 100) };
 }
 
-export function serializeUnifiedProfile({ content = [], owner, planets = [], publishedContentCount = content.length, roleProfile, seens = [], sharedSeens = [], sharedWallPosts = [], viewer }) {
+export function serializeUnifiedProfile({ content = [], followerCount = 0, followingCount = 0, owner, planets = [], publishedContentCount = content.length, roleProfile, seens = [], sharedSeens = [], sharedWallPosts = [], viewer, viewerRelationships = [] }) {
   const capabilities = profileViewerCapabilities(owner, viewer);
   const contentViewer = capabilities.isOwner ? viewer : null;
   const socialLinks = owner.role === "creator"
@@ -65,13 +65,14 @@ export function serializeUnifiedProfile({ content = [], owner, planets = [], pub
 
   return {
     profile,
-    publicMetrics: { publishedContentCount },
+    publicMetrics: { publishedContentCount, followerCount, followingCount },
     publicContent: content.map((item) => serializeContent(item, contentViewer)),
     seens: seens.map((item) => serializePublication(item, contentViewer)).filter(Boolean),
-    sharedSeens: sharedSeens.map((item) => serializePublication(item, contentViewer)).filter(Boolean),
-    sharedWallPosts: sharedWallPosts.map((item) => ({ id: item._id, text: item.text, context: item.context, location: item.location, media: item.media || [], createdAt: item.createdAt, creator: { name: item.creator?.name, username: item.creator?.username, avatar: item.creator?.avatar || "" } })),
+    sharedSeens: sharedSeens.map((item) => { const publication = serializePublication(item, contentViewer); return publication ? { ...publication, shareCaption: item.shareCaption || "" } : null; }).filter(Boolean),
+    sharedWallPosts: sharedWallPosts.map((item) => ({ id: item._id, text: item.text, shareCaption: item.shareCaption || "", context: item.context, location: item.location, media: item.media || [], createdAt: item.createdAt, reactionCount: item.engagement?.reactionCount || 0, commentCount: item.engagement?.commentCount || 0, shareCount: item.engagement?.shareCount || 0, saveCount: item.engagement?.saveCount || 0, viewerReacted: Boolean(item.engagement?.viewerReacted), viewerShared: Boolean(item.engagement?.viewerShared), viewerSaved: Boolean(item.engagement?.viewerSaved), creator: { name: item.creator?.name, username: item.creator?.username, avatar: item.creator?.avatar || "", verified: Boolean(item.creator?.isVerified) } })),
     planets: planets.map((item) => serializePublication(item, contentViewer)).filter(Boolean).slice(0, 3),
     viewerCapabilities: capabilities,
+    viewerRelationship: { following: viewerRelationships.some((item) => item.type === "FOLLOW"), seeSignalSent: viewerRelationships.some((item) => item.type === "SEE_SIGNAL") },
     ...(capabilities.isOwner ? { profileCompletion: completion(owner, roleProfile) } : {}),
   };
 }

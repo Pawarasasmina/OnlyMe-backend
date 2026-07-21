@@ -46,3 +46,10 @@ test("profile contract separates published Seens, planets, and legacy content", 
   const result = serializeUnifiedProfile({ owner, roleProfile, viewer: null, content: [], seens: [seen], planets: [world] });
   assert.equal(result.seens.length, 1); assert.equal(result.planets.length, 1); assert.equal(result.publicContent.length, 0);
 });
+
+test("creator profile exposes relationship counts and viewer state", () => {
+  const result = serializeUnifiedProfile({ owner, roleProfile, viewer: { _id: "fan-id", role: "fan" }, followerCount: 12, followingCount: 4, viewerRelationships: [{ type: "FOLLOW" }, { type: "SEE_SIGNAL" }] });
+  assert.deepEqual(result.publicMetrics, { publishedContentCount: 0, followerCount: 12, followingCount: 4 });
+  assert.deepEqual(result.viewerRelationship, { following: true, seeSignalSent: true });
+  assert.equal(result.viewerCapabilities.canFollow, true);
+});

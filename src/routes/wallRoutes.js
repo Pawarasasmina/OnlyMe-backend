@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { addWallComment, createWallPost, getWallComments, listWallPosts, toggleWallReaction, toggleWallShare } from "../controllers/wallController.js";
+import { addWallComment, createWallPost, getWallComments, listWallPosts, toggleWallReaction, toggleWallSave, toggleWallShare } from "../controllers/wallController.js";
 import { optionalProtect, protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { requireApprovedCreator } from "../middleware/creatorApprovalMiddleware.js";
@@ -11,4 +11,5 @@ router.get("/:id/comments", optionalProtect, getWallComments);
 router.put("/:id/reaction", protect, authorize("fan"), toggleWallReaction);
 router.post("/:id/comments", protect, authorize("fan"), addWallComment);
 router.put("/:id/share", protect, authorize("fan"), toggleWallShare);
+router.put("/:id/save", protect, authorize("fan", "creator"), toggleWallSave);
 export default router;

@@ -19,6 +19,7 @@ import membershipRoutes,{premiumWorldRoutes} from "./membershipRoutes.js";
 import adminFinancialRoutes from "./adminFinancialRoutes.js";
 import wallRoutes from "./wallRoutes.js";
 import storyRoutes from "./storyRoutes.js";
+import savedRoutes from "./savedRoutes.js";
 import { sendResponse } from "../utils/response.js";
 
 const router = Router();
@@ -31,6 +32,7 @@ router.use("/profiles", unifiedProfileRoutes);
 router.use("/publications", publicationRoutes);
 router.use("/wall", wallRoutes);
 router.use("/stories", storyRoutes);
+router.use("/saved", savedRoutes);
 router.use("/",walletRoutes);
 router.use("/worlds",purchaseRoutes);
 router.use("/premium-worlds",premiumWorldRoutes);
