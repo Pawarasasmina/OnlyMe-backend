@@ -51,6 +51,7 @@ const userSchema = new mongoose.Schema(
       enum: ["active", "suspended"],
       default: "active",
     },
+    lastSeenAt: { type: Date, default: null },
   },
   {
     timestamps: true,

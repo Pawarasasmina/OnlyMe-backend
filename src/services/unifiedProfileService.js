@@ -10,7 +10,7 @@ const safeHttpUrl = (value) => {
   }
 };
 
-export function profileViewerCapabilities(owner, viewer) {
+export function profileViewerCapabilities(owner, viewer, roleProfile = null) {
   const isOwner = Boolean(viewer?._id && String(viewer._id) === String(owner._id));
   const isCreatorOwner = isOwner && owner.role === "creator";
   const approved = isCreatorOwner && owner.creatorApprovalStatus === "approved";
@@ -22,7 +22,7 @@ export function profileViewerCapabilities(owner, viewer) {
     canAccessVerification: isCreatorOwner,
     canAccessSettings: isOwner,
     canViewDrafts: approved,
-    canMessage: false,
+    canMessage: Boolean(viewer?._id && !isOwner && viewer.role === "fan" && owner.role === "creator" && roleProfile?.messagingEnabled !== false),
     canFollow: Boolean(viewer?._id && !isOwner && owner.role === "creator" && ["fan", "creator"].includes(viewer.role)),
     canSeePrivateAccountSummary: isOwner,
   };
@@ -37,7 +37,7 @@ function completion(owner, roleProfile) {
 }
 
 export function serializeUnifiedProfile({ content = [], followerCount = 0, followingCount = 0, owner, planets = [], publishedContentCount = content.length, roleProfile, seens = [], sharedSeens = [], sharedWallPosts = [], viewer, viewerRelationships = [] }) {
-  const capabilities = profileViewerCapabilities(owner, viewer);
+  const capabilities = profileViewerCapabilities(owner, viewer, roleProfile);
   const contentViewer = capabilities.isOwner ? viewer : null;
   const socialLinks = owner.role === "creator"
     ? (roleProfile?.socialLinks || []).map((item) => ({ platform: item.platform, url: safeHttpUrl(item.url) })).filter((item) => item.url)

@@ -31,6 +31,7 @@ app.use(
   rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 100,
+    skip: (req) => req.originalUrl.startsWith("/api/messages"),
     standardHeaders: true,
     legacyHeaders: false,
   })

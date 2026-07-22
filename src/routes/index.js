@@ -20,6 +20,7 @@ import adminFinancialRoutes from "./adminFinancialRoutes.js";
 import wallRoutes from "./wallRoutes.js";
 import storyRoutes from "./storyRoutes.js";
 import savedRoutes from "./savedRoutes.js";
+import messageRoutes from "./messageRoutes.js";
 import { sendResponse } from "../utils/response.js";
 
 const router = Router();
@@ -33,6 +34,7 @@ router.use("/publications", publicationRoutes);
 router.use("/wall", wallRoutes);
 router.use("/stories", storyRoutes);
 router.use("/saved", savedRoutes);
+router.use("/messages", messageRoutes);
 router.use("/",walletRoutes);
 router.use("/worlds",purchaseRoutes);
 router.use("/premium-worlds",premiumWorldRoutes);

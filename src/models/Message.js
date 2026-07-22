@@ -4,7 +4,7 @@ const messageSchema = new mongoose.Schema(
   {
     sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     recipient: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    body: { type: String, required: true },
+    body: { type: String, required: true, trim: true, maxlength: 2000 },
     mediaType: { type: String, enum: ["text", "image", "video", "audio"], default: "text" },
     ppm: { type: Boolean, default: false },
     readAt: { type: Date, default: null },
@@ -12,5 +12,8 @@ const messageSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+messageSchema.index({ sender: 1, recipient: 1, createdAt: -1 });
+messageSchema.index({ recipient: 1, readAt: 1, createdAt: -1 });
 
 export default mongoose.model("Message", messageSchema);
