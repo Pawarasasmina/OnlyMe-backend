@@ -2,7 +2,36 @@ import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 import { env } from "../config/env.js";
 
-const connections = new Map();
+const userSockets = new Map();
+const isOnline = (userId) => [...(userSockets.get(userId)?.values() || [])].some(Boolean);
+
+async function setSocketActivity(io, socket, active) {
+  const userId = socket.user._id.toString();
+  const sockets = userSockets.get(userId) || new Map();
+  const wasOnline = [...sockets.values()].some(Boolean);
+  sockets.set(socket.id, active);
+  userSockets.set(userId, sockets);
+  const online = isOnline(userId);
+  if (online === wasOnline) return;
+  if (online) {
+    io.emit("presence:update", { userId, online: true, lastSeenAt: socket.user.lastSeenAt || null });
+    return;
+  }
+  const lastSeenAt = new Date();
+  await User.updateOne({ _id: userId }, { $set: { lastSeenAt } }).catch(() => {});
+  io.emit("presence:update", { userId, online: false, lastSeenAt });
+}
+
+function trackSocketActivity(io, socket, active) {
+  clearTimeout(socket.data.presenceExpiry);
+  socket.data.presenceExpiry = undefined;
+  setSocketActivity(io, socket, active);
+  if (active) {
+    socket.data.presenceExpiry = setTimeout(() => setSocketActivity(io, socket, false), 20000);
+    socket.data.presenceExpiry.unref?.();
+  }
+}
+
 export function configureMessagingSocket(io) {
   io.use(async (socket, next) => {
     try {
@@ -13,22 +42,27 @@ export function configureMessagingSocket(io) {
       return next();
     } catch { return next(new Error("Unauthorized")); }
   });
+
   io.on("connection", (socket) => {
-    const id = socket.user._id.toString();
-    socket.join(`user:${id}`);
-    connections.set(id, (connections.get(id) || 0) + 1);
-    io.emit("presence:update", { userId: id, online: true, lastSeenAt: socket.user.lastSeenAt || null });
+    const userId = socket.user._id.toString();
+    socket.join(`user:${userId}`);
+    setSocketActivity(io, socket, false);
+    socket.on("presence:active", (active) => trackSocketActivity(io, socket, active === true));
+    socket.on("presence:heartbeat", () => trackSocketActivity(io, socket, true));
     socket.on("presence:query", (ids = [], reply) => {
-      const presence = ids.slice(0, 100).map((userId) => ({ userId, online: connections.has(userId) }));
+      const presence = ids.slice(0, 100).map((id) => ({ userId: id, online: isOnline(id) }));
       if (typeof reply === "function") reply(presence);
     });
     socket.on("disconnect", async () => {
-      const remaining = (connections.get(id) || 1) - 1;
-      if (remaining > 0) return connections.set(id, remaining);
-      connections.delete(id);
+      clearTimeout(socket.data.presenceExpiry);
+      const sockets = userSockets.get(userId);
+      const wasOnline = isOnline(userId);
+      sockets?.delete(socket.id);
+      if (!sockets?.size) userSockets.delete(userId);
+      if (!wasOnline || isOnline(userId)) return;
       const lastSeenAt = new Date();
-      await User.updateOne({ _id: id }, { $set: { lastSeenAt } }).catch(() => {});
-      io.emit("presence:update", { userId: id, online: false, lastSeenAt });
+      await User.updateOne({ _id: userId }, { $set: { lastSeenAt } }).catch(() => {});
+      io.emit("presence:update", { userId, online: false, lastSeenAt });
     });
   });
 }
