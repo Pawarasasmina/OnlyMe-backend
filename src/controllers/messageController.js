@@ -10,7 +10,13 @@ import { sendResponse } from "../utils/response.js";
 
 const userFields = "name username avatar role isVerified status lastSeenAt";
 const person = (user) => user && ({ id: user._id.toString(), displayName: user.name, username: user.username, avatarUrl: user.avatar || null, role: user.role, isVerified: Boolean(user.isVerified), lastSeenAt: user.lastSeenAt || null });
-const serializedMessage = (message) => ({ id: message._id.toString(), senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "Message unavailable" : message.body, mediaType: "text", readAt: message.readAt || null, createdAt: message.createdAt, storyReply: message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, expiresAt: message.storyReply.expiresAt || null } : null });
+const REACTION_EMOJIS = ["❤️", "😂", "😮", "😢", "😡", "👍"];
+const serializedReply = (reply) => reply ? {
+  id: String(reply._id || reply),
+  senderId: reply.sender ? String(reply.sender?._id || reply.sender) : null,
+  body: reply.deletedAt ? "Message unavailable" : reply.body || "Original message",
+} : null;
+const serializedMessage = (message) => ({ id: message._id.toString(), senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "Message unavailable" : message.body, mediaType: "text", readAt: message.readAt || null, createdAt: message.createdAt, replyTo: serializedReply(message.replyTo), reactions: (message.reactions || []).map((reaction) => ({ userId: String(reaction.user?._id || reaction.user), emoji: reaction.emoji })), storyReply: message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, expiresAt: message.storyReply.expiresAt || null } : null });
 const validId = (value) => {
   if (!mongoose.isValidObjectId(value)) throw new ApiError(400, "Invalid account id");
 };
@@ -68,11 +74,20 @@ export const listMessages = asyncHandler(async (req, res) => {
   const other = await assertAllowedPair(req.user, req.params.userId);
   const conversation = await conversationFor(req.user, other);
   const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200);
-  const rows = await Message.find({ $or: [{ sender: req.user._id, recipient: other._id }, { sender: other._id, recipient: req.user._id }], deletedAt: null }).sort({ createdAt: -1 }).limit(limit).lean();
   if (!(req.user.role === "creator" && conversation?.status === "REQUEST")) {
-    await Message.updateMany({ sender: other._id, recipient: req.user._id, readAt: null }, { $set: { readAt: new Date() } });
-    req.app.get("io")?.to(`user:${other._id}`).emit("messages:read", { byUserId: req.user._id.toString() });
+    const readAt = new Date();
+    const result = await Message.updateMany(
+      { sender: other._id, recipient: req.user._id, readAt: null },
+      { $set: { readAt } },
+    );
+    if (result.modifiedCount > 0) {
+      req.app.get("io")?.to(`user:${other._id}`).emit("messages:read", {
+        byUserId: req.user._id.toString(),
+        readAt,
+      });
+    }
   }
+  const rows = await Message.find({ $or: [{ sender: req.user._id, recipient: other._id }, { sender: other._id, recipient: req.user._id }], deletedAt: null }).sort({ createdAt: -1 }).limit(limit).populate("replyTo", "sender body deletedAt").lean();
   const followsCreator = req.user.role === "fan"
     ? Boolean(await ProfileRelationship.exists({ actor: req.user._id, target: other._id, type: "FOLLOW" }))
     : null;
@@ -105,10 +120,62 @@ export const sendMessage = asyncHandler(async (req, res) => {
     const alreadySent = await Message.exists({ sender: req.user._id, recipient: other._id, createdAt: { $gte: conversation.requestStartedAt || conversation.createdAt } });
     if (alreadySent) throw new ApiError(409, "Wait for the creator to accept your message request");
   }
-  const created = await Message.create({ sender: req.user._id, recipient: other._id, body, mediaType: "text", ppm: false });
+  let replyTo = null;
+  if (req.body.replyToId) {
+    validId(req.body.replyToId);
+    replyTo = await Message.findOne({
+      _id: req.body.replyToId,
+      deletedAt: null,
+      $or: [
+        { sender: req.user._id, recipient: other._id },
+        { sender: other._id, recipient: req.user._id },
+      ],
+    }).select("sender body deletedAt");
+    if (!replyTo) throw new ApiError(404, "The message you are replying to is unavailable");
+  }
+  const created = await Message.create({ sender: req.user._id, recipient: other._id, body, mediaType: "text", ppm: false, replyTo: replyTo?._id || null });
+  if (replyTo) await created.populate("replyTo", "sender body deletedAt");
   const payload = serializedMessage(created);
   req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
   return sendResponse(res, 201, conversation.status === "REQUEST" ? "Message request sent" : "Message sent", { message: payload, conversationStatus: conversation.status });
+});
+
+async function reactionMessage(req) {
+  validId(req.params.messageId);
+  const message = await Message.findOne({
+    _id: req.params.messageId,
+    deletedAt: null,
+    $or: [{ sender: req.user._id }, { recipient: req.user._id }],
+  });
+  if (!message) throw new ApiError(404, "Message not found");
+  return message;
+}
+
+function emitReaction(req, message) {
+  const payload = {
+    messageId: String(message._id),
+    reactions: message.reactions.map((reaction) => ({ userId: String(reaction.user), emoji: reaction.emoji })),
+  };
+  const io = req.app.get("io");
+  io?.to(`user:${message.sender}`).to(`user:${message.recipient}`).emit("message:reaction", payload);
+  return payload;
+}
+
+export const setMessageReaction = asyncHandler(async (req, res) => {
+  const emoji = String(req.body.emoji || "");
+  if (!REACTION_EMOJIS.includes(emoji)) throw new ApiError(400, "Unsupported message reaction");
+  const message = await reactionMessage(req);
+  message.reactions = message.reactions.filter((reaction) => !reaction.user.equals(req.user._id));
+  message.reactions.push({ user: req.user._id, emoji, reactedAt: new Date() });
+  await message.save();
+  return sendResponse(res, 200, "Message reaction saved", emitReaction(req, message));
+});
+
+export const removeMessageReaction = asyncHandler(async (req, res) => {
+  const message = await reactionMessage(req);
+  message.reactions = message.reactions.filter((reaction) => !reaction.user.equals(req.user._id));
+  await message.save();
+  return sendResponse(res, 200, "Message reaction removed", emitReaction(req, message));
 });
 
 export const acceptMessageRequest = asyncHandler(async (req, res) => {

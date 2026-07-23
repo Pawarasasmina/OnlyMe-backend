@@ -9,6 +9,15 @@ const messageSchema = new mongoose.Schema(
     ppm: { type: Boolean, default: false },
     readAt: { type: Date, default: null },
     deletedAt: { type: Date, default: null },
+    replyTo: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
+    reactions: {
+      type: [{
+        user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+        emoji: { type: String, required: true, maxlength: 8 },
+        reactedAt: { type: Date, default: Date.now },
+      }],
+      default: [],
+    },
     storyReply: {
       story: { type: mongoose.Schema.Types.ObjectId, ref: "Story", default: null },
       imageUrl: { type: String, default: "" },
@@ -21,5 +30,6 @@ const messageSchema = new mongoose.Schema(
 
 messageSchema.index({ sender: 1, recipient: 1, createdAt: -1 });
 messageSchema.index({ recipient: 1, readAt: 1, createdAt: -1 });
+messageSchema.index({ replyTo: 1 });
 
 export default mongoose.model("Message", messageSchema);

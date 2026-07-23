@@ -1,6 +1,6 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { acceptMessageRequest, declineMessageRequest, listConversations, listMessages, searchMessagePeople, sendMessage } from "../controllers/messageController.js";
+import { acceptMessageRequest, declineMessageRequest, listConversations, listMessages, removeMessageReaction, searchMessagePeople, sendMessage, setMessageReaction } from "../controllers/messageController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 
@@ -18,6 +18,8 @@ router.get("/conversations", listConversations);
 router.get("/people", searchMessagePeople);
 router.get("/conversations/:userId", listMessages);
 router.post("/conversations/:userId", messageSendLimiter, sendMessage);
+router.put("/:messageId/reaction", setMessageReaction);
+router.delete("/:messageId/reaction", removeMessageReaction);
 router.post("/requests/:userId/accept", acceptMessageRequest);
 router.delete("/requests/:userId", declineMessageRequest);
 export default router;
