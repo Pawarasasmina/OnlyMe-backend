@@ -1,8 +1,9 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { acceptMessageRequest, declineMessageRequest, listConversations, listMessages, removeMessageReaction, searchMessagePeople, sendMessage, setMessageReaction } from "../controllers/messageController.js";
+import { acceptMessageRequest, declineMessageRequest, listConversations, listMessages, removeMessageReaction, searchMessagePeople, sendMessage, sendVoiceMessage, setMessageReaction } from "../controllers/messageController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
+import { uploadVoiceMessage } from "../middleware/uploadMiddleware.js";
 
 const router = Router();
 const messageSendLimiter = rateLimit({
@@ -18,6 +19,7 @@ router.get("/conversations", listConversations);
 router.get("/people", searchMessagePeople);
 router.get("/conversations/:userId", listMessages);
 router.post("/conversations/:userId", messageSendLimiter, sendMessage);
+router.post("/conversations/:userId/voice", messageSendLimiter, uploadVoiceMessage.single("voice"), sendVoiceMessage);
 router.put("/:messageId/reaction", setMessageReaction);
 router.delete("/:messageId/reaction", removeMessageReaction);
 router.post("/requests/:userId/accept", acceptMessageRequest);

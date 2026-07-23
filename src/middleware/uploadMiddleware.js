@@ -54,3 +54,13 @@ export const uploadContentMedia = multer({
     callback(null, true);
   },
 });
+
+const allowedVoiceTypes = new Set(["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "audio/x-wav"]);
+export const uploadVoiceMessage = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fileSize: 12 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    if (!allowedVoiceTypes.has(file.mimetype)) return callback(new ApiError(400, "Unsupported voice recording format"));
+    callback(null, true);
+  },
+});

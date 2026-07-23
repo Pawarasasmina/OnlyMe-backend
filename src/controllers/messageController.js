@@ -7,6 +7,7 @@ import User from "../models/User.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
+import { messageVoiceUrl, uploadMessageVoice } from "../services/messageVoiceStorageService.js";
 
 const userFields = "name username avatar role isVerified status lastSeenAt";
 const person = (user) => user && ({ id: user._id.toString(), displayName: user.name, username: user.username, avatarUrl: user.avatar || null, role: user.role, isVerified: Boolean(user.isVerified), lastSeenAt: user.lastSeenAt || null });
@@ -16,7 +17,7 @@ const serializedReply = (reply) => reply ? {
   senderId: reply.sender ? String(reply.sender?._id || reply.sender) : null,
   body: reply.deletedAt ? "Message unavailable" : reply.body || "Original message",
 } : null;
-const serializedMessage = (message) => ({ id: message._id.toString(), senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "Message unavailable" : message.body, mediaType: "text", readAt: message.readAt || null, createdAt: message.createdAt, replyTo: serializedReply(message.replyTo), reactions: (message.reactions || []).map((reaction) => ({ userId: String(reaction.user?._id || reaction.user), emoji: reaction.emoji })), storyReply: message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, expiresAt: message.storyReply.expiresAt || null } : null });
+const serializedMessage = (message) => ({ id: message._id.toString(), senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "Message unavailable" : message.body, mediaType: message.mediaType || "text", audio: message.mediaType === "audio" && message.audio?.assetId ? { url: messageVoiceUrl(message.audio), duration: message.audio.duration, waveform: message.audio.waveform || [] } : null, readAt: message.readAt || null, createdAt: message.createdAt, replyTo: serializedReply(message.replyTo), reactions: (message.reactions || []).map((reaction) => ({ userId: String(reaction.user?._id || reaction.user), emoji: reaction.emoji })), storyReply: message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, expiresAt: message.storyReply.expiresAt || null } : null });
 const validId = (value) => {
   if (!mongoose.isValidObjectId(value)) throw new ApiError(400, "Invalid account id");
 };
@@ -138,6 +139,35 @@ export const sendMessage = asyncHandler(async (req, res) => {
   const payload = serializedMessage(created);
   req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
   return sendResponse(res, 201, conversation.status === "REQUEST" ? "Message request sent" : "Message sent", { message: payload, conversationStatus: conversation.status });
+});
+
+export const sendVoiceMessage = asyncHandler(async (req, res) => {
+  const other = await assertAllowedPair(req.user, req.params.userId);
+  if (!req.file?.buffer) throw new ApiError(400, "A voice recording is required");
+  let conversation = await conversationFor(req.user, other);
+  if (req.user.role === "fan" && conversation?.status === "ACTIVE" && conversation.acceptedByCreator !== true) {
+    const follows = await ProfileRelationship.exists({ actor: req.user._id, target: other._id, type: "FOLLOW" });
+    if (!follows) conversation = await Conversation.findByIdAndUpdate(conversation._id, { $set: { status: "REQUEST", requestStartedAt: new Date(), acceptedAt: null } }, { new: true });
+  }
+  if (!conversation) {
+    if (req.user.role !== "fan") throw new ApiError(403, "Creators can reply after accepting a fan request");
+    const follows = await ProfileRelationship.exists({ actor: req.user._id, target: other._id, type: "FOLLOW" });
+    conversation = await Conversation.create({ ...pairFor(req.user, other), status: follows ? "ACTIVE" : "REQUEST", acceptedAt: follows ? new Date() : null, acceptedByCreator: false, requestStartedAt: follows ? null : new Date() });
+  }
+  if (conversation.status === "REQUEST" && req.user.role === "creator") throw new ApiError(403, "Accept this message request before replying");
+  if (conversation.status === "DECLINED") throw new ApiError(403, "This message request was declined");
+  if (conversation.status === "REQUEST" && req.user.role === "fan") {
+    const alreadySent = await Message.exists({ sender: req.user._id, recipient: other._id, createdAt: { $gte: conversation.requestStartedAt || conversation.createdAt } });
+    if (alreadySent) throw new ApiError(409, "Wait for the creator to accept your message request");
+  }
+  let waveform = [];
+  try { waveform = JSON.parse(req.body.waveform || "[]"); } catch { throw new ApiError(400, "Invalid voice waveform"); }
+  waveform = Array.isArray(waveform) ? waveform.slice(0, 48).map((value) => Math.min(1, Math.max(0.08, Number(value) || 0.08))) : [];
+  const audio = await uploadMessageVoice({ buffer: req.file.buffer, senderId: req.user._id });
+  const created = await Message.create({ sender: req.user._id, recipient: other._id, body: "Voice message", mediaType: "audio", ppm: false, audio: { ...audio, waveform } });
+  const payload = serializedMessage(created);
+  req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
+  return sendResponse(res, 201, conversation.status === "REQUEST" ? "Voice-message request sent" : "Voice message sent", { message: payload, conversationStatus: conversation.status });
 });
 
 async function reactionMessage(req) {
