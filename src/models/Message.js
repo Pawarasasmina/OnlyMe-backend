@@ -9,6 +9,12 @@ const messageSchema = new mongoose.Schema(
     ppm: { type: Boolean, default: false },
     readAt: { type: Date, default: null },
     deletedAt: { type: Date, default: null },
+    storyReply: {
+      story: { type: mongoose.Schema.Types.ObjectId, ref: "Story", default: null },
+      imageUrl: { type: String, default: "" },
+      caption: { type: String, default: "", maxlength: 300 },
+      expiresAt: { type: Date, default: null },
+    },
   },
   { timestamps: true }
 );

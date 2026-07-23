@@ -10,7 +10,7 @@ import { sendResponse } from "../utils/response.js";
 
 const userFields = "name username avatar role isVerified status lastSeenAt";
 const person = (user) => user && ({ id: user._id.toString(), displayName: user.name, username: user.username, avatarUrl: user.avatar || null, role: user.role, isVerified: Boolean(user.isVerified), lastSeenAt: user.lastSeenAt || null });
-const serializedMessage = (message) => ({ id: message._id.toString(), senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "Message unavailable" : message.body, mediaType: "text", readAt: message.readAt || null, createdAt: message.createdAt });
+const serializedMessage = (message) => ({ id: message._id.toString(), senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "Message unavailable" : message.body, mediaType: "text", readAt: message.readAt || null, createdAt: message.createdAt, storyReply: message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, expiresAt: message.storyReply.expiresAt || null } : null });
 const validId = (value) => {
   if (!mongoose.isValidObjectId(value)) throw new ApiError(400, "Invalid account id");
 };

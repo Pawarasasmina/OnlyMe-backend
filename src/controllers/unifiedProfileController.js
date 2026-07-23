@@ -7,6 +7,7 @@ import SeenEngagement from "../models/SeenEngagement.js";
 import WallEngagement from "../models/WallEngagement.js";
 import WallPost from "../models/WallPost.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
+import Conversation from "../models/Conversation.js";
 import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -124,7 +125,13 @@ export const getUnifiedProfileByUsername = asyncHandler(async (req, res) => {
   const isOwner = Boolean(req.user?._id && String(req.user._id) === String(owner._id));
   const Model = profileModelFor(owner.role);
   const visibility = await Model.findOne({ user: owner._id }).select("profileVisibility").lean();
-  if (!visibility || (!isOwner && visibility.profileVisibility !== "public")) throw new ApiError(404, "Profile not found");
+  const creatorConversationAccess = Boolean(
+    !isOwner
+    && owner.role === "fan"
+    && req.user?.role === "creator"
+    && await Conversation.exists({ fan: owner._id, creator: req.user._id, status: { $in: ["REQUEST", "ACTIVE"] } }),
+  );
+  if (!visibility || (!isOwner && visibility.profileVisibility !== "public" && !creatorConversationAccess)) throw new ApiError(404, "Profile not found");
   if (!isOwner && owner.role === "creator" && owner.creatorApprovalStatus !== "approved") throw new ApiError(404, "Profile not found");
   return sendResponse(res, 200, "Profile fetched", await loadProfile(owner, req.user || null));
 });
