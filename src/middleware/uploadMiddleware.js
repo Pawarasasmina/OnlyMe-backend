@@ -64,3 +64,14 @@ export const uploadVoiceMessage = multer({
     callback(null, true);
   },
 });
+
+const allowedVideoNoteTypes = new Set(["video/webm", "video/mp4", "video/quicktime"]);
+export const uploadVideoNote = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fileSize: 40 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    const mimeType = String(file.mimetype || "").toLowerCase().split(";")[0].trim();
+    if (!allowedVideoNoteTypes.has(mimeType)) return callback(new ApiError(400, "Unsupported video-note format"));
+    callback(null, true);
+  },
+});
