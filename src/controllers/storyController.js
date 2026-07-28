@@ -4,17 +4,42 @@ import StoryEngagement from "../models/StoryEngagement.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import Conversation from "../models/Conversation.js";
 import Message from "../models/Message.js";
+import UserBlock from "../models/UserBlock.js";
 import { storeFile, deleteAsset } from "../services/storageService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 
 const activeStory = async (id) => { if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid story ID"); const story = await Story.findOne({ _id: id, expiresAt: { $gt: new Date() } }); if (!story) throw new ApiError(404, "Story has expired or is unavailable"); return story; };
-const followedStory = async (id, fanId) => { const story = await activeStory(id); const follows = await ProfileRelationship.exists({ actor: fanId, target: story.creator, type: "FOLLOW" }); if (!follows) throw new ApiError(403, "Follow this creator to view their story"); return story; };
+const followedStory = async (id, fanId) => { const story = await activeStory(id); const blocked = await UserBlock.exists({ $or: [{ blocker: fanId, blocked: story.creator }, { blocker: story.creator, blocked: fanId }] }); if (blocked) throw new ApiError(403, "This story is unavailable"); const follows = await ProfileRelationship.exists({ actor: fanId, target: story.creator, type: "FOLLOW" }); if (!follows) throw new ApiError(403, "Follow this creator to view their story"); return story; };
 export const getStory = asyncHandler(async (req, res) => { const story = await activeStory(req.params.id); if (req.user.role === "creator" && String(story.creator) !== String(req.user._id)) throw new ApiError(403, "This story is unavailable"); if (req.user.role === "fan") await followedStory(req.params.id, req.user._id); await story.populate("creator", "name username avatar isVerified"); return sendResponse(res, 200, "Story fetched", { story: serialize(story, req.user._id) }); });
 const serialize = (story, viewer, engagement, insights = null) => ({ id: story._id, name: story.creator?.name || "Creator", username: story.creator?.username, avatar: story.creator?.avatar || story.image.url, verified: Boolean(story.creator?.isVerified), image: story.image.url, mediaType: "image", caption: story.caption, createdAt: story.createdAt, expiresAt: story.expiresAt, timeAgo: "Now", isOwn: Boolean(viewer && String(story.creator?._id || story.creator) === String(viewer)), viewed: Boolean(engagement?.viewedAt), viewerReaction: engagement?.reaction || null, ...(insights ? { insights } : {}) });
 export const createStory = asyncHandler(async (req, res) => { if (!req.file) throw new ApiError(400, "Story image is required"); const caption = String(req.body.caption || "").trim(); if (caption.length > 300) throw new ApiError(400, "Story caption may contain at most 300 characters"); const stored = await storeFile(req.file); const story = await Story.create({ creator: req.user._id, caption, image: { assetId: stored.id, url: stored.url }, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) }); await story.populate("creator", "name username avatar isVerified"); return sendResponse(res, 201, "Story is live for 24 hours", { story: serialize(story, req.user._id) }); });
-export const listStories = asyncHandler(async (req, res) => { let creatorFilter = { creator: req.user._id }; if (req.user.role === "fan") { const follows = await ProfileRelationship.find({ actor: req.user._id, type: "FOLLOW" }).select("target").lean(); creatorFilter = { creator: { $in: follows.map((item) => item.target) } }; } const stories = await Story.find({ expiresAt: { $gt: new Date() }, ...creatorFilter }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified").lean(); const storyIds = stories.map((item) => item._id); const engagements = req.user.role === "fan" ? await StoryEngagement.find({ fan: req.user._id, story: { $in: storyIds } }).lean() : []; const byStory = new Map(engagements.map((item) => [String(item.story), item])); const creatorEngagements = req.user.role === "creator" ? await StoryEngagement.find({ story: { $in: storyIds } }).populate("fan", "name username avatar").sort({ updatedAt: -1 }).lean() : []; const insightsByStory = new Map(); for (const item of creatorEngagements) { const key = String(item.story); const insights = insightsByStory.get(key) || { viewCount: 0, reactions: [] }; if (item.viewedAt) insights.viewCount += 1; if (item.reaction && item.fan) insights.reactions.push({ fan: { id: item.fan._id, name: item.fan.name, username: item.fan.username, avatar: item.fan.avatar || "" }, reaction: item.reaction, reactedAt: item.updatedAt }); insightsByStory.set(key, insights); } return sendResponse(res, 200, "Active stories fetched", stories.map((item) => serialize(item, req.user._id, byStory.get(String(item._id)), insightsByStory.get(String(item._id))))); });
+export const listStories = asyncHandler(async (req, res) => {
+  let creatorFilter = { creator: req.user._id };
+  if (req.user.role === "fan") {
+    const [follows, blocks] = await Promise.all([
+      ProfileRelationship.find({ actor: req.user._id, type: "FOLLOW" }).select("target").lean(),
+      UserBlock.find({ $or: [{ blocker: req.user._id }, { blocked: req.user._id }] }).select("blocker blocked").lean(),
+    ]);
+    const blockedIds = new Set(blocks.flatMap((item) => [String(item.blocker), String(item.blocked)]));
+    creatorFilter = { creator: { $in: follows.map((item) => item.target).filter((id) => !blockedIds.has(String(id))) } };
+  }
+  const stories = await Story.find({ expiresAt: { $gt: new Date() }, ...creatorFilter }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified").lean();
+  const storyIds = stories.map((item) => item._id);
+  const engagements = req.user.role === "fan" ? await StoryEngagement.find({ fan: req.user._id, story: { $in: storyIds } }).lean() : [];
+  const byStory = new Map(engagements.map((item) => [String(item.story), item]));
+  const creatorEngagements = req.user.role === "creator" ? await StoryEngagement.find({ story: { $in: storyIds } }).populate("fan", "name username avatar").sort({ updatedAt: -1 }).lean() : [];
+  const insightsByStory = new Map();
+  for (const item of creatorEngagements) {
+    const key = String(item.story);
+    const insights = insightsByStory.get(key) || { viewCount: 0, reactions: [] };
+    if (item.viewedAt) insights.viewCount += 1;
+    if (item.reaction && item.fan) insights.reactions.push({ fan: { id: item.fan._id, name: item.fan.name, username: item.fan.username, avatar: item.fan.avatar || "" }, reaction: item.reaction, reactedAt: item.updatedAt });
+    insightsByStory.set(key, insights);
+  }
+  return sendResponse(res, 200, "Active stories fetched", stories.map((item) => serialize(item, req.user._id, byStory.get(String(item._id)), insightsByStory.get(String(item._id)))));
+});
 export const viewStory = asyncHandler(async (req, res) => { await followedStory(req.params.id, req.user._id); await StoryEngagement.findOneAndUpdate({ story: req.params.id, fan: req.user._id }, { $set: { viewedAt: new Date() } }, { upsert: true, new: true }); return sendResponse(res, 200, "Story viewed", { storyId: req.params.id, viewed: true }); });
 export const reactStory = asyncHandler(async (req, res) => {
   const story = await followedStory(req.params.id, req.user._id);

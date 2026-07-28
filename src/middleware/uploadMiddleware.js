@@ -75,3 +75,13 @@ export const uploadVideoNote = multer({
     callback(null, true);
   },
 });
+
+export const uploadMessageImage = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    const mimeType = String(file.mimetype || "").toLowerCase().split(";")[0].trim();
+    if (!allowedImageTypes.has(mimeType)) return callback(new ApiError(400, "Only JPEG, PNG, or WebP images are allowed"));
+    callback(null, true);
+  },
+});

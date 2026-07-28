@@ -4,8 +4,17 @@ const messageSchema = new mongoose.Schema(
   {
     sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     recipient: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    clientMessageId: { type: String, trim: true, maxlength: 100, default: null },
     body: { type: String, required: true, trim: true, maxlength: 2000 },
     mediaType: { type: String, enum: ["text", "image", "video", "audio"], default: "text" },
+    image: {
+      assetId: { type: String, default: "" },
+      resourceType: { type: String, default: "" },
+      format: { type: String, default: "" },
+      bytes: { type: Number, default: 0 },
+      width: { type: Number, default: 0 },
+      height: { type: Number, default: 0 },
+    },
     audio: {
       assetId: { type: String, default: "" },
       resourceType: { type: String, default: "" },
@@ -26,6 +35,7 @@ const messageSchema = new mongoose.Schema(
     ppm: { type: Boolean, default: false },
     readAt: { type: Date, default: null },
     deletedAt: { type: Date, default: null },
+    deletedFor: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [] },
     replyTo: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
     reactions: {
       type: [{
@@ -46,6 +56,10 @@ const messageSchema = new mongoose.Schema(
 );
 
 messageSchema.index({ sender: 1, recipient: 1, createdAt: -1 });
+messageSchema.index(
+  { sender: 1, clientMessageId: 1 },
+  { unique: true, partialFilterExpression: { clientMessageId: { $type: "string" } } },
+);
 messageSchema.index({ recipient: 1, readAt: 1, createdAt: -1 });
 messageSchema.index({ replyTo: 1 });
 
