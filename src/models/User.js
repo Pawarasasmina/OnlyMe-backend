@@ -51,6 +51,9 @@ const userSchema = new mongoose.Schema(
       enum: ["active", "suspended"],
       default: "active",
     },
+    messagingRestrictedUntil: { type: Date, default: null },
+    messagingRestrictionReason: { type: String, trim: true, maxlength: 1000, default: "" },
+    messagingRestrictedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     lastSeenAt: { type: Date, default: null },
   },
   {

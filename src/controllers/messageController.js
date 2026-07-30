@@ -12,6 +12,7 @@ import { sendResponse } from "../utils/response.js";
 import { messageVoiceUrl, uploadMessageVoice } from "../services/messageVoiceStorageService.js";
 import { messageVideoUrl, uploadMessageVideo } from "../services/messageVideoStorageService.js";
 import { messageImageUrl, uploadMessageImage } from "../services/messageImageStorageService.js";
+import { assertMessagingAccess } from "../services/messagingAccessService.js";
 
 const userFields = "name username avatar role isVerified status lastSeenAt";
 const person = (user) => user && ({ id: user._id.toString(), displayName: user.name, username: user.username, avatarUrl: user.avatar || null, role: user.role, isVerified: Boolean(user.isVerified), lastSeenAt: user.lastSeenAt || null });
@@ -156,6 +157,7 @@ export const listMessages = asyncHandler(async (req, res) => {
 });
 
 export const sendMessage = asyncHandler(async (req, res) => {
+  assertMessagingAccess(req.user);
   const other = await assertAllowedPair(req.user, req.params.userId);
   const body = String(req.body.body || "").trim();
   if (!body) throw new ApiError(400, "Message text is required");
@@ -223,6 +225,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
 });
 
 export const sendVoiceMessage = asyncHandler(async (req, res) => {
+  assertMessagingAccess(req.user);
   const other = await assertAllowedPair(req.user, req.params.userId);
   if (!req.file?.buffer) throw new ApiError(400, "A voice recording is required");
   let conversation = await conversationFor(req.user, other);
@@ -252,6 +255,7 @@ export const sendVoiceMessage = asyncHandler(async (req, res) => {
 });
 
 export const sendVideoNote = asyncHandler(async (req, res) => {
+  assertMessagingAccess(req.user);
   const other = await assertAllowedPair(req.user, req.params.userId);
   if (!req.file?.buffer) throw new ApiError(400, "A video note is required");
   let conversation = await conversationFor(req.user, other);
@@ -278,6 +282,7 @@ export const sendVideoNote = asyncHandler(async (req, res) => {
 });
 
 export const sendImageMessage = asyncHandler(async (req, res) => {
+  assertMessagingAccess(req.user);
   const other = await assertAllowedPair(req.user, req.params.userId);
   if (!req.file?.buffer) throw new ApiError(400, "An image is required");
   const clientMessageId = String(req.body.clientMessageId || "").trim();
@@ -337,6 +342,27 @@ export const deleteMessage = asyncHandler(async (req, res) => {
   const payload = { messageId: String(message._id), deletedAt: message.deletedAt, message: serializedMessage(message) };
   req.app.get("io")?.to(`user:${message.sender}`).to(`user:${message.recipient}`).emit("message:deleted", payload);
   return sendResponse(res, 200, "Message unsent", payload);
+});
+
+export const deleteConversation = asyncHandler(async (req, res) => {
+  const other = await assertAllowedPair(req.user, req.params.userId, { allowBlocked: true });
+  const result = await Message.updateMany(
+    {
+      $or: [
+        { sender: req.user._id, recipient: other._id },
+        { sender: other._id, recipient: req.user._id },
+      ],
+      deletedFor: { $ne: req.user._id },
+    },
+    { $addToSet: { deletedFor: req.user._id } },
+  );
+  const payload = {
+    otherUserId: String(other._id),
+    hiddenForUserId: String(req.user._id),
+    hiddenMessageCount: result.modifiedCount,
+  };
+  req.app.get("io")?.to(`user:${req.user._id}`).emit("conversation:hidden", payload);
+  return sendResponse(res, 200, "Conversation deleted for you", payload);
 });
 
 const REPORT_REASONS = new Set(["SPAM", "HARASSMENT", "HATE", "SEXUAL_CONTENT", "VIOLENCE", "SCAM", "OTHER"]);
@@ -432,6 +458,7 @@ export const unblockMessageAccount = asyncHandler(async (req, res) => {
 });
 
 async function reactionMessage(req) {
+  assertMessagingAccess(req.user);
   validId(req.params.messageId);
   const message = await Message.findOne({
     _id: req.params.messageId,

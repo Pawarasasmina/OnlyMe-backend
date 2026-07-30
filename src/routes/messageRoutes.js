@@ -1,6 +1,6 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { acceptMessageRequest, blockMessageAccount, declineMessageRequest, deleteMessage, listConversations, listMessages, removeMessageReaction, reportConversation, reportMessage, searchMessagePeople, sendImageMessage, sendMessage, sendVideoNote, sendVoiceMessage, setMessageReaction, unblockMessageAccount } from "../controllers/messageController.js";
+import { acceptMessageRequest, blockMessageAccount, declineMessageRequest, deleteConversation, deleteMessage, listConversations, listMessages, removeMessageReaction, reportConversation, reportMessage, searchMessagePeople, sendImageMessage, sendMessage, sendVideoNote, sendVoiceMessage, setMessageReaction, unblockMessageAccount } from "../controllers/messageController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { uploadMessageImage, uploadVideoNote, uploadVoiceMessage } from "../middleware/uploadMiddleware.js";
@@ -23,6 +23,7 @@ router.post("/conversations/:userId/voice", messageSendLimiter, uploadVoiceMessa
 router.post("/conversations/:userId/video-note", messageSendLimiter, uploadVideoNote.single("video"), sendVideoNote);
 router.post("/conversations/:userId/image", messageSendLimiter, uploadMessageImage.single("image"), sendImageMessage);
 router.post("/conversations/:userId/report", reportConversation);
+router.delete("/conversations/:userId", deleteConversation);
 router.put("/blocks/:userId", blockMessageAccount);
 router.delete("/blocks/:userId", unblockMessageAccount);
 router.put("/:messageId/reaction", setMessageReaction);

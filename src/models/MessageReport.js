@@ -12,7 +12,18 @@ const messageReportSchema = new mongoose.Schema({
   },
   details: { type: String, trim: true, maxlength: 1000, default: "" },
   snapshot: { type: mongoose.Schema.Types.Mixed, required: true, select: false },
-  status: { type: String, enum: ["RECEIVED", "REVIEWING", "CLOSED"], default: "RECEIVED", index: true },
+  status: { type: String, enum: ["RECEIVED", "REVIEWING", "RESOLVED", "CLOSED"], default: "RECEIVED", index: true },
+  reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  reviewingAt: { type: Date, default: null },
+  resolvedAt: { type: Date, default: null },
+  resolution: {
+    action: { type: String, enum: ["NO_ACTION", "WARNING", "MESSAGING_RESTRICTED", "RESTRICTION_LIFTED"], default: null },
+    note: { type: String, trim: true, maxlength: 2000, default: "" },
+    restrictionUntil: { type: Date, default: null },
+    restrictionLiftedAt: { type: Date, default: null },
+    restrictionLiftedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    restrictionLiftNote: { type: String, trim: true, maxlength: 2000, default: "" },
+  },
 }, { timestamps: true });
 
 messageReportSchema.index(

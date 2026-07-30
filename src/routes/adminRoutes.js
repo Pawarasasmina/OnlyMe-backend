@@ -6,6 +6,11 @@ import {
   updateContentStatus,
   updateCreatorApproval,
   updateUserStatus,
+  listMessageReports,
+  resolveMessageReport,
+  startMessageReportReview,
+  getReportedMessageUser,
+  listReportedMessageUsers,
 } from "../controllers/adminController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
@@ -17,6 +22,11 @@ router.get("/dashboard", getAdminDashboard);
 router.get("/users", listUsers);
 router.patch("/users/:userId/status", updateUserStatus);
 router.patch("/users/:userId/creator-approval", updateCreatorApproval);
+router.get("/message-reports", listMessageReports);
+router.get("/message-report-users", listReportedMessageUsers);
+router.get("/message-report-users/:userId", getReportedMessageUser);
+router.post("/message-reports/:reportId/review", startMessageReportReview);
+router.post("/message-reports/:reportId/resolve", resolveMessageReport);
 router.get("/content", listContentForModeration);
 router.patch("/content/:contentId/status", updateContentStatus);
 
