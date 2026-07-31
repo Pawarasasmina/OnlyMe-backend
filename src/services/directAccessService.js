@@ -15,7 +15,7 @@ import { FINANCIAL_ERROR_CODES } from "../constants/financialConstants.js";
 import ApiError from "../utils/ApiError.js";
 import mongoose from "mongoose";
 
-export const DA_WINDOW_MS = 1 * 5 * 60 * 1000;
+export const DA_WINDOW_MS = 48 * 60 * 60 * 1000;
 export const DA_MESSAGE_LIMIT = 3;
 export const DA_PLATFORM_RATE_BPS = 1000;
 export const DA_REOPEN_PLATFORM_RATE_BPS = 2000;
