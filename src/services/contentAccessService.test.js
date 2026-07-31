@@ -1,0 +1,4 @@
+import assert from "node:assert/strict"; import test from "node:test"; import { serializeContent } from "./contentAccessService.js";
+const record = { _id: "content", creator: { _id: "creator", username: "creator" }, title: "Locked", description: "preview", contentType: "IMAGE", status: "PUBLISHED", accessLevel: "SUBSCRIBER_ONLY", media: [{ assetId: "secret", secureUrl: "https://secret" }], images: [{ publicId: "legacy-secret", url: "https://legacy-secret" }] };
+test("restricted serialization never leaks media URLs or identifiers", () => { const output = serializeContent(record, null); const json = JSON.stringify(output); assert.equal(output.locked, true); assert.equal(json.includes("secret"), false); });
+test("owner and admin can preview restricted content", () => { assert.equal(serializeContent(record, { _id: "creator", role: "creator" }).media.length, 1); assert.equal(serializeContent(record, { _id: "admin", role: "admin" }, { admin: true }).locked, false); });
