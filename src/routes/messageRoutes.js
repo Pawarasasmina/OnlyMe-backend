@@ -1,8 +1,10 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { acceptMessageRequest, blockMessageAccount, declineMessageRequest, deleteConversation, deleteMessage, listConversations, listMessages, removeMessageReaction, reportConversation, reportMessage, searchMessagePeople, sendImageMessage, sendMessage, sendVideoNote, sendVoiceMessage, setMessageReaction, unblockMessageAccount } from "../controllers/messageController.js";
+import { askDirectAccessQuestion, getDirectAccessOffer, listDirectAccessWindows, openWindow, updateDirectAccessSettings } from "../controllers/directAccessController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
+import { financialMutationLimit } from "../middleware/financialRateLimit.js";
 import { uploadMessageImage, uploadVideoNote, uploadVoiceMessage } from "../middleware/uploadMiddleware.js";
 
 const router = Router();
@@ -15,6 +17,11 @@ const messageSendLimiter = rateLimit({
 });
 
 router.use(protect, authorize("fan", "creator"));
+router.get("/direct-access/windows", listDirectAccessWindows);
+router.put("/direct-access/settings", financialMutationLimit, updateDirectAccessSettings);
+router.get("/direct-access/offers/:creatorId", getDirectAccessOffer);
+router.post("/direct-access/windows/:creatorId", financialMutationLimit, openWindow);
+router.post("/direct-access/ask/:fanId", messageSendLimiter, askDirectAccessQuestion);
 router.get("/conversations", listConversations);
 router.get("/people", searchMessagePeople);
 router.get("/conversations/:userId", listMessages);

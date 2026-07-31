@@ -3,6 +3,7 @@ import User from "../models/User.js";
 import Wallet from "../models/Wallet.js";
 import StarsLedgerEntry from "../models/StarsLedgerEntry.js";
 import Transaction from "../models/Transaction.js";
+import PlatformRevenue from "../models/PlatformRevenue.js";
 import { executeFinancialCommand } from "../services/financialCommandService.js";
 import { creditWallet, safeWallet } from "../services/walletLedgerService.js";
 import { activateWalletLedger } from "../services/walletAdministrationService.js";
@@ -65,6 +66,34 @@ export const listFanWallets = asyncHandler(async (req, res) => {
     return { id: fan._id, name: fan.name, username: fan.username, email: fan.email, avatar: fan.avatar || "", status: fan.status, wallet: { exists: Boolean(wallet), balance: walletBalance, currency: wallet?.currency || "STARS", version: wallet?.version || 0, ledgerActivated: Boolean(wallet?.ledgerActivatedAt), ledgerActivatedAt: wallet?.ledgerActivatedAt || null, reconciliationStatus, ledgerBalance, ledgerEntries: ledger?.entries || 0, legacyProjection, legacyDifference: walletBalance - legacyProjection, legacyTransactions: legacy.slice(0, 20).map((item) => ({ id: item._id, amount: item.amount, type: item.type, status: item.status, description: item.description, createdAt: item.createdAt })) } };
   });
   return sendResponse(res, 200, "Fan Wallets fetched", { items });
+});
+
+export const getPlatformRevenue = asyncHandler(async (_req, res) => {
+  const [summary] = await PlatformRevenue.aggregate([{
+    $group: {
+      _id: null,
+      grossStars: { $sum: "$grossStars" },
+      creatorStars: { $sum: "$creatorStars" },
+      platformStars: { $sum: "$platformStars" },
+      transactions: { $sum: 1 },
+    },
+  }]);
+  const recent = await PlatformRevenue.find().sort({ capturedAt: -1 }).limit(50)
+    .populate("fan creator", "name username").lean();
+  return sendResponse(res, 200, "Platform revenue fetched", {
+    summary: summary || { grossStars: 0, creatorStars: 0, platformStars: 0, transactions: 0 },
+    recent: recent.map((item) => ({
+      id: String(item._id),
+      windowId: item.referenceId,
+      grossStars: item.grossStars,
+      creatorStars: item.creatorStars,
+      platformStars: item.platformStars,
+      ratePercent: item.rateBasisPoints / 100,
+      fan: item.fan ? { name: item.fan.name, username: item.fan.username } : null,
+      creator: item.creator ? { name: item.creator.name, username: item.creator.username } : null,
+      capturedAt: item.capturedAt,
+    })),
+  });
 });
 
 export const activateFanWallet = asyncHandler(async (req, res) => {

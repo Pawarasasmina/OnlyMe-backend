@@ -20,6 +20,8 @@ const creatorProfileSchema = new mongoose.Schema(
     nsfwEnabled: { type: Boolean, default: false },
     freePreviewEnabled: { type: Boolean, default: true },
     messagingEnabled: { type: Boolean, default: true },
+    directAccessEnabled: { type: Boolean, default: true },
+    directAccessPriceStars: { type: Number, default: 100, min: 10, max: 10000, validate: Number.isSafeInteger },
     ppmEnabled: { type: Boolean, default: false },
     ppmPrice: { type: Number, default: 10, min: 10, max: 1000 },
     profileVisibility: { type: String, enum: ["public", "private"], default: "public" },

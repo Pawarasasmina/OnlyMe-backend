@@ -6,12 +6,14 @@ import { env } from "./config/env.js";
 import { retryPendingVerificationFileCleanup } from "./services/verificationFileCleanupService.js";
 import { processDuePremiumMemberships } from "./services/premiumMembershipService.js";
 import { configureMessagingSocket } from "./realtime/messagingSocket.js";
+import { processDueDirectAccessWindows } from "./services/directAccessService.js";
 
 async function startServer() {
   try {
     await connectDb();
     await retryPendingVerificationFileCleanup();
     await processDuePremiumMemberships();
+    await processDueDirectAccessWindows();
     const premiumRenewalTimer = setInterval(
       () => processDuePremiumMemberships().catch((error) =>
         console.error("Premium renewal worker failed", error),
@@ -19,6 +21,13 @@ async function startServer() {
       60 * 1000,
     );
     premiumRenewalTimer.unref();
+    const directAccessExpiryTimer = setInterval(
+      () => processDueDirectAccessWindows(new Date(), io).catch((error) =>
+        console.error("Direct Access expiry worker failed", error),
+      ),
+      60 * 1000,
+    );
+    directAccessExpiryTimer.unref();
     const server = http.createServer(app);
     const io = new Server(server, { cors: { origin: env.clientUrl, credentials: true } });
     configureMessagingSocket(io);

@@ -33,6 +33,9 @@ const messageSchema = new mongoose.Schema(
       height: { type: Number, default: 0 },
     },
     ppm: { type: Boolean, default: false },
+    messageChannel: { type: String, enum: ["STANDARD", "DIRECT_ACCESS"], default: "STANDARD" },
+    messageKind: { type: String, enum: ["USER_MESSAGE", "CREATOR_ASK"], default: "USER_MESSAGE" },
+    directAccessWindow: { type: mongoose.Schema.Types.ObjectId, ref: "DAWindow", default: null },
     readAt: { type: Date, default: null },
     deletedAt: { type: Date, default: null },
     deletedFor: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [] },
@@ -62,5 +65,6 @@ messageSchema.index(
 );
 messageSchema.index({ recipient: 1, readAt: 1, createdAt: -1 });
 messageSchema.index({ replyTo: 1 });
+messageSchema.index({ directAccessWindow: 1, createdAt: 1 });
 
 export default mongoose.model("Message", messageSchema);

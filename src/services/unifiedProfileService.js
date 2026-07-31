@@ -56,6 +56,14 @@ export function serializeUnifiedProfile({ content = [], followerCount = 0, follo
     socialLinks,
     joinedAt: owner.createdAt,
     verified: Boolean(owner.isVerified),
+    ...(owner.role === "creator" ? {
+      directAccess: {
+        enabled: Boolean(roleProfile?.directAccessEnabled),
+        priceStars: Number(roleProfile?.directAccessPriceStars || 100),
+        durationHours: 48,
+        messageLimit: 3,
+      },
+    } : {}),
   };
 
   if (capabilities.isOwner && owner.role === "creator") {

@@ -27,8 +27,8 @@ test("transaction hardening: concurrent Premium join and duplicate admin credit"
   assert.equal(await StarsLedgerEntry.countDocuments({ accountUser: fan._id, entryType: "CREDIT_ADMIN" }), 1);
   const publishedSnapshot = { version: 1, metadata: { kind: "PREMIUM_WORLD", title: "Premium", summary: "Summary", description: "", category: "Test", tags: [], pricing: { mode: "MONTHLY", starsAmount: 90, presetId: "P90" }, planet: { slot: "PREMIUM" } }, chapters: [{ stableChapterId: "c1", order: 0, title: "Preview", isPreview: true, blocks: [] }, { stableChapterId: "c2", order: 1, title: "Locked", isPreview: false, blocks: [] }], frozenAt: new Date() };
   const premium = await Publication.create({ creator: creator._id, kind: "PREMIUM_WORLD", title: "Premium", summary: "Summary", category: "Test", pricing: { mode: "MONTHLY", starsAmount: 90, presetId: "P90" }, previewPolicy: "ONE_OR_TWO_CHAPTERS", status: "PUBLISHED", publishedSnapshot, publishedVersion: 1, publishedAt: new Date() });
-  const joins = await Promise.allSettled([joinPremium({ user: fan, publicationId: premium._id, key: "join-a" }), joinPremium({ user: fan, publicationId: premium._id, key: "join-b" })]);
-  assert.equal(joins.filter((item) => item.status === "fulfilled").length, 1);
+  const joins = await Promise.allSettled([joinPremium({ user: fan, publicationId: premium._id, key: "premium-join-a" }), joinPremium({ user: fan, publicationId: premium._id, key: "premium-join-b" })]);
+  assert.equal(joins.filter((item) => item.status === "fulfilled").length, 1, joins.map((item) => item.status === "rejected" ? `${item.reason?.code || "ERROR"}: ${item.reason?.message}` : "fulfilled").join(" | "));
   assert.equal(await PremiumMembership.countDocuments({ user: fan._id, creator: creator._id, status: "ACTIVE" }), 1);
   assert.ok((await Wallet.findOne({ user: fan._id })).balance >= 0);
 });
