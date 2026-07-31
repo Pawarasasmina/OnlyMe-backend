@@ -21,6 +21,11 @@ import wallRoutes from "./wallRoutes.js";
 import storyRoutes from "./storyRoutes.js";
 import savedRoutes from "./savedRoutes.js";
 import messageRoutes from "./messageRoutes.js";
+import settingsRoutes from "./settingsRoutes.js";
+import postRoutes from "./postRoutes.js";
+import orbitRoutes from "./orbitRoutes.js";
+import onboardingRoutes from "./onboardingRoutes.js";
+import searchRoutes from "./searchRoutes.js";
 import { sendResponse } from "../utils/response.js";
 
 const router = Router();
@@ -29,6 +34,7 @@ router.get("/health", (_req, res) => sendResponse(res, 200, "OnlyMe API is runni
 router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
 router.use("/profile", profileRoutes);
+router.use("/settings", settingsRoutes);
 router.use("/profiles", unifiedProfileRoutes);
 router.use("/publications", publicationRoutes);
 router.use("/wall", wallRoutes);
@@ -49,6 +55,10 @@ router.use("/admin/publication-moderation", adminPublicationRoutes);
 router.use("/admin",adminFinancialRoutes);
 router.use("/admin", adminRoutes);
 router.use("/fan", fanRoutes);
+router.use("/posts", postRoutes);
+router.use("/orbit", orbitRoutes);
+router.use("/onboarding", onboardingRoutes);
+router.use("/search", searchRoutes);
 
 export default router;
 
