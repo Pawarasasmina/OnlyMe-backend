@@ -2,6 +2,7 @@ import multer from "multer";
 import path from "node:path";
 import ApiError from "../utils/ApiError.js";
 import { env } from "../config/env.js";
+import { POST_MAX_IMAGE_SIZE, POST_MAX_IMAGES } from "../constants/postConstants.js";
 
 const storage = multer.diskStorage({
   destination: "uploads/",
@@ -53,6 +54,12 @@ export const uploadContentMedia = multer({
     if (!allowedContentTypes.has(file.mimetype)) return callback(new ApiError(400, "Unsupported content media type"));
     callback(null, true);
   },
+});
+
+export const uploadFeedPostImages = multer({
+  storage,
+  limits: { files: POST_MAX_IMAGES, fileSize: POST_MAX_IMAGE_SIZE },
+  fileFilter: imageFileFilter,
 });
 
 const allowedVoiceTypes = new Set(["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "audio/x-wav"]);

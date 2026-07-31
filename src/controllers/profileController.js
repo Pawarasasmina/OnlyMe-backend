@@ -9,7 +9,12 @@ import { deleteStoredFile, storeFile } from "../services/storageService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
-import { normalizeUsername, validateRoleProfilePayload, validateUsername } from "../validators/profileValidator.js";
+import {
+  normalizeUsername,
+  validateRoleProfilePayload,
+  validateSettingsPayload,
+  validateUsername,
+} from "../validators/profileValidator.js";
 
 const profileModels = {
   admin: AdminProfile,
@@ -150,6 +155,85 @@ export const getMyProfile = asyncHandler(async (req, res) => {
   const profile = await ensureRoleProfile(req.user);
 
   return sendResponse(res, 200, "Profile fetched", serializeOwnProfile(req.user, profile));
+});
+
+export const getMyPrivacySettings = asyncHandler(async (req, res) => {
+  const profile = await ensureRoleProfile(req.user);
+  return sendResponse(res, 200, "Privacy settings fetched", {
+    role: req.user.role,
+    profileVisibility: profile.profileVisibility || (req.user.role === "creator" ? "public" : "private"),
+    privacySettings: profile.privacySettings || {},
+  });
+});
+
+export const updateMyPrivacySettings = asyncHandler(async (req, res) => {
+  const updates = stripUndefined(validateSettingsPayload(req.user.role, "privacy", req.body));
+  const Model = profileModels[req.user.role];
+  await Model.updateOne(
+    { user: req.user._id },
+    { $set: updates, $setOnInsert: { user: req.user._id } },
+    { upsert: true, runValidators: true }
+  );
+  const profile = await ensureRoleProfile(req.user);
+  return sendResponse(res, 200, "Privacy settings updated", {
+    role: req.user.role,
+    profileVisibility: profile.profileVisibility || (req.user.role === "creator" ? "public" : "private"),
+    privacySettings: profile.privacySettings || {},
+  });
+});
+
+export const getMyNotificationSettings = asyncHandler(async (req, res) => {
+  const profile = await ensureRoleProfile(req.user);
+  return sendResponse(res, 200, "Notification settings fetched", {
+    role: req.user.role,
+    notificationPreferences: profile.notificationPreferences || {},
+  });
+});
+
+export const updateMyNotificationSettings = asyncHandler(async (req, res) => {
+  const updates = stripUndefined(validateSettingsPayload(req.user.role, "notifications", req.body));
+  const Model = profileModels[req.user.role];
+  await Model.updateOne(
+    { user: req.user._id },
+    { $set: updates, $setOnInsert: { user: req.user._id } },
+    { upsert: true, runValidators: true }
+  );
+  const profile = await ensureRoleProfile(req.user);
+  return sendResponse(res, 200, "Notification settings updated", {
+    role: req.user.role,
+    notificationPreferences: profile.notificationPreferences || {},
+  });
+});
+
+export const getMyAccountSettings = asyncHandler(async (req, res) => {
+  const profile = await ensureRoleProfile(req.user);
+  return sendResponse(res, 200, "Account settings fetched", {
+    account: accountDetails(req.user),
+    preferences: {
+      preferredLanguage: profile.preferredLanguage,
+      timezone: profile.timezone,
+      phoneNumber: profile.phoneNumber || "",
+    },
+  });
+});
+
+export const updateMyAccountSettings = asyncHandler(async (req, res) => {
+  const updates = stripUndefined(validateSettingsPayload(req.user.role, "account", req.body));
+  const Model = profileModels[req.user.role];
+  await Model.updateOne(
+    { user: req.user._id },
+    { $set: updates, $setOnInsert: { user: req.user._id } },
+    { upsert: true, runValidators: true }
+  );
+  const profile = await ensureRoleProfile(req.user);
+  return sendResponse(res, 200, "Account settings updated", {
+    account: accountDetails(req.user),
+    preferences: {
+      preferredLanguage: profile.preferredLanguage,
+      timezone: profile.timezone,
+      phoneNumber: profile.phoneNumber || "",
+    },
+  });
 });
 
 export const updateMyProfile = asyncHandler(async (req, res) => {

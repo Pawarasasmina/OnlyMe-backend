@@ -102,6 +102,76 @@ function validateNotificationPreferences(value, allowedKeys) {
   }, {});
 }
 
+export function validatePrivacySettings(value, allowedKeys) {
+  if (value === undefined || !value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return allowedKeys.reduce((settings, key) => {
+    if (value[key] !== undefined) settings[key] = Boolean(value[key]);
+    return settings;
+  }, {});
+}
+
+function privacyKeysFor(role) {
+  if (role === "creator") {
+    return [
+      "showOnlineStatus", "showActivityStatus", "showLocation", "allowDiscovery",
+      "allowDirectMessages", "allowMentions", "allowTags", "showFollowers",
+    ];
+  }
+  if (role === "fan") {
+    return [
+      "showOnlineStatus", "showActivityStatus", "showLocation", "allowDiscovery",
+      "allowDirectMessages", "allowMentions",
+    ];
+  }
+  return ["showOnlineStatus", "showActivityStatus", "allowDirectMessages"];
+}
+
+function notificationKeysFor(role) {
+  return role === "admin" ? ["email", "inApp", "security"] : ["email", "inApp", "marketing"];
+}
+
+export function validateSettingsPayload(role, type, payload = {}) {
+  const preferredLanguage = payload.preferredLanguage === undefined
+    ? undefined
+    : sanitizeText(payload.preferredLanguage, 12) || "en";
+  const timezone = payload.timezone === undefined
+    ? undefined
+    : sanitizeText(payload.timezone, 80) || "UTC";
+
+  if (type === "privacy") {
+    return {
+      profileVisibility: role === "admin" ? undefined : validateVisibility(payload.profileVisibility),
+      privacySettings: validatePrivacySettings(payload.privacySettings || payload, privacyKeysFor(role)),
+    };
+  }
+
+  if (type === "notifications") {
+    const notificationPreferences = validateNotificationPreferences(
+      payload.notificationPreferences || payload,
+      notificationKeysFor(role)
+    ) || {};
+    if (role === "admin" && notificationPreferences.security === false) {
+      throw new ApiError(400, "Security notifications cannot be disabled for admins");
+    }
+    return { notificationPreferences };
+  }
+
+  if (type === "account") {
+    return {
+      phoneNumber: role === "admin" && payload.phoneNumber !== undefined
+        ? sanitizeText(payload.phoneNumber, 40)
+        : undefined,
+      preferredLanguage,
+      timezone,
+    };
+  }
+
+  throw new ApiError(400, "Unsupported settings type");
+}
+
 function validateSocialLinks(value) {
   if (value === undefined) {
     return undefined;
