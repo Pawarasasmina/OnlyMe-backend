@@ -10,10 +10,35 @@ import { errorHandler } from "./middleware/errorMiddleware.js";
 import { notFoundHandler } from "./middleware/notFoundMiddleware.js";
 
 const app = express();
+const allowedOrigins = new Set([
+  env.clientUrl,
+  env.clientUrl?.replace("localhost", "127.0.0.1"),
+  env.clientUrl?.replace("127.0.0.1", "localhost"),
+].filter(Boolean));
+
+function isLocalDevOrigin(origin) {
+  if (env.nodeEnv === "production") {
+    return false;
+  }
+
+  try {
+    const url = new URL(origin);
+    return url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
 
 app.use(
   cors({
-    origin: env.clientUrl,
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.has(origin) || isLocalDevOrigin(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
   })
 );

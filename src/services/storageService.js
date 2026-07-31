@@ -12,12 +12,8 @@ cloudinary.config({
   secure: true,
 });
 
-function isCloudinaryConfigured() {
-  return Boolean(env.cloudinaryCloudName && env.cloudinaryApiKey && env.cloudinaryApiSecret);
-}
-
 function ensureCloudinaryIsConfigured() {
-  if (!isCloudinaryConfigured()) {
+  if (!env.cloudinaryCloudName || !env.cloudinaryApiKey || !env.cloudinaryApiSecret) {
     throw new ApiError(503, "Cloudinary is not configured on the server");
   }
 }
@@ -42,22 +38,19 @@ export function createUploadSignature(userId) {
   };
 }
 
-export async function storeFile(file) {
+export async function storeFile(file, options = {}) {
+  ensureCloudinaryIsConfigured();
+
   if (!file?.path) {
     throw new ApiError(400, "A file is required");
-  }
-
-  if (!isCloudinaryConfigured()) {
-    return {
-      id: file.filename,
-      url: `/uploads/${file.filename}`,
-    };
   }
 
   try {
     const result = await cloudinary.uploader.upload(file.path, {
       resource_type: "image",
-      folder: "onlyme/profiles",
+      folder: options.folder || "onlyme/profiles",
+      transformation: options.transformation,
+      format: options.format,
     });
 
     return {
@@ -91,8 +84,6 @@ export async function deleteStoredFile(fileUrl) {
 
   const publicId = publicIdFromCloudinaryUrl(fileUrl);
   if (publicId) {
-    if (!isCloudinaryConfigured()) return;
-
     await deleteAsset(publicId);
     return;
   }

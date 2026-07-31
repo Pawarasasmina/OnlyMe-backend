@@ -1,9 +1,13 @@
 import { Router } from "express";
-import { listContent } from "../controllers/contentController.js";
-
-const router = Router();
-
-router.get("/", listContent);
-router.get("/creator/:creatorId", listContent);
-
+import { archiveMyContent, createContentDraft, getMyContent, getPublishedContent, getUploadSignature, listContent, listMyContent, publishImageContent, resubmitForReview, submitContent, updateContentDraft, uploadDraftMedia } from "../controllers/contentController.js";
+import { protect } from "../middleware/authMiddleware.js"; import { authorize } from "../middleware/roleMiddleware.js"; import { requireApprovedCreator } from "../middleware/creatorApprovalMiddleware.js";
+import { uploadContentMedia } from "../middleware/uploadMiddleware.js";
+const router = Router(); const creatorOnly = [protect, authorize("creator"), requireApprovedCreator];
+router.get("/", listContent); router.get("/creator/:creatorId", listContent);
+router.get("/mine", ...creatorOnly, listMyContent); router.get("/mine/:id", ...creatorOnly, getMyContent);
+router.get("/:id", getPublishedContent);
+router.post("/draft", ...creatorOnly, createContentDraft); router.put("/:id", ...creatorOnly, updateContentDraft);
+router.post("/:id/submit", ...creatorOnly, submitContent); router.post("/:id/resubmit", ...creatorOnly, resubmitForReview); router.post("/:id/archive", ...creatorOnly, archiveMyContent);
+router.post("/upload-signature", ...creatorOnly, getUploadSignature); router.post("/image", ...creatorOnly, publishImageContent);
+router.post("/:id/media-upload", ...creatorOnly, uploadContentMedia.single("file"), uploadDraftMedia);
 export default router;

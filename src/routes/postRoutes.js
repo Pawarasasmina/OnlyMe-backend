@@ -1,0 +1,32 @@
+import { Router } from "express";
+import {
+  createDraftPost,
+  createFeedPost,
+  createPostComment,
+  deleteFeedPost,
+  listFeedPosts,
+  listMyPosts,
+  updatePostReaction,
+  updateFeedPost,
+} from "../controllers/postController.js";
+import { protect } from "../middleware/authMiddleware.js";
+import { authorize } from "../middleware/roleMiddleware.js";
+import { uploadFeedPostImages } from "../middleware/uploadMiddleware.js";
+
+const router = Router();
+const creatorOnly = [protect, authorize("creator")];
+
+router.get("/", protect, listFeedPosts);
+router.get("/mine", ...creatorOnly, listMyPosts);
+router.get("/drafts", ...creatorOnly, (req, res, next) => {
+  req.query.status = "draft";
+  return listMyPosts(req, res, next);
+});
+router.post("/", ...creatorOnly, uploadFeedPostImages.array("media", 4), createFeedPost);
+router.post("/drafts", ...creatorOnly, uploadFeedPostImages.array("media", 4), createDraftPost);
+router.put("/:id/reaction", protect, updatePostReaction);
+router.post("/:id/comments", protect, createPostComment);
+router.put("/:id", ...creatorOnly, updateFeedPost);
+router.delete("/:id", ...creatorOnly, deleteFeedPost);
+
+export default router;

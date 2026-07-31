@@ -28,6 +28,7 @@ async function upsertUser({ email, name, role, username, avatar = "" }) {
       role,
       avatar,
       isVerified: role === "creator",
+      creatorApprovalStatus: role === "creator" ? "approved" : null,
     });
     return user;
   }
@@ -36,7 +37,10 @@ async function upsertUser({ email, name, role, username, avatar = "" }) {
   user.username = username;
   user.role = role;
   user.avatar = avatar || user.avatar;
-  if (role === "creator") user.isVerified = true;
+  if (role === "creator") {
+    user.isVerified = true;
+    user.creatorApprovalStatus = "approved";
+  }
   await user.save();
   return user;
 }
@@ -95,6 +99,9 @@ async function seed() {
     {
       $set: {
         bio: "Demo fan account for dashboard testing.",
+        interests: ["fitness", "travel", "photography"],
+        city: "Dubai",
+        country: "United Arab Emirates",
         profileVisibility: "private",
         preferredLanguage: "en",
         timezone: "Asia/Colombo",

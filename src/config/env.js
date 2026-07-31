@@ -7,16 +7,41 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, "../../.env") });
 dotenv.config({ path: resolve(__dirname, "../controllers/.env") });
 
+function requiredSecret(name, fallback) {
+  const value = process.env[name] || fallback;
+
+  if (process.env.NODE_ENV === "production" && (!process.env[name] || value.startsWith("replace_with_secure"))) {
+    throw new Error(`${name} must be configured with a secure value in production`);
+  }
+
+  return value;
+}
+
 export const env = {
   nodeEnv: process.env.NODE_ENV || "development",
-  port: Number(process.env.PORT) || 3001,
-  mongoUri: process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/onlyme_dev",
-  accessSecret: process.env.JWT_ACCESS_SECRET || "replace_with_secure_access_secret",
-  refreshSecret: process.env.JWT_REFRESH_SECRET || "replace_with_secure_refresh_secret",
+  port: Number(process.env.PORT) || 5000,
+  mongoUri: process.env.MONGODB_URI,
+  accessSecret: requiredSecret("JWT_ACCESS_SECRET", "replace_with_secure_access_secret"),
+  refreshSecret: requiredSecret("JWT_REFRESH_SECRET", "replace_with_secure_refresh_secret"),
   accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || "15m",
   refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || "30d",
   clientUrl: process.env.CLIENT_URL || "http://localhost:5173",
+  cookieDomain: process.env.COOKIE_DOMAIN || undefined,
+  cookieSameSite: process.env.COOKIE_SAME_SITE || "lax",
+  cookieSecure: process.env.COOKIE_SECURE ? process.env.COOKIE_SECURE === "true" : process.env.NODE_ENV === "production",
+  smtpHost: process.env.SMTP_HOST || "",
+  smtpPort: Number(process.env.SMTP_PORT) || 587,
+  smtpSecure: process.env.SMTP_SECURE === "true",
+  smtpUser: process.env.SMTP_USER || "",
+  smtpPass: process.env.SMTP_PASS || "",
+  emailFrom: process.env.EMAIL_FROM || "OnlyMe <no-reply@onlyme.local>",
   cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || "",
   cloudinaryApiKey: process.env.CLOUDINARY_API_KEY || "",
   cloudinaryApiSecret: process.env.CLOUDINARY_API_SECRET || "",
+  avatarMaxFileSize: Math.max(1024, Number(process.env.AVATAR_UPLOAD_MAX_SIZE_BYTES) || 5 * 1024 * 1024),
+  coverMaxFileSize: Math.max(1024, Number(process.env.COVER_UPLOAD_MAX_SIZE_BYTES) || 10 * 1024 * 1024),
+  contentMaxFileSize: Math.max(1024, Number(process.env.CONTENT_MAX_FILE_SIZE_BYTES) || 100 * 1024 * 1024),
+  verificationStorageRoot: process.env.VERIFICATION_STORAGE_ROOT || "./private/creator-verifications",
+  verificationMaxFileSize: Math.max(1024, Number(process.env.VERIFICATION_MAX_FILE_SIZE_BYTES) || 10 * 1024 * 1024),
 };
+
