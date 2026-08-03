@@ -1,7 +1,6 @@
 ﻿import test from "node:test";
 import assert from "node:assert/strict";
-import { assertPrivateStorageConfiguration, inspectVerificationFile } from "./privateDocumentStorageService.js";
-import { env } from "../config/env.js";
+import { inspectVerificationFile } from "./privateDocumentStorageService.js";
 
 const fake = (originalName, mimetype, bytes) => {
   const buffer = Buffer.from(bytes);
@@ -22,14 +21,4 @@ test("rejects mismatched image metadata", () => {
     () => inspectVerificationFile(fake("identity.png", "image/png", [0xff, 0xd8, 0xff, 0x00])),
     /does not match/
   );
-});
-
-test("rejects verification storage nested inside public uploads", () => {
-  const original = env.verificationStorageRoot;
-  try {
-    env.verificationStorageRoot = "./uploads/private-verifications";
-    assert.throws(() => assertPrivateStorageConfiguration(), /must not be inside/);
-  } finally {
-    env.verificationStorageRoot = original;
-  }
 });

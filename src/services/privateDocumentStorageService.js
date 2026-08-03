@@ -1,9 +1,16 @@
-﻿import crypto from "node:crypto";
-import fs from "node:fs/promises";
+import crypto from "node:crypto";
 import path from "node:path";
-import { createReadStream } from "node:fs";
+import { Readable } from "node:stream";
+import { v2 as cloudinary } from "cloudinary";
 import { env } from "../config/env.js";
 import ApiError from "../utils/ApiError.js";
+
+cloudinary.config({
+  cloud_name: env.cloudinaryCloudName,
+  api_key: env.cloudinaryApiKey,
+  api_secret: env.cloudinaryApiSecret,
+  secure: true,
+});
 
 const SIGNATURES = [
   { mimeType: "image/jpeg", extension: ".jpg", matches: (b) => b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
@@ -13,30 +20,38 @@ const SIGNATURES = [
 ];
 
 const allowedExtensions = new Set([".jpg", ".jpeg", ".png", ".webp", ".pdf"]);
+const STORAGE_KEY_PREFIX = "cloudinary:v1:";
 
 export function assertPrivateStorageConfiguration() {
-  const root = path.resolve(env.verificationStorageRoot);
-  const publicUploads = path.resolve("uploads");
-  if (root === publicUploads || root.startsWith(`${publicUploads}${path.sep}`)) {
-    throw new Error("VERIFICATION_STORAGE_ROOT must not be inside the publicly exposed uploads directory");
+  if (env.nodeEnv === "production" && (!env.cloudinaryCloudName || !env.cloudinaryApiKey || !env.cloudinaryApiSecret)) {
+    throw new Error("Cloudinary must be configured for private verification document storage");
   }
-  return root;
+  return true;
 }
 
-function storageRoot() {
-  return assertPrivateStorageConfiguration();
+function ensureCloudinaryIsConfigured() {
+  if (!env.cloudinaryCloudName || !env.cloudinaryApiKey || !env.cloudinaryApiSecret) {
+    throw new ApiError(503, "Private verification document storage is not configured");
+  }
 }
 
-function safePathFor(storageKey) {
-  if (!storageKey || path.isAbsolute(storageKey) || storageKey.includes("..")) {
+function encodeStorageKey(asset) {
+  return `${STORAGE_KEY_PREFIX}${Buffer.from(JSON.stringify({
+    publicId: asset.public_id,
+    resourceType: asset.resource_type,
+    format: asset.format,
+  })).toString("base64url")}`;
+}
+
+function decodeStorageKey(storageKey) {
+  if (!storageKey?.startsWith(STORAGE_KEY_PREFIX)) throw new ApiError(400, "Invalid document storage key");
+  try {
+    const value = JSON.parse(Buffer.from(storageKey.slice(STORAGE_KEY_PREFIX.length), "base64url").toString("utf8"));
+    if (!value.publicId || !["image", "raw"].includes(value.resourceType) || !value.format) throw new Error("Invalid key");
+    return value;
+  } catch {
     throw new ApiError(400, "Invalid document storage key");
   }
-  const root = storageRoot();
-  const resolved = path.resolve(root, storageKey);
-  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
-    throw new ApiError(400, "Invalid document storage key");
-  }
-  return resolved;
 }
 
 export function inspectVerificationFile(file) {
@@ -58,12 +73,26 @@ export function inspectVerificationFile(file) {
 
 export async function storeVerificationDocument(file, creatorId) {
   const detected = inspectVerificationFile(file);
-  const storageKey = path.posix.join(String(creatorId), `${crypto.randomUUID()}${detected.extension}`);
-  const finalPath = safePathFor(storageKey);
-  await fs.mkdir(path.dirname(finalPath), { recursive: true, mode: 0o700 });
-  await fs.writeFile(finalPath, file.buffer, { flag: "wx", mode: 0o600 });
+  ensureCloudinaryIsConfigured();
+  const resourceType = detected.mimeType === "application/pdf" ? "raw" : "image";
+  const publicId = `onlyme/private/creator-verifications/${creatorId}/${crypto.randomUUID()}`;
+  let asset;
+  try {
+    asset = await new Promise((resolve, reject) => {
+      const upload = cloudinary.uploader.upload_stream({
+        public_id: publicId,
+        resource_type: resourceType,
+        type: "authenticated",
+        format: detected.extension.slice(1),
+        context: { purpose: "creator_verification", creator: String(creatorId) },
+      }, (error, result) => error ? reject(error) : resolve(result));
+      upload.end(file.buffer);
+    });
+  } catch (error) {
+    throw new ApiError(502, error.message || "Verification document upload failed");
+  }
   return {
-    storageKey,
+    storageKey: encodeStorageKey({ ...asset, format: asset.format || detected.extension.slice(1) }),
     originalName: path.basename(file.originalname || "document").slice(0, 255),
     mimeType: detected.mimeType,
     size: file.size,
@@ -73,52 +102,45 @@ export async function storeVerificationDocument(file, creatorId) {
 }
 
 export async function quarantineVerificationDocument(storageKey) {
-  if (!storageKey) return storageKey;
-  const source = safePathFor(storageKey);
-  const extension = path.extname(storageKey);
-  const quarantineKey = path.posix.join(".quarantine", `${crypto.randomUUID()}${extension}`);
-  const destination = safePathFor(quarantineKey);
-  await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-  try {
-    await fs.rename(source, destination);
-    return quarantineKey;
-  } catch (error) {
-    if (error.code === "ENOENT") return storageKey;
-    throw error;
-  }
+  // Authenticated Cloudinary assets have no public delivery URL. The durable
+  // cleanup job is the quarantine boundary until deletion succeeds.
+  if (storageKey) decodeStorageKey(storageKey);
+  return storageKey;
 }
+
 export async function deleteVerificationDocument(storageKey) {
   if (!storageKey) return;
-  await fs.unlink(safePathFor(storageKey)).catch((error) => {
-    if (error.code !== "ENOENT") throw error;
+  ensureCloudinaryIsConfigured();
+  const asset = decodeStorageKey(storageKey);
+  const result = await cloudinary.uploader.destroy(asset.publicId, {
+    resource_type: asset.resourceType,
+    type: "authenticated",
+    invalidate: true,
   });
+  if (!["ok", "not found"].includes(result.result)) throw new Error("Cloudinary could not delete the verification document");
 }
 
 export async function sweepQuarantinedVerificationDocuments() {
-  const quarantineRoot = safePathFor(".quarantine");
-  let entries;
-  try {
-    entries = await fs.readdir(quarantineRoot, { withFileTypes: true });
-  } catch (error) {
-    if (error.code === "ENOENT") return 0;
-    throw error;
-  }
-  let removed = 0;
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    await fs.unlink(path.join(quarantineRoot, entry.name));
-    removed += 1;
-  }
-  return removed;
+  return 0;
 }
+
 export async function openVerificationDocument(storageKey) {
-  const filePath = safePathFor(storageKey);
+  ensureCloudinaryIsConfigured();
+  const asset = decodeStorageKey(storageKey);
+  const url = cloudinary.utils.private_download_url(asset.publicId, asset.format, {
+    resource_type: asset.resourceType,
+    type: "authenticated",
+    expires_at: Math.floor(Date.now() / 1000) + 60,
+  });
+  let response;
   try {
-    await fs.access(filePath);
-  } catch {
-    throw new ApiError(404, "Verification document file not found");
+    response = await fetch(url);
+  } catch (error) {
+    throw new ApiError(502, error.message || "Verification document could not be retrieved");
   }
-  return createReadStream(filePath);
+  if (response.status === 404) throw new ApiError(404, "Verification document file not found");
+  if (!response.ok || !response.body) throw new ApiError(502, "Verification document could not be retrieved");
+  return Readable.fromWeb(response.body);
 }
 
 export function setPrivateDocumentHeaders(res, metadata, disposition = "inline") {
@@ -129,5 +151,3 @@ export function setPrivateDocumentHeaders(res, metadata, disposition = "inline")
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Content-Disposition", `${disposition}; filename="${safeName}"`);
 }
-
-

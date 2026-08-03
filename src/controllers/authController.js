@@ -14,8 +14,11 @@ import jwt from "jsonwebtoken";
 
 const refreshCookieOptions = {
   httpOnly: true,
-  sameSite: "lax",
+  // Production commonly uses separate Vercel and Render sites. Browsers only
+  // send cross-site cookies when SameSite=None is paired with Secure.
+  sameSite: env.nodeEnv === "production" ? "none" : "lax",
   secure: env.nodeEnv === "production",
+  path: "/api/auth",
   maxAge: 30 * 24 * 60 * 60 * 1000,
 };
 
