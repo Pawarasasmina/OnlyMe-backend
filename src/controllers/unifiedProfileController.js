@@ -3,6 +3,7 @@ import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
 import User from "../models/User.js";
 import Publication from "../models/Publication.js";
+import FeedPost from "../models/FeedPost.js";
 import SeenEngagement from "../models/SeenEngagement.js";
 import WallEngagement from "../models/WallEngagement.js";
 import WallPost from "../models/WallPost.js";
@@ -13,6 +14,7 @@ import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { normalizeUsername } from "../validators/profileValidator.js";
+import { serializePost } from "./postController.js";
 import { engagementForWallPost, engagementForWallShare } from "./wallController.js";
 
 const profileModelFor = (role) => role === "creator" ? CreatorProfile : FanProfile;
@@ -22,7 +24,7 @@ async function loadProfile(owner, viewer) {
   const publishedFilter = { creator: owner._id, status: { $in: ["PUBLISHED", "published"] } };
   const profileOwner = Boolean(viewer?._id && String(viewer._id) === String(owner._id));
   const planetStatus = profileOwner ? { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } : { $in: ["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED"] };
-  const [roleProfile, content, publishedContentCount, seens, planets, shares, wallShares, followerCount, followingCount, viewerRelationships] = await Promise.all([
+  const [roleProfile, content, publishedContentCount, seens, planets, shares, wallShares, feedSharePosts, followerCount, followingCount, viewerRelationships] = await Promise.all([
     Model.findOne({ user: owner._id }).lean(),
     Content.find(publishedFilter)
       .sort({ publishedAt: -1, _id: -1 }).limit(30).populate("creator", "name username avatar").lean(),
@@ -31,6 +33,7 @@ async function loadProfile(owner, viewer) {
     Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
     SeenEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("publication text").lean(),
     WallEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("post text createdAt").lean(),
+    FeedPost.find({ status: "published", deletedAt: null, "shares.user": owner._id }).sort({ "shares.createdAt": -1 }).limit(30).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }, { path: "shares.user", select: "name username avatar isVerified role status" }]).lean(),
     ProfileRelationship.countDocuments({ target: owner._id, type: "FOLLOW" }),
     ProfileRelationship.countDocuments({ actor: owner._id, type: "FOLLOW" }),
     viewer?._id && String(viewer._id) !== String(owner._id) ? ProfileRelationship.find({ actor: viewer._id, target: owner._id }).select("type").lean() : [],
@@ -50,7 +53,16 @@ async function loadProfile(owner, viewer) {
   if (sharedWallPosts.length) {
     await Promise.all(sharedWallPosts.map(async (post) => { const original = await engagementForWallPost(post._id, viewer?._id); post.engagement = { ...(await engagementForWallShare(post.shareId, viewer?._id)), shareCount: original.shareCount, viewerShared: original.viewerShared }; }));
   }
-  return serializeUnifiedProfile({ owner, roleProfile, content, planets, publishedContentCount, seens, sharedSeens, sharedWallPosts, viewer, followerCount, followingCount, viewerRelationships });
+  const sharedFeedPosts = feedSharePosts.flatMap((post) => (post.shares || [])
+    .filter((share) => String(share.user?._id || share.user) === String(owner._id))
+    .map((share) => serializePost(post, viewer, {
+      feedId: `share-${share._id}`,
+      shareId: String(share._id),
+      feedCreatedAt: share.createdAt,
+      shareCaption: share.caption || "",
+      sharedBy: { id: owner._id, name: owner.name, username: owner.username, avatar: owner.avatar || "", verified: Boolean(owner.isVerified) },
+    })));
+  return serializeUnifiedProfile({ owner, roleProfile, content, planets, publishedContentCount, seens, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], viewer, followerCount, followingCount, viewerRelationships });
 }
 
 async function relationshipTarget(username) {

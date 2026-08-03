@@ -102,22 +102,33 @@ function reactionSummary(reactions = []) {
     .filter((item) => item.count > 0);
 }
 
-export function serializePost(post, viewer = null) {
+export function serializePost(post, viewer = null, activity = {}) {
+  return serializePostFeedItem(post, viewer, activity);
+}
+
+function serializePostFeedItem(post, viewer = null, activity = {}) {
   const author = post.author || {};
   const authorId = String(author._id || author.id || author);
   const viewerId = viewer?._id ? String(viewer._id) : "";
   const reactions = post.reactions || [];
   const comments = (post.comments || []).filter((comment) => !comment.deletedAt);
   const saves = post.saves || [];
+  const shares = post.shares || [];
   const hiddenBy = post.hiddenBy || [];
   const viewerReaction = viewerId
     ? reactions.find((item) => String(item.user?._id || item.user) === viewerId)?.reaction || null
     : null;
   const viewerSaved = Boolean(viewerId && saves.some((item) => String(item.user?._id || item.user) === viewerId));
+  const viewerShared = Boolean(viewerId && shares.some((item) => String(item.user?._id || item.user) === viewerId));
   const viewerHidden = Boolean(viewerId && hiddenBy.some((item) => String(item.user?._id || item.user) === viewerId));
 
   return {
-    id: String(post._id),
+    id: activity.feedId || String(post._id),
+    originalPostId: String(post._id),
+    shareId: activity.shareId || null,
+    sharedBy: activity.sharedBy || null,
+    shareCaption: activity.shareCaption || "",
+    feedCreatedAt: activity.feedCreatedAt || post.publishedAt || post.createdAt,
     author: authorPayload(author),
     text: post.text || "",
     context: post.context || "",
@@ -140,11 +151,13 @@ export function serializePost(post, viewer = null) {
     reactions: reactionSummary(reactions),
     viewerReaction,
     viewerSaved,
+    viewerShared,
     viewerHidden,
     comments: comments.map(serializeComment),
     supportCount: reactions.length || post.supportCount || 0,
     commentCount: comments.length || post.commentCount || 0,
     saveCount: saves.length || post.saveCount || 0,
+    shareCount: shares.length || post.shareCount || 0,
     reportCount: (post.reports || []).length,
     createdAt: post.createdAt,
     updatedAt: post.updatedAt,
@@ -222,29 +235,64 @@ export const listFeedPosts = asyncHandler(async (req, res) => {
   const { page, limit } = pageOptions(req);
   const blocks = await UserBlock.find({ $or: [{ blocker: req.user._id }, { blocked: req.user._id }] }).select("blocker blocked").lean();
   const blockedAuthorIds = blocks.map((block) => String(block.blocker) === String(req.user._id) ? block.blocked : block.blocker);
+  const blockedIdSet = new Set(blockedAuthorIds.map((id) => String(id)));
   const filter = {
     status: "published",
     deletedAt: null,
     author: { $nin: blockedAuthorIds },
     "hiddenBy.user": { $ne: req.user._id },
   };
-  const [items, total] = await Promise.all([
+  const fetchLimit = Math.min(150, Math.max(limit * page * 2, limit));
+  const [items, sharedSourcePosts, total] = await Promise.all([
     FeedPost.find(filter)
       .sort({ publishedAt: -1, createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
+      .limit(fetchLimit)
       .populate([
         { path: "author", select: "name username avatar isVerified" },
         { path: "comments.user", select: "name username avatar isVerified" },
       ])
       .lean(),
+    FeedPost.find({ ...filter, "shares.0": { $exists: true } })
+      .sort({ "shares.createdAt": -1 })
+      .limit(fetchLimit)
+      .populate([
+        { path: "author", select: "name username avatar isVerified" },
+        { path: "comments.user", select: "name username avatar isVerified" },
+        { path: "shares.user", select: "name username avatar isVerified role status" },
+      ])
+      .lean(),
     FeedPost.countDocuments(filter),
   ]);
 
+  const sharedItems = sharedSourcePosts.flatMap((post) => (post.shares || [])
+    .filter((share) => share.user && String(share.user.status || "active") === "active" && !blockedIdSet.has(String(share.user._id || share.user)))
+    .map((share) => serializePostFeedItem(post, req.user, {
+      feedId: `share-${share._id}`,
+      shareId: String(share._id),
+      feedCreatedAt: share.createdAt,
+      shareCaption: share.caption || "",
+      sharedBy: authorPayload(share.user),
+    })));
+  const originalItems = items.map((item) => serializePostFeedItem(item, req.user));
+  const mergedItems = [...originalItems, ...sharedItems]
+    .sort((left, right) => new Date(right.feedCreatedAt || right.publishedAt || right.createdAt) - new Date(left.feedCreatedAt || left.publishedAt || left.createdAt));
+  const offset = (page - 1) * limit;
+
   return sendResponse(res, 200, "Feed posts fetched", {
-    items: items.map((item) => serializePost(item, req.user)),
-    pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+    items: mergedItems.slice(offset, offset + limit),
+    pagination: { page, limit, total: total + sharedItems.length, pages: Math.ceil((total + sharedItems.length) / limit) },
   });
+});
+
+export const getFeedPost = asyncHandler(async (req, res) => {
+  const post = await findPublishedPost(req.params.id);
+  const authorId = post.author?._id || post.author;
+  const blocked = await UserBlock.exists({ $or: [{ blocker: req.user._id, blocked: authorId }, { blocker: authorId, blocked: req.user._id }] });
+  if (blocked || post.hiddenBy.some((item) => String(item.user) === String(req.user._id))) {
+    throw new ApiError(404, "Post not found");
+  }
+  await populatePostForResponse(post);
+  return sendResponse(res, 200, "Feed post fetched", { post: serializePost(post, req.user) });
 });
 
 export const listMyPosts = asyncHandler(async (req, res) => {
@@ -350,6 +398,24 @@ export const togglePostSave = asyncHandler(async (req, res) => {
   await post.save();
   await populatePostForResponse(post);
   return sendResponse(res, 200, existing ? "Post removed from Saved" : "Post saved", { post: serializePost(post, req.user) });
+});
+
+export const togglePostShare = asyncHandler(async (req, res) => {
+  const post = await findPublishedPost(req.params.id);
+  const userId = String(req.user._id);
+  const existing = post.shares.find((item) => String(item.user) === userId);
+
+  if (existing) {
+    post.shares = post.shares.filter((item) => String(item.user) !== userId);
+  } else {
+    post.shares.push({ user: req.user._id, caption: cleanString(req.body.caption, 500) });
+  }
+
+  post.shareCount = post.shares.length;
+  await post.save();
+  await populatePostForResponse(post);
+  await post.populate({ path: "shares.user", select: "name username avatar isVerified role status" });
+  return sendResponse(res, 200, existing ? "Post removed from your profile" : "Post shared to your profile", { post: serializePost(post, req.user) });
 });
 
 export const hideFeedPost = asyncHandler(async (req, res) => {
