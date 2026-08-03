@@ -13,6 +13,7 @@ import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { normalizeUsername } from "../validators/profileValidator.js";
+import { engagementForWallPost, engagementForWallShare } from "./wallController.js";
 
 const profileModelFor = (role) => role === "creator" ? CreatorProfile : FanProfile;
 
@@ -29,7 +30,7 @@ async function loadProfile(owner, viewer) {
     Publication.find({ creator: owner._id, kind: "SEEN", status: "PUBLISHED" }).sort({ publishedAt: -1 }).limit(30).populate("creator", "name username avatar").lean(),
     Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
     SeenEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("publication text").lean(),
-    WallEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("post text").lean(),
+    WallEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("post text createdAt").lean(),
     ProfileRelationship.countDocuments({ target: owner._id, type: "FOLLOW" }),
     ProfileRelationship.countDocuments({ actor: owner._id, type: "FOLLOW" }),
     viewer?._id && String(viewer._id) !== String(owner._id) ? ProfileRelationship.find({ actor: viewer._id, target: owner._id }).select("type").lean() : [],
@@ -43,25 +44,11 @@ async function loadProfile(owner, viewer) {
   const sharedWallPosts = wallShares.length ? await WallPost.find({ _id: { $in: wallShares.map((item) => item.post) }, status: "PUBLISHED" }).populate("creator", "name username avatar isVerified").lean() : [];
   const wallOrder = new Map(wallShares.map((item, index) => [String(item.post), index]));
   const wallCaptions = new Map(wallShares.map((item) => [String(item.post), item.text || ""]));
-  for (const post of sharedWallPosts) post.shareCaption = wallCaptions.get(String(post._id)) || "";
+  const wallShareByPost = new Map(wallShares.map((item) => [String(item.post), item]));
+  for (const post of sharedWallPosts) { const share = wallShareByPost.get(String(post._id)); post.shareCaption = wallCaptions.get(String(post._id)) || ""; post.shareId = share?._id; post.feedCreatedAt = share?.createdAt; }
   sharedWallPosts.sort((left, right) => wallOrder.get(String(left._id)) - wallOrder.get(String(right._id)));
   if (sharedWallPosts.length) {
-    const postIds = sharedWallPosts.map((item) => item._id);
-    const [counts, viewerEngagement] = await Promise.all([
-      WallEngagement.aggregate([{ $match: { post: { $in: postIds } } }, { $group: { _id: { post: "$post", type: "$type" }, count: { $sum: 1 } } }]),
-      viewer?._id ? WallEngagement.find({ post: { $in: postIds }, user: viewer._id, type: { $in: ["REACTION", "SHARE", "SAVE"] } }).select("post type").lean() : [],
-    ]);
-    const countMap = new Map(counts.map((item) => [`${item._id.post}:${item._id.type}`, item.count]));
-    const viewerMap = new Set(viewerEngagement.map((item) => `${item.post}:${item.type}`));
-    for (const post of sharedWallPosts) post.engagement = {
-      reactionCount: countMap.get(`${post._id}:REACTION`) || 0,
-      commentCount: countMap.get(`${post._id}:COMMENT`) || 0,
-      shareCount: countMap.get(`${post._id}:SHARE`) || 0,
-      saveCount: countMap.get(`${post._id}:SAVE`) || 0,
-      viewerReacted: viewerMap.has(`${post._id}:REACTION`),
-      viewerShared: viewerMap.has(`${post._id}:SHARE`),
-      viewerSaved: viewerMap.has(`${post._id}:SAVE`),
-    };
+    await Promise.all(sharedWallPosts.map(async (post) => { const original = await engagementForWallPost(post._id, viewer?._id); post.engagement = { ...(await engagementForWallShare(post.shareId, viewer?._id)), shareCount: original.shareCount, viewerShared: original.viewerShared }; }));
   }
   return serializeUnifiedProfile({ owner, roleProfile, content, planets, publishedContentCount, seens, sharedSeens, sharedWallPosts, viewer, followerCount, followingCount, viewerRelationships });
 }

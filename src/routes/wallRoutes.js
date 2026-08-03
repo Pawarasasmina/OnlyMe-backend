@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { addWallComment, createWallPost, getWallComments, listWallPosts, toggleWallReaction, toggleWallSave, toggleWallShare } from "../controllers/wallController.js";
+import { addWallComment, createWallPost, getWallComments, getWallReactions, listWallPosts, toggleWallReaction, toggleWallSave, toggleWallShare } from "../controllers/wallController.js";
 import { optionalProtect, protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { requireApprovedCreator } from "../middleware/creatorApprovalMiddleware.js";
@@ -8,6 +8,7 @@ const router = Router();
 router.get("/", optionalProtect, listWallPosts);
 router.post("/", protect, authorize("creator"), requireApprovedCreator, uploadProfileImage.single("image"), createWallPost);
 router.get("/:id/comments", optionalProtect, getWallComments);
+router.get("/:id/reactions", optionalProtect, getWallReactions);
 router.put("/:id/reaction", protect, authorize("fan"), toggleWallReaction);
 router.post("/:id/comments", protect, authorize("fan"), addWallComment);
 router.put("/:id/share", protect, authorize("fan"), toggleWallShare);
