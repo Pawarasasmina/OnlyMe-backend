@@ -3,6 +3,7 @@ import AdminProfile from "../models/AdminProfile.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
 import User from "../models/User.js";
+import UserBlock from "../models/UserBlock.js";
 import Content from "../models/Content.js";
 import { serializeContent } from "../services/contentAccessService.js";
 import { deleteStoredFile, storeFile } from "../services/storageService.js";
@@ -118,6 +119,21 @@ function serializeOwnProfile(user, profile) {
   return serialized;
 }
 
+function serializeBlockedAccount(block) {
+  const blocked = block.blocked;
+
+  return {
+    id: blocked._id,
+    blockId: block._id,
+    displayName: blocked.name,
+    username: blocked.username,
+    role: blocked.role,
+    profilePhoto: blocked.avatar,
+    isVerified: blocked.isVerified,
+    blockedAt: block.createdAt,
+  };
+}
+
 function calculateCompletion(user, profile) {
   if (user.role === "creator") {
     const categories = profile.categories?.length ? profile.categories : profile.category ? [profile.category] : [];
@@ -179,6 +195,30 @@ export const updateMyPrivacySettings = asyncHandler(async (req, res) => {
     role: req.user.role,
     profileVisibility: profile.profileVisibility || (req.user.role === "creator" ? "public" : "private"),
     privacySettings: profile.privacySettings || {},
+  });
+});
+
+export const listMyBlockedAccounts = asyncHandler(async (req, res) => {
+  const blocks = await UserBlock.find({ blocker: req.user._id })
+    .sort({ createdAt: -1 })
+    .populate("blocked", "name username role avatar isVerified status")
+    .lean();
+
+  return sendResponse(res, 200, "Blocked accounts fetched", {
+    items: blocks.filter((block) => block.blocked).map(serializeBlockedAccount),
+  });
+});
+
+export const unblockAccount = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.userId)) {
+    throw new ApiError(400, "Invalid account");
+  }
+
+  const result = await UserBlock.deleteOne({ blocker: req.user._id, blocked: req.params.userId });
+
+  return sendResponse(res, 200, result.deletedCount ? "Account unblocked" : "Account was not blocked", {
+    blockedUserId: req.params.userId,
+    unblocked: true,
   });
 });
 

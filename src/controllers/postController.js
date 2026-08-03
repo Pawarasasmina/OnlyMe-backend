@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import FeedPost from "../models/FeedPost.js";
+import UserBlock from "../models/UserBlock.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -101,15 +102,19 @@ function reactionSummary(reactions = []) {
     .filter((item) => item.count > 0);
 }
 
-function serializePost(post, viewer = null) {
+export function serializePost(post, viewer = null) {
   const author = post.author || {};
   const authorId = String(author._id || author.id || author);
   const viewerId = viewer?._id ? String(viewer._id) : "";
   const reactions = post.reactions || [];
   const comments = (post.comments || []).filter((comment) => !comment.deletedAt);
+  const saves = post.saves || [];
+  const hiddenBy = post.hiddenBy || [];
   const viewerReaction = viewerId
     ? reactions.find((item) => String(item.user?._id || item.user) === viewerId)?.reaction || null
     : null;
+  const viewerSaved = Boolean(viewerId && saves.some((item) => String(item.user?._id || item.user) === viewerId));
+  const viewerHidden = Boolean(viewerId && hiddenBy.some((item) => String(item.user?._id || item.user) === viewerId));
 
   return {
     id: String(post._id),
@@ -134,10 +139,13 @@ function serializePost(post, viewer = null) {
     status: post.status,
     reactions: reactionSummary(reactions),
     viewerReaction,
+    viewerSaved,
+    viewerHidden,
     comments: comments.map(serializeComment),
     supportCount: reactions.length || post.supportCount || 0,
     commentCount: comments.length || post.commentCount || 0,
-    saveCount: post.saveCount || 0,
+    saveCount: saves.length || post.saveCount || 0,
+    reportCount: (post.reports || []).length,
     createdAt: post.createdAt,
     updatedAt: post.updatedAt,
     publishedAt: post.publishedAt,
@@ -212,8 +220,16 @@ async function createPostRecord({ files, req, status }) {
 
 export const listFeedPosts = asyncHandler(async (req, res) => {
   const { page, limit } = pageOptions(req);
+  const blocks = await UserBlock.find({ $or: [{ blocker: req.user._id }, { blocked: req.user._id }] }).select("blocker blocked").lean();
+  const blockedAuthorIds = blocks.map((block) => String(block.blocker) === String(req.user._id) ? block.blocked : block.blocker);
+  const filter = {
+    status: "published",
+    deletedAt: null,
+    author: { $nin: blockedAuthorIds },
+    "hiddenBy.user": { $ne: req.user._id },
+  };
   const [items, total] = await Promise.all([
-    FeedPost.find({ status: "published", deletedAt: null })
+    FeedPost.find(filter)
       .sort({ publishedAt: -1, createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit)
@@ -222,7 +238,7 @@ export const listFeedPosts = asyncHandler(async (req, res) => {
         { path: "comments.user", select: "name username avatar isVerified" },
       ])
       .lean(),
-    FeedPost.countDocuments({ status: "published", deletedAt: null }),
+    FeedPost.countDocuments(filter),
   ]);
 
   return sendResponse(res, 200, "Feed posts fetched", {
@@ -317,6 +333,64 @@ export const updatePostReaction = asyncHandler(async (req, res) => {
   await post.save();
   await populatePostForResponse(post);
   return sendResponse(res, 200, reaction ? "Reaction saved" : "Reaction removed", { post: serializePost(post, req.user) });
+});
+
+export const togglePostSave = asyncHandler(async (req, res) => {
+  const post = await findPublishedPost(req.params.id);
+  const userId = String(req.user._id);
+  const existing = post.saves.find((item) => String(item.user) === userId);
+
+  if (existing) {
+    post.saves = post.saves.filter((item) => String(item.user) !== userId);
+  } else {
+    post.saves.push({ user: req.user._id });
+  }
+
+  post.saveCount = post.saves.length;
+  await post.save();
+  await populatePostForResponse(post);
+  return sendResponse(res, 200, existing ? "Post removed from Saved" : "Post saved", { post: serializePost(post, req.user) });
+});
+
+export const hideFeedPost = asyncHandler(async (req, res) => {
+  const post = await findPublishedPost(req.params.id);
+  const userId = String(req.user._id);
+  if (!post.hiddenBy.some((item) => String(item.user) === userId)) {
+    post.hiddenBy.push({ user: req.user._id, reason: cleanString(req.body.reason || "NOT_USEFUL", 80) || "NOT_USEFUL" });
+    await post.save();
+  }
+  return sendResponse(res, 200, "Post hidden from your feed", { postId: String(post._id), hidden: true });
+});
+
+export const reportFeedPost = asyncHandler(async (req, res) => {
+  const post = await findPublishedPost(req.params.id);
+  const reason = cleanString(req.body.reason || "Other", 80);
+  if (!reason) throw new ApiError(400, "Report reason is required");
+  const userId = String(req.user._id);
+  const existing = post.reports.find((item) => String(item.user) === userId && ["RECEIVED", "REVIEWING"].includes(item.status));
+  if (existing) {
+    existing.reason = reason;
+    existing.details = cleanString(req.body.details, 1000);
+  } else {
+    post.reports.push({ user: req.user._id, reason, details: cleanString(req.body.details, 1000) });
+  }
+  await post.save();
+  const report = post.reports.find((item) => String(item.user) === userId && item.reason === reason);
+  return sendResponse(res, 201, "Post report received", { reportId: String(report?._id || ""), status: report?.status || "RECEIVED" });
+});
+
+export const blockPostAuthor = asyncHandler(async (req, res) => {
+  const post = await findPublishedPost(req.params.id);
+  const authorId = post.author?._id || post.author;
+  if (String(authorId) === String(req.user._id)) {
+    throw new ApiError(400, "You cannot block yourself");
+  }
+  await UserBlock.updateOne(
+    { blocker: req.user._id, blocked: authorId },
+    { $setOnInsert: { blocker: req.user._id, blocked: authorId } },
+    { upsert: true },
+  );
+  return sendResponse(res, 200, "Account blocked", { blockedUserId: String(authorId), blockedByMe: true });
 });
 
 export const createPostComment = asyncHandler(async (req, res) => {

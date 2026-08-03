@@ -92,3 +92,14 @@ export const uploadMessageImage = multer({
     callback(null, true);
   },
 });
+
+const allowedStoryTypes = new Set(["image/jpeg", "image/png", "image/webp", "video/mp4", "video/quicktime", "video/webm"]);
+export const uploadStoryMedia = multer({
+  storage,
+  limits: { files: 1, fileSize: 200 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    const mimeType = String(file.mimetype || "").toLowerCase().split(";")[0].trim();
+    if (!allowedStoryTypes.has(mimeType)) return callback(new ApiError(400, "Unsupported Story media type"));
+    callback(null, true);
+  },
+});

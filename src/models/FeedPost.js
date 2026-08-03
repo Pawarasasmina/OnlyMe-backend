@@ -33,6 +33,31 @@ const postCommentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const postSaveSchema = new mongoose.Schema(
+  {
+    user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  },
+  { timestamps: true }
+);
+
+const postHiddenSchema = new mongoose.Schema(
+  {
+    user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    reason: { type: String, trim: true, maxlength: 80, default: "NOT_USEFUL" },
+  },
+  { timestamps: true }
+);
+
+const postReportSchema = new mongoose.Schema(
+  {
+    user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    reason: { type: String, trim: true, maxlength: 80, required: true },
+    details: { type: String, trim: true, maxlength: 1000, default: "" },
+    status: { type: String, enum: ["RECEIVED", "REVIEWING", "RESOLVED", "CLOSED"], default: "RECEIVED" },
+  },
+  { timestamps: true }
+);
+
 const feedPostSchema = new mongoose.Schema(
   {
     author: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
@@ -44,6 +69,9 @@ const feedPostSchema = new mongoose.Schema(
     status: { type: String, enum: POST_STATUSES, default: "published", index: true },
     reactions: { type: [postReactionSchema], default: [] },
     comments: { type: [postCommentSchema], default: [] },
+    saves: { type: [postSaveSchema], default: [] },
+    hiddenBy: { type: [postHiddenSchema], default: [] },
+    reports: { type: [postReportSchema], default: [] },
     supportCount: { type: Number, min: 0, default: 0 },
     commentCount: { type: Number, min: 0, default: 0 },
     saveCount: { type: Number, min: 0, default: 0 },
@@ -58,5 +86,7 @@ feedPostSchema.index({ author: 1, status: 1, updatedAt: -1 });
 feedPostSchema.index({ context: 1 });
 feedPostSchema.index({ status: 1, visibility: 1, deletedAt: 1, publishedAt: -1 });
 feedPostSchema.index({ context: 1, location: 1 });
+feedPostSchema.index({ "saves.user": 1, status: 1, publishedAt: -1 });
+feedPostSchema.index({ "hiddenBy.user": 1, status: 1, publishedAt: -1 });
 
 export default mongoose.model("FeedPost", feedPostSchema);

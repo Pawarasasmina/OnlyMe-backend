@@ -38,22 +38,26 @@ export function createUploadSignature(userId) {
   };
 }
 
-export async function storeFile(file) {
+export async function storeFile(file, options = {}) {
   ensureCloudinaryIsConfigured();
 
   if (!file?.path) {
     throw new ApiError(400, "A file is required");
   }
 
+  const resourceType = options.resourceType || "image";
+  const folder = options.folder || "onlyme/profiles";
+
   try {
     const result = await cloudinary.uploader.upload(file.path, {
-      resource_type: "image",
-      folder: "onlyme/profiles",
+      resource_type: resourceType,
+      folder,
     });
 
     return {
       id: result.public_id,
       url: result.secure_url,
+      resourceType: result.resource_type || resourceType,
     };
   } finally {
     await fs.unlink(file.path).catch(() => {});

@@ -3,13 +3,13 @@ import { createStory, deleteStory, getStory, getStoryInsights, listStories, reac
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { requireApprovedCreator } from "../middleware/creatorApprovalMiddleware.js";
-import { uploadProfileImage } from "../middleware/uploadMiddleware.js";
+import { uploadStoryMedia } from "../middleware/uploadMiddleware.js";
 import { requireMessagingAccess } from "../services/messagingAccessService.js";
 const router = Router();
 router.get("/active", protect, authorize("fan", "creator"), listStories);
 router.get("/:id/insights", protect, authorize("creator"), getStoryInsights);
 router.get("/:id", protect, authorize("fan", "creator"), getStory);
-router.post("/", protect, authorize("creator"), requireApprovedCreator, uploadProfileImage.single("image"), createStory);
+router.post("/", protect, authorize("creator"), requireApprovedCreator, uploadStoryMedia.single("image"), createStory);
 router.post("/:id/views", protect, authorize("fan"), viewStory);
 router.post("/:id/reactions", protect, authorize("fan"), requireMessagingAccess, reactStory);
 router.post("/:id/replies", protect, authorize("fan"), requireMessagingAccess, replyStory);

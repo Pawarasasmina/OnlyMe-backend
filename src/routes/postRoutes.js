@@ -4,8 +4,12 @@ import {
   createFeedPost,
   createPostComment,
   deleteFeedPost,
+  blockPostAuthor,
+  hideFeedPost,
   listFeedPosts,
   listMyPosts,
+  reportFeedPost,
+  togglePostSave,
   updatePostReaction,
   updateFeedPost,
 } from "../controllers/postController.js";
@@ -25,6 +29,10 @@ router.get("/drafts", ...creatorOnly, (req, res, next) => {
 router.post("/", ...creatorOnly, uploadFeedPostImages.array("media", 4), createFeedPost);
 router.post("/drafts", ...creatorOnly, uploadFeedPostImages.array("media", 4), createDraftPost);
 router.put("/:id/reaction", protect, updatePostReaction);
+router.put("/:id/save", protect, togglePostSave);
+router.post("/:id/hide", protect, hideFeedPost);
+router.post("/:id/report", protect, reportFeedPost);
+router.put("/:id/block-author", protect, blockPostAuthor);
 router.post("/:id/comments", protect, createPostComment);
 router.put("/:id", ...creatorOnly, updateFeedPost);
 router.delete("/:id", ...creatorOnly, deleteFeedPost);
