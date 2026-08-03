@@ -26,6 +26,7 @@ import postRoutes from "./postRoutes.js";
 import orbitRoutes from "./orbitRoutes.js";
 import onboardingRoutes from "./onboardingRoutes.js";
 import searchRoutes from "./searchRoutes.js";
+import discoverRoutes from "./discoverRoutes.js";
 import { sendResponse } from "../utils/response.js";
 
 const router = Router();
@@ -59,6 +60,7 @@ router.use("/posts", postRoutes);
 router.use("/orbit", orbitRoutes);
 router.use("/onboarding", onboardingRoutes);
 router.use("/search", searchRoutes);
+router.use("/discover", discoverRoutes);
 
 export default router;
 
