@@ -40,6 +40,7 @@ const messageSchema = new mongoose.Schema(
     deletedAt: { type: Date, default: null },
     deletedFor: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [] },
     replyTo: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
+    forwardedFrom: { type: mongoose.Schema.Types.ObjectId, default: null },
     reactions: {
       type: [{
         user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },

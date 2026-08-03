@@ -58,6 +58,7 @@ const userSchema = new mongoose.Schema(
     messagingRestrictionReason: { type: String, trim: true, maxlength: 1000, default: "" },
     messagingRestrictedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     lastSeenAt: { type: Date, default: null },
+    pinnedMessageGroup: { type: mongoose.Schema.Types.ObjectId, ref: "GroupConversation", default: null },
     onboarding: {
       version: { type: Number, default: 1 },
       status: { type: String, enum: ["not_started", "in_progress", "completed", "skipped"], default: "not_started" },

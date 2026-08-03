@@ -9,6 +9,7 @@ import WallEngagement from "../models/WallEngagement.js";
 import WallPost from "../models/WallPost.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import Conversation from "../models/Conversation.js";
+import GroupConversation from "../models/GroupConversation.js";
 import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -62,7 +63,8 @@ async function loadProfile(owner, viewer) {
       shareCaption: share.caption || "",
       sharedBy: { id: owner._id, name: owner.name, username: owner.username, avatar: owner.avatar || "", verified: Boolean(owner.isVerified) },
     })));
-  return serializeUnifiedProfile({ owner, roleProfile, content, planets, publishedContentCount, seens, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], viewer, followerCount, followingCount, viewerRelationships });
+  const pinnedMessageGroup = owner.pinnedMessageGroup ? await GroupConversation.findOne({ _id: owner.pinnedMessageGroup, members: owner._id, deletedAt: null }).select("name avatar members").lean() : null;
+  return serializeUnifiedProfile({ owner, roleProfile, content, pinnedMessageGroup, planets, publishedContentCount, seens, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], viewer, followerCount, followingCount, viewerRelationships });
 }
 
 async function relationshipTarget(username) {

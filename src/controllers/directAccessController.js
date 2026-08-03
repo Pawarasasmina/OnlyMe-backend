@@ -8,7 +8,7 @@ import Notification from "../models/Notification.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
-import { activeDirectAccessWindow, openDirectAccessWindow, serializeDAWindow } from "../services/directAccessService.js";
+import { activeDirectAccessWindow, creatorTypicalReplyHours, openDirectAccessWindow, serializeDAWindow } from "../services/directAccessService.js";
 
 const validId = (value) => {
   if (!mongoose.isValidObjectId(value)) throw new ApiError(400, "Invalid account id");
@@ -33,6 +33,7 @@ export const getDirectAccessOffer = asyncHandler(async (req, res) => {
     durationHours: 48,
     fanMessageLimit: 3,
     activeWindow: serializeDAWindow(active),
+    typicalReplyHours: await creatorTypicalReplyHours(req.params.creatorId),
     walletBalance: wallet?.balance ?? null,
     premiumAllowance: membership ? { available: allowanceAvailable, renewsAt: membership.currentPeriodEnd } : null,
   });

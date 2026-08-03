@@ -14,7 +14,7 @@ test("message reports keep a private moderation snapshot", () => {
   const snapshot = MessageReport.schema.path("snapshot");
   assert.equal(snapshot.options.required, true);
   assert.equal(snapshot.options.select, false);
-  assert.deepEqual(MessageReport.schema.path("scope").enumValues, ["MESSAGE", "CONVERSATION"]);
+  assert.deepEqual(MessageReport.schema.path("scope").enumValues, ["MESSAGE", "GROUP_MESSAGE", "CONVERSATION"]);
 });
 
 test("messages support private image metadata and soft deletion", () => {

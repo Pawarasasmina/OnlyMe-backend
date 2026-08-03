@@ -316,6 +316,19 @@ export async function latestDirectAccessWindow(fanId, creatorId) {
   return active || DAWindow.findOne({ fan: fanId, creator: creatorId }).sort({ createdAt: -1 });
 }
 
+export async function creatorTypicalReplyHours(creatorId) {
+  const [row] = await DAWindow.aggregate([
+    { $match: { creator: new mongoose.Types.ObjectId(String(creatorId)), firstCreatorReplyAt: { $ne: null } } },
+    { $sort: { firstCreatorReplyAt: -1 } },
+    { $limit: 100 },
+    { $project: { replyMs: { $subtract: ["$firstCreatorReplyAt", "$createdAt"] } } },
+    { $match: { replyMs: { $gte: 0 } } },
+    { $group: { _id: null, averageMs: { $avg: "$replyMs" } } },
+  ]);
+  if (!row?.averageMs) return null;
+  return Math.max(1, Math.min(48, Math.ceil(row.averageMs / 3600000)));
+}
+
 export async function reserveDirectAccessMessage({ windowId, sender, recipient, now = new Date() }) {
   if (!windowId) return null;
   const window = await DAWindow.findById(windowId);
