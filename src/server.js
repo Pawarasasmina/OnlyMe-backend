@@ -7,6 +7,7 @@ import { retryPendingVerificationFileCleanup } from "./services/verificationFile
 import { processDuePremiumMemberships } from "./services/premiumMembershipService.js";
 import { configureMessagingSocket } from "./realtime/messagingSocket.js";
 import { processDueDirectAccessWindows } from "./services/directAccessService.js";
+import { processDuePaidCalls } from "./services/paidCallService.js";
 
 async function startServer() {
   try {
@@ -14,6 +15,7 @@ async function startServer() {
     await retryPendingVerificationFileCleanup();
     await processDuePremiumMemberships();
     await processDueDirectAccessWindows();
+    await processDuePaidCalls();
     const premiumRenewalTimer = setInterval(
       () => processDuePremiumMemberships().catch((error) =>
         console.error("Premium renewal worker failed", error),
@@ -28,6 +30,11 @@ async function startServer() {
       60 * 1000,
     );
     directAccessExpiryTimer.unref();
+    const paidCallExpiryTimer = setInterval(
+      () => processDuePaidCalls(new Date(), io).catch((error) => console.error("Paid call refund worker failed", error)),
+      60 * 1000,
+    );
+    paidCallExpiryTimer.unref();
     const server = http.createServer(app);
     const io = new Server(server, { cors: { origin: env.clientUrl, credentials: true } });
     configureMessagingSocket(io);

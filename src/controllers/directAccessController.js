@@ -16,7 +16,7 @@ const validId = (value) => {
 
 export const getDirectAccessOffer = asyncHandler(async (req, res) => {
   validId(req.params.creatorId);
-  const profile = await CreatorProfile.findOne({ user: req.params.creatorId }).select("directAccessEnabled directAccessPriceStars").lean();
+  const profile = await CreatorProfile.findOne({ user: req.params.creatorId }).select("directAccessEnabled directAccessPriceStars directCallEnabled directCallPriceStars directCallDurationMinutes directCallAutoDeclineAway").lean();
   if (!profile) throw new ApiError(404, "Creator profile not found");
   const active = req.user.role === "fan" ? await activeDirectAccessWindow(req.user._id, req.params.creatorId) : null;
   const [wallet, membership] = req.user.role === "fan" ? await Promise.all([
@@ -30,6 +30,10 @@ export const getDirectAccessOffer = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Direct Access offer fetched", {
     enabled: Boolean(profile.directAccessEnabled),
     priceStars: profile.directAccessPriceStars || 100,
+    callEnabled: Boolean(profile.directCallEnabled),
+    callPriceStars: profile.directCallPriceStars || 500,
+    callDurationMinutes: profile.directCallDurationMinutes || 5,
+    callAutoDeclineAway: Boolean(profile.directCallAutoDeclineAway),
     durationHours: 48,
     fanMessageLimit: 3,
     activeWindow: serializeDAWindow(active),
@@ -43,15 +47,23 @@ export const updateDirectAccessSettings = asyncHandler(async (req, res) => {
   if (req.user.role !== "creator") throw new ApiError(403, "Only creators can configure Direct Access");
   const priceStars = Number(req.body.priceStars);
   if (!Number.isSafeInteger(priceStars) || priceStars < 10 || priceStars > 10000) throw new ApiError(400, "Direct Access price must be between 10 and 10,000 Stars");
+  const callPriceStars = Number(req.body.callPriceStars ?? 500);
+  const callDurationMinutes = Number(req.body.callDurationMinutes ?? 5);
+  if (![100, 300, 500, 800, 1500].includes(callPriceStars)) throw new ApiError(400, "Choose a supported call price");
+  if (![2, 5, 10, 15, 20, 30].includes(callDurationMinutes)) throw new ApiError(400, "Choose a supported call duration");
   const profile = await CreatorProfile.findOneAndUpdate(
     { user: req.user._id },
-    { $set: { directAccessEnabled: req.body.enabled === true, directAccessPriceStars: priceStars } },
+    { $set: { directAccessEnabled: req.body.enabled === true, directAccessPriceStars: priceStars, directCallEnabled: req.body.callEnabled === true, directCallPriceStars: callPriceStars, directCallDurationMinutes: callDurationMinutes, directCallAutoDeclineAway: req.body.callAutoDeclineAway === true } },
     { new: true },
-  ).select("directAccessEnabled directAccessPriceStars");
+  ).select("directAccessEnabled directAccessPriceStars directCallEnabled directCallPriceStars directCallDurationMinutes directCallAutoDeclineAway");
   if (!profile) throw new ApiError(404, "Creator profile not found");
   return sendResponse(res, 200, "Direct Access settings updated", {
     enabled: profile.directAccessEnabled,
     priceStars: profile.directAccessPriceStars,
+    callEnabled: profile.directCallEnabled,
+    callPriceStars: profile.directCallPriceStars,
+    callDurationMinutes: profile.directCallDurationMinutes,
+    callAutoDeclineAway: profile.directCallAutoDeclineAway,
   });
 });
 

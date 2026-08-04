@@ -27,6 +27,11 @@ test("messages can be attributed to a Direct Access window", () => {
 test("creator Direct Access settings and financial operation types exist", () => {
   assert.ok(CreatorProfile.schema.path("directAccessEnabled"));
   assert.equal(CreatorProfile.schema.path("directAccessPriceStars").options.default, 100);
+  assert.equal(CreatorProfile.schema.path("directCallEnabled").options.default, false);
+  assert.deepEqual(CreatorProfile.schema.path("directCallPriceStars").options.enum, [100, 300, 500, 800, 1500]);
+  assert.deepEqual(CreatorProfile.schema.path("directCallDurationMinutes").options.enum, [2, 5, 10, 15, 20, 30]);
   for (const type of ["OPEN_DA_WINDOW", "CAPTURE_DA_WINDOW", "REFUND_DA_WINDOW"]) assert.ok(COMMAND_TYPES.includes(type));
   for (const type of ["DA_HOLD_DEBIT", "DA_CREATOR_EARNING", "DA_REFUND_CREDIT"]) assert.ok(LEDGER_ENTRY_TYPES.includes(type));
+  for (const type of ["OPEN_PAID_CALL", "CAPTURE_PAID_CALL", "REFUND_PAID_CALL"]) assert.ok(COMMAND_TYPES.includes(type));
+  for (const type of ["CALL_HOLD_DEBIT", "CALL_CREATOR_EARNING", "CALL_REFUND_CREDIT"]) assert.ok(LEDGER_ENTRY_TYPES.includes(type));
 });
