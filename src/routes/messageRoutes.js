@@ -6,7 +6,7 @@ import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { financialMutationLimit } from "../middleware/financialRateLimit.js";
 import { uploadMessageImage, uploadVideoNote, uploadVoiceMessage } from "../middleware/uploadMiddleware.js";
-import { addGroupMember, archiveGroup, createGroup, deleteGroup, deleteGroupMessage, forwardGroupMessage, getGroupMessages, listGroups, markGroupMessageDelivered, muteGroup, pinGroupToProfile, removeGroupMember, removeGroupMessageReaction, reportGroupMessage, sendGroupMessage, setGroupAdmin, setGroupMessageReaction, syncGroupMessageDeliveries, updateGroup, updateGroupAvatar } from "../controllers/groupMessageController.js";
+import { addGroupMember, archiveGroup, createGroup, deleteGroup, deleteGroupMessage, forwardGroupMessage, getGroupMessages, listGroups, markGroupMessageDelivered, muteGroup, pinGroupToProfile, removeGroupAvatar, removeGroupMember, removeGroupMessageReaction, reportGroupMessage, sendGroupMessage, setGroupAdmin, setGroupMessageReaction, syncGroupMessageDeliveries, updateGroup, updateGroupAvatar } from "../controllers/groupMessageController.js";
 
 const router = Router();
 const messageSendLimiter = rateLimit({
@@ -32,6 +32,7 @@ router.get("/groups/:groupId", getGroupMessages);
 router.post("/groups/:groupId", messageSendLimiter, sendGroupMessage);
 router.patch("/groups/:groupId", updateGroup);
 router.post("/groups/:groupId/avatar", uploadMessageImage.single("avatar"), updateGroupAvatar);
+router.delete("/groups/:groupId/avatar", removeGroupAvatar);
 router.put("/groups/:groupId/archive", archiveGroup);
 router.put("/groups/:groupId/mute", muteGroup);
 router.put("/groups/:groupId/profile-pin", pinGroupToProfile);

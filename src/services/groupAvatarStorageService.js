@@ -21,3 +21,8 @@ export async function uploadGroupAvatar({ buffer, groupId, userId }) {
   }).catch((error) => { throw new ApiError(502, error.message || "Group-image upload failed"); });
   return asset.secure_url;
 }
+
+export async function deleteGroupAvatar(groupId) {
+  if (!env.cloudinaryCloudName || !env.cloudinaryApiKey || !env.cloudinaryApiSecret) throw new ApiError(503, "Group-image storage is not configured");
+  await cloudinary.uploader.destroy(`onlyme/messages/groups/${groupId}/avatar`, { resource_type: "image", invalidate: true });
+}

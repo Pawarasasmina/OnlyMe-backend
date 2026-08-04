@@ -10,11 +10,14 @@ import ProfileRelationship from "../models/ProfileRelationship.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
-import { uploadGroupAvatar } from "../services/groupAvatarStorageService.js";
+import { deleteGroupAvatar, uploadGroupAvatar } from "../services/groupAvatarStorageService.js";
 
 const person = (user) => ({ id: String(user._id), displayName: user.name, username: user.username, avatarUrl: user.avatar || null, role: user.role, isVerified: Boolean(user.isVerified) });
 const serializeMessage = (message) => ({ id: String(message._id), clientMessageId: message.clientMessageId || null, groupId: String(message.group), senderId: String(message.sender?._id || message.sender), sender: message.sender?.name ? person(message.sender) : null, body: message.deletedAt ? "This message was deleted" : message.body, deletedAt: message.deletedAt || null, forwarded: Boolean(message.forwardedFrom), replyTo: message.replyTo ? { id: String(message.replyTo._id), senderId: String(message.replyTo.sender), body: message.replyTo.deletedAt ? "Message unavailable" : message.replyTo.body } : null, reactions: (message.reactions || []).map((item) => ({ userId: String(item.user), emoji: item.emoji })), deliveredBy: (message.deliveredBy || []).map((item) => ({ userId: String(item.user), deliveredAt: item.deliveredAt })), readBy: (message.readBy || []).map((item) => ({ userId: String(item.user), readAt: item.readAt })), createdAt: message.createdAt });
-const serializeGroup = (group, me, lastMessage = null, unreadCount = 0, pinnedGroupId = null) => ({ id: String(group._id), type: "group", name: group.name, avatarUrl: group.avatar || null, createdBy: String(group.createdBy), members: (group.members || []).map((item) => item?.name ? person(item) : { id: String(item) }), admins: (group.admins || []).map(String), archived: (group.archivedBy || []).some((id) => String(id) === String(me)), muted: (group.mutedBy || []).some((id) => String(id) === String(me)), pinnedToProfile: String(pinnedGroupId || "") === String(group._id), lastMessage: lastMessage ? serializeMessage(lastMessage) : null, unreadCount });
+const serializeGroup = (group, me, lastMessage = null, unreadCount = 0, pinnedGroupId = null) => ({ id: String(group._id), type: "group", name: group.name, avatarUrl: group.avatar || null, createdBy: String(group.createdBy), members: (group.members || []).map((item) => item?.name ? person(item) : { id: String(item) }), admins: (group.admins || []).map(String), permissions: { editGroupInfo: group.permissions?.editGroupInfo || "ADMINS", addMembers: group.permissions?.addMembers || "ADMINS" }, archived: (group.archivedBy || []).some((id) => String(id) === String(me)), muted: (group.mutedBy || []).some((id) => String(id) === String(me)), pinnedToProfile: String(pinnedGroupId || "") === String(group._id), lastMessage: lastMessage ? serializeMessage(lastMessage) : null, unreadCount });
+const isGroupAdmin = (group, userId) => group.admins.some((id) => String(id) === String(userId));
+const canEditGroupInfo = (group, userId) => isGroupAdmin(group, userId) || group.permissions?.editGroupInfo === "ALL_MEMBERS";
+const canAddGroupMembers = (group, userId) => isGroupAdmin(group, userId) || group.permissions?.addMembers === "ALL_MEMBERS";
 const validId = (value) => { if (!mongoose.isValidObjectId(value)) throw new ApiError(400, "Invalid group id"); };
 const getGroup = async (groupId, userId) => {
   validId(groupId);
@@ -89,16 +92,21 @@ export const sendGroupMessage = asyncHandler(async (req, res) => {
 
 export const updateGroup = asyncHandler(async (req, res) => {
   const group = await getGroup(req.params.groupId, req.user._id);
-  if (!group.admins.some((id) => id.equals(req.user._id))) throw new ApiError(403, "Only a group admin can update this group");
-  if (req.body.name !== undefined) { const name = String(req.body.name).trim(); if (!name || name.length > 60) throw new ApiError(400, "Invalid group name"); group.name = name; }
-  if (req.body.avatarUrl !== undefined) group.avatar = String(req.body.avatarUrl || "");
+  if (req.body.permissions !== undefined) {
+    if (!isGroupAdmin(group, req.user._id)) throw new ApiError(403, "Only a group admin can change group permissions");
+    for (const key of ["editGroupInfo", "addMembers"]) if (req.body.permissions[key] !== undefined) {
+      if (!["ADMINS", "ALL_MEMBERS"].includes(req.body.permissions[key])) throw new ApiError(400, "Invalid group permission");
+      group.permissions[key] = req.body.permissions[key];
+    }
+  }
+  if (req.body.name !== undefined) { if (!canEditGroupInfo(group, req.user._id)) throw new ApiError(403, "You cannot edit this group's info"); const name = String(req.body.name).trim(); if (!name || name.length > 60) throw new ApiError(400, "Invalid group name"); group.name = name; }
   await group.save();
   return sendResponse(res, 200, "Group updated", { group: serializeGroup(group, req.user._id) });
 });
 
 export const updateGroupAvatar = asyncHandler(async (req, res) => {
   const group = await getGroup(req.params.groupId, req.user._id);
-  if (!group.admins.some((id) => id.equals(req.user._id))) throw new ApiError(403, "Only a group admin can update this group");
+  if (!canEditGroupInfo(group, req.user._id)) throw new ApiError(403, "You cannot edit this group's image");
   if (!req.file?.buffer) throw new ApiError(400, "Choose a group image");
   group.avatar = await uploadGroupAvatar({ buffer: req.file.buffer, groupId: group._id, userId: req.user._id });
   await group.save();
@@ -108,9 +116,21 @@ export const updateGroupAvatar = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Group image updated", { group: payload });
 });
 
+export const removeGroupAvatar = asyncHandler(async (req, res) => {
+  const group = await getGroup(req.params.groupId, req.user._id);
+  if (!canEditGroupInfo(group, req.user._id)) throw new ApiError(403, "You cannot edit this group's image");
+  if (group.avatar) await deleteGroupAvatar(group._id).catch(() => {});
+  group.avatar = "";
+  await group.save();
+  await group.populate("members", "name username avatar role isVerified");
+  const payload = serializeGroup(group, req.user._id);
+  for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId._id || memberId}`).emit("group:updated", payload);
+  return sendResponse(res, 200, "Group image removed", { group: payload });
+});
+
 export const addGroupMember = asyncHandler(async (req, res) => {
   const group = await getGroup(req.params.groupId, req.user._id);
-  if (!group.admins.some((id) => id.equals(req.user._id))) throw new ApiError(403, "Only a group admin can add members");
+  if (!canAddGroupMembers(group, req.user._id)) throw new ApiError(403, "You cannot add members to this group");
   const member = await User.findOne({ _id: req.body.userId, status: "active" });
   if (!member) throw new ApiError(404, "Account not found");
   if (!group.members.some((id) => id.equals(member._id))) group.members.push(member._id);
