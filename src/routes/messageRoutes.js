@@ -1,12 +1,12 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { acceptMessageRequest, archiveConversation, blockMessageAccount, declineMessageRequest, deleteConversation, deleteMessage, forwardMessage, listConversations, listMessages, muteConversation, removeMessageReaction, reportConversation, reportMessage, searchMessagePeople, sendImageMessage, sendMessage, sendVideoNote, sendVoiceMessage, setMessageReaction, unblockMessageAccount } from "../controllers/messageController.js";
-import { askDirectAccessQuestion, getDirectAccessOffer, listDirectAccessWindows, openWindow, updateDirectAccessSettings } from "../controllers/directAccessController.js";
+import { askDirectAccessQuestion, getDirectAccessOffer, listDirectAccessWindows, openWindow, replyToFreeFanFollowup, sendFreeFanFollowup, updateDirectAccessSettings } from "../controllers/directAccessController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { financialMutationLimit } from "../middleware/financialRateLimit.js";
 import { uploadMessageImage, uploadVideoNote, uploadVoiceMessage } from "../middleware/uploadMiddleware.js";
-import { addGroupMember, archiveGroup, createGroup, deleteGroup, deleteGroupMessage, forwardGroupMessage, getGroupMessages, listGroups, markGroupMessageDelivered, muteGroup, pinGroupToProfile, removeGroupAvatar, removeGroupMember, removeGroupMessageReaction, reportGroupMessage, sendGroupMessage, setGroupAdmin, setGroupMessageReaction, syncGroupMessageDeliveries, updateGroup, updateGroupAvatar } from "../controllers/groupMessageController.js";
+import { addGroupMember, archiveGroup, createGroup, deleteGroup, deleteGroupMessage, forwardGroupMessage, getGroupMessages, listGroups, markGroupMessageDelivered, muteGroup, pinGroupToProfile, removeGroupAvatar, removeGroupMember, removeGroupMessageReaction, reportGroupMessage, sendGroupImageMessage, sendGroupMessage, sendGroupVideoNote, sendGroupVoiceMessage, setGroupAdmin, setGroupMessageReaction, syncGroupMessageDeliveries, updateGroup, updateGroupAvatar } from "../controllers/groupMessageController.js";
 
 const router = Router();
 const messageSendLimiter = rateLimit({
@@ -23,6 +23,8 @@ router.put("/direct-access/settings", financialMutationLimit, updateDirectAccess
 router.get("/direct-access/offers/:creatorId", getDirectAccessOffer);
 router.post("/direct-access/windows/:creatorId", financialMutationLimit, openWindow);
 router.post("/direct-access/ask/:fanId", messageSendLimiter, askDirectAccessQuestion);
+router.post("/direct-access/follow-up/:creatorId", messageSendLimiter, sendFreeFanFollowup);
+router.post("/direct-access/follow-up/:messageId/reply", financialMutationLimit, messageSendLimiter, replyToFreeFanFollowup);
 router.get("/conversations", listConversations);
 router.get("/people", searchMessagePeople);
 router.get("/groups", listGroups);
@@ -30,6 +32,9 @@ router.put("/groups/receipts/delivered", syncGroupMessageDeliveries);
 router.post("/groups", messageSendLimiter, createGroup);
 router.get("/groups/:groupId", getGroupMessages);
 router.post("/groups/:groupId", messageSendLimiter, sendGroupMessage);
+router.post("/groups/:groupId/voice", messageSendLimiter, uploadVoiceMessage.single("voice"), sendGroupVoiceMessage);
+router.post("/groups/:groupId/image", messageSendLimiter, uploadMessageImage.single("image"), sendGroupImageMessage);
+router.post("/groups/:groupId/video-note", messageSendLimiter, uploadVideoNote.single("video"), sendGroupVideoNote);
 router.patch("/groups/:groupId", updateGroup);
 router.post("/groups/:groupId/avatar", uploadMessageImage.single("avatar"), updateGroupAvatar);
 router.delete("/groups/:groupId/avatar", removeGroupAvatar);

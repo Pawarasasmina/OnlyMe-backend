@@ -11,10 +11,20 @@ import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { deleteGroupAvatar, uploadGroupAvatar } from "../services/groupAvatarStorageService.js";
+import { messageImageUrl, uploadMessageImage } from "../services/messageImageStorageService.js";
+import { messageVoiceUrl, uploadMessageVoice } from "../services/messageVoiceStorageService.js";
+import { messageVideoUrl, uploadMessageVideo } from "../services/messageVideoStorageService.js";
 
 const person = (user) => ({ id: String(user._id), displayName: user.name, username: user.username, avatarUrl: user.avatar || null, role: user.role, isVerified: Boolean(user.isVerified) });
 const serializeMessage = (message) => ({ id: String(message._id), clientMessageId: message.clientMessageId || null, groupId: String(message.group), senderId: String(message.sender?._id || message.sender), sender: message.sender?.name ? person(message.sender) : null, body: message.deletedAt ? "This message was deleted" : message.body, deletedAt: message.deletedAt || null, forwarded: Boolean(message.forwardedFrom), replyTo: message.replyTo ? { id: String(message.replyTo._id), senderId: String(message.replyTo.sender), body: message.replyTo.deletedAt ? "Message unavailable" : message.replyTo.body } : null, reactions: (message.reactions || []).map((item) => ({ userId: String(item.user), emoji: item.emoji })), deliveredBy: (message.deliveredBy || []).map((item) => ({ userId: String(item.user), deliveredAt: item.deliveredAt })), readBy: (message.readBy || []).map((item) => ({ userId: String(item.user), readAt: item.readAt })), createdAt: message.createdAt });
-const serializeGroup = (group, me, lastMessage = null, unreadCount = 0, pinnedGroupId = null) => ({ id: String(group._id), type: "group", name: group.name, avatarUrl: group.avatar || null, createdBy: String(group.createdBy), members: (group.members || []).map((item) => item?.name ? person(item) : { id: String(item) }), admins: (group.admins || []).map(String), permissions: { editGroupInfo: group.permissions?.editGroupInfo || "ADMINS", addMembers: group.permissions?.addMembers || "ADMINS" }, archived: (group.archivedBy || []).some((id) => String(id) === String(me)), muted: (group.mutedBy || []).some((id) => String(id) === String(me)), pinnedToProfile: String(pinnedGroupId || "") === String(group._id), lastMessage: lastMessage ? serializeMessage(lastMessage) : null, unreadCount });
+const serializeMediaMessage = (message) => ({
+  ...serializeMessage(message), mediaType: message.mediaType || "text",
+  image: !message.deletedAt && message.mediaType === "image" && message.image?.assetId ? { url: messageImageUrl(message.image), width: message.image.width, height: message.image.height } : null,
+  audio: !message.deletedAt && message.mediaType === "audio" && message.audio?.assetId ? { url: messageVoiceUrl(message.audio), duration: message.audio.duration, waveform: message.audio.waveform || [] } : null,
+  video: !message.deletedAt && message.mediaType === "video" && message.video?.assetId ? { url: messageVideoUrl(message.video), duration: message.video.duration, width: message.video.width, height: message.video.height } : null,
+  sharedAttachment: !message.deletedAt && message.sharedAttachment?.contentType ? message.sharedAttachment : null,
+});
+const serializeGroup = (group, me, lastMessage = null, unreadCount = 0, pinnedGroupId = null) => ({ id: String(group._id), type: "group", name: group.name, avatarUrl: group.avatar || null, createdBy: String(group.createdBy), members: (group.members || []).map((item) => item?.name ? person(item) : { id: String(item) }), admins: (group.admins || []).map(String), permissions: { editGroupInfo: group.permissions?.editGroupInfo || "ADMINS", addMembers: group.permissions?.addMembers || "ADMINS" }, archived: (group.archivedBy || []).some((id) => String(id) === String(me)), muted: (group.mutedBy || []).some((id) => String(id) === String(me)), pinnedToProfile: String(pinnedGroupId || "") === String(group._id), lastMessage: lastMessage ? serializeMediaMessage(lastMessage) : null, unreadCount });
 const isGroupAdmin = (group, userId) => group.admins.some((id) => String(id) === String(userId));
 const canEditGroupInfo = (group, userId) => isGroupAdmin(group, userId) || group.permissions?.editGroupInfo === "ALL_MEMBERS";
 const canAddGroupMembers = (group, userId) => isGroupAdmin(group, userId) || group.permissions?.addMembers === "ALL_MEMBERS";
@@ -70,7 +80,7 @@ export const getGroupMessages = asyncHandler(async (req, res) => {
   const page = rows.slice(0, limit);
   await group.populate("members", "name username avatar role isVerified");
   const receivedIds = new Set(receiptRows.map((item) => String(item._id)));
-  return sendResponse(res, 200, "Group messages fetched", { group: serializeGroup(group, req.user._id, null, 0, owner?.pinnedMessageGroup), messages: page.reverse().map((message) => { if (receivedIds.has(String(message._id))) { message.deliveredBy = [...(message.deliveredBy || []).filter((item) => String(item.user) !== String(req.user._id)), { user: req.user._id, deliveredAt: receiptAt }]; message.readBy = [...(message.readBy || []).filter((item) => String(item.user) !== String(req.user._id)), { user: req.user._id, readAt: receiptAt }]; } return serializeMessage(message); }), pageInfo: { hasMore: rows.length > limit, nextCursor: rows.length > limit ? String(page[page.length - 1]._id) : null } });
+  return sendResponse(res, 200, "Group messages fetched", { group: serializeGroup(group, req.user._id, null, 0, owner?.pinnedMessageGroup), messages: page.reverse().map((message) => { if (receivedIds.has(String(message._id))) { message.deliveredBy = [...(message.deliveredBy || []).filter((item) => String(item.user) !== String(req.user._id)), { user: req.user._id, deliveredAt: receiptAt }]; message.readBy = [...(message.readBy || []).filter((item) => String(item.user) !== String(req.user._id)), { user: req.user._id, readAt: receiptAt }]; } return serializeMediaMessage(message); }), pageInfo: { hasMore: rows.length > limit, nextCursor: rows.length > limit ? String(page[page.length - 1]._id) : null } });
 });
 
 export const sendGroupMessage = asyncHandler(async (req, res) => {
@@ -85,9 +95,42 @@ export const sendGroupMessage = asyncHandler(async (req, res) => {
   if (replyTo) message.replyTo = replyTo;
   group.archivedBy = [];
   await group.save();
-  const payload = serializeMessage(message);
+  const payload = serializeMediaMessage(message);
   for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId}`).emit("group:message", { groupId: String(group._id), message: payload });
   return sendResponse(res, 201, "Group message sent", { message: payload });
+});
+
+async function createGroupMedia(req, mediaType, media, body) {
+  const group = await getGroup(req.params.groupId, req.user._id);
+  const clientMessageId = String(req.body.clientMessageId || "").trim() || null;
+  let message = clientMessageId ? await GroupMessage.findOne({ group: group._id, sender: req.user._id, clientMessageId }) : null;
+  if (!message) message = await GroupMessage.create({ group: group._id, sender: req.user._id, clientMessageId, body, mediaType, [mediaType === "image" ? "image" : mediaType === "audio" ? "audio" : "video"]: media, deliveredBy: [{ user: req.user._id }], readBy: [{ user: req.user._id }] });
+  await message.populate("sender", "name username avatar role isVerified");
+  group.archivedBy = [];
+  await group.save();
+  const payload = serializeMediaMessage(message);
+  for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId}`).emit("group:message", { groupId: String(group._id), message: payload });
+  return payload;
+}
+
+export const sendGroupVoiceMessage = asyncHandler(async (req, res) => {
+  if (!req.file?.buffer) throw new ApiError(400, "A voice message is required");
+  const waveform = JSON.parse(req.body.waveform || "[]");
+  const audio = await uploadMessageVoice({ buffer: req.file.buffer, senderId: req.user._id });
+  audio.waveform = Array.isArray(waveform) ? waveform.slice(0, 100) : [];
+  return sendResponse(res, 201, "Group voice message sent", { message: await createGroupMedia(req, "audio", audio, "Voice message") });
+});
+
+export const sendGroupImageMessage = asyncHandler(async (req, res) => {
+  if (!req.file?.buffer) throw new ApiError(400, "An image is required");
+  const image = await uploadMessageImage({ buffer: req.file.buffer, senderId: req.user._id });
+  return sendResponse(res, 201, "Group image sent", { message: await createGroupMedia(req, "image", image, "Image") });
+});
+
+export const sendGroupVideoNote = asyncHandler(async (req, res) => {
+  if (!req.file?.buffer) throw new ApiError(400, "A video note is required");
+  const video = await uploadMessageVideo({ buffer: req.file.buffer, senderId: req.user._id });
+  return sendResponse(res, 201, "Group video note sent", { message: await createGroupMedia(req, "video", video, "Video note") });
 });
 
 export const updateGroup = asyncHandler(async (req, res) => {
@@ -263,8 +306,8 @@ export const forwardGroupMessage = asyncHandler(async (req, res) => {
   for (const target of targets) {
     if (target.type === "group") {
       const group = await getGroup(target.id, req.user._id);
-      const message = await GroupMessage.create({ group: group._id, sender: req.user._id, body: source.body, forwardedFrom: source._id, readBy: [{ user: req.user._id }] });
-      const payload = { id: String(message._id), groupId: String(group._id), senderId: String(req.user._id), body: message.body, forwarded: true, reactions: [], createdAt: message.createdAt };
+      const message = await GroupMessage.create({ group: group._id, sender: req.user._id, body: source.body, mediaType: source.mediaType, image: source.image, audio: source.audio, video: source.video, sharedAttachment: source.sharedAttachment, forwardedFrom: source._id, deliveredBy: [{ user: req.user._id }], readBy: [{ user: req.user._id }] });
+      const payload = serializeMediaMessage(message);
       for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId}`).emit("group:message", { groupId: String(group._id), message: payload });
       continue;
     }
@@ -281,8 +324,8 @@ export const forwardGroupMessage = asyncHandler(async (req, res) => {
       conversation = await Conversation.create({ ...legacy, participants: [req.user._id, other._id], participantKey: ids.join(":"), status: follows ? "ACTIVE" : "REQUEST", requestRecipient: follows ? null : other._id, requestStartedAt: follows ? null : new Date(), acceptedAt: follows ? new Date() : null });
     }
     if (conversation.status === "DECLINED") throw new ApiError(403, "This message request was declined");
-    const message = await Message.create({ sender: req.user._id, recipient: other._id, body: source.body, forwardedFrom: source._id });
-    const payload = { id: String(message._id), senderId: String(req.user._id), recipientId: String(other._id), body: message.body, mediaType: "text", forwarded: true, reactions: [], createdAt: message.createdAt };
+    const message = await Message.create({ sender: req.user._id, recipient: other._id, body: source.body, mediaType: source.mediaType, image: source.image, audio: source.audio, video: source.video, sharedAttachment: source.sharedAttachment, forwardedFrom: source._id });
+    const payload = { id: String(message._id), senderId: String(req.user._id), recipientId: String(other._id), body: message.body, mediaType: message.mediaType, image: source.image, audio: source.audio, video: source.video, sharedAttachment: source.sharedAttachment, forwarded: true, reactions: [], createdAt: message.createdAt };
     req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
   }
   return sendResponse(res, 201, "Message forwarded", {});

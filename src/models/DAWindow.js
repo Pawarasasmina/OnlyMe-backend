@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 export const DA_WINDOW_STATUSES = ["OPEN", "ANSWERED", "EXPIRED", "CLOSED"];
 export const DA_SETTLEMENT_STATUSES = ["HELD", "CAPTURED", "REFUND_PENDING", "REFUNDED", "INCLUDED"];
-export const DA_WINDOW_SOURCES = ["PAID", "PREMIUM_INCLUDED", "CREATOR_REOPEN"];
+export const DA_WINDOW_SOURCES = ["PAID", "PREMIUM_INCLUDED", "CREATOR_REOPEN", "FAN_FOLLOWUP"];
 
 const daWindowSchema = new mongoose.Schema(
   {

@@ -19,14 +19,16 @@ export const DA_WINDOW_MS = 48 * 60 * 60 * 1000;
 export const DA_MESSAGE_LIMIT = 3;
 export const DA_PLATFORM_RATE_BPS = 1000;
 export const DA_REOPEN_PLATFORM_RATE_BPS = 2000;
+export const CREATOR_USD_CENTS_PER_STAR = 10;
 
 const platformRateFor = (window) => (
-  window.source === "CREATOR_REOPEN" ? DA_REOPEN_PLATFORM_RATE_BPS : DA_PLATFORM_RATE_BPS
+  ["CREATOR_REOPEN", "FAN_FOLLOWUP"].includes(window.source) ? DA_REOPEN_PLATFORM_RATE_BPS : DA_PLATFORM_RATE_BPS
 );
 
 export function serializeDAWindow(window) {
   if (!window) return null;
   if (window.id && window.fanId && window.creatorId) return window;
+  const creatorStars = Math.max(0, Number(window.priceStars || 0) - Math.floor((Number(window.priceStars || 0) * platformRateFor(window)) / 10000));
   return {
     id: String(window._id),
     fanId: String(window.fan?._id || window.fan),
@@ -37,6 +39,8 @@ export function serializeDAWindow(window) {
     settlementStatus: window.settlementStatus,
     source: window.source,
     priceStars: window.priceStars,
+    creatorNetStars: creatorStars,
+    creatorNetUsd: Number(((creatorStars * CREATOR_USD_CENTS_PER_STAR) / 100).toFixed(2)),
     fanMessageLimit: window.fanMessageLimit,
     fanMessagesUsed: window.fanMessagesUsed,
     messagesRemaining: Math.max(0, window.fanMessageLimit - window.fanMessagesUsed),
@@ -69,9 +73,9 @@ async function assertOpenPair(fan, creatorId) {
   return { creator, priceStars: profile.directAccessPriceStars || 100 };
 }
 
-export async function openDirectAccessWindow({ fan, creatorId, key, source = "PAID", creatorQuestionMessageId = null }) {
+export async function openDirectAccessWindow({ fan, creatorId, key, source = "PAID", creatorQuestionMessageId = null, fanFollowupMessageId = null, previousWindowId = null }) {
   key = idempotencyKey(key);
-  if (!["PAID", "PREMIUM_INCLUDED", "CREATOR_REOPEN"].includes(source)) throw new ApiError(400, "This Direct Access source is not available");
+  if (!["PAID", "PREMIUM_INCLUDED", "CREATOR_REOPEN", "FAN_FOLLOWUP"].includes(source)) throw new ApiError(400, "This Direct Access source is not available");
   const { creator, priceStars } = await assertOpenPair(fan, creatorId);
   let creatorQuestion = null;
   let questionedWindow = null;
@@ -81,11 +85,16 @@ export async function openDirectAccessWindow({ fan, creatorId, key, source = "PA
     questionedWindow = await DAWindow.findOne({ _id: creatorQuestion.directAccessWindow, fan: fan._id, creator: creator._id }).lean();
     if (!questionedWindow) throw new ApiError(404, "Questioned Direct Access thread not found");
   }
+  if (source === "FAN_FOLLOWUP") {
+    if (fanFollowupMessageId) creatorQuestion = await Message.findOne({ _id: fanFollowupMessageId, sender: fan._id, recipient: creator._id, messageKind: "FAN_FREE_ASK" }).lean();
+    questionedWindow = await DAWindow.findOne({ _id: creatorQuestion?.directAccessWindow || previousWindowId, fan: fan._id, creator: creator._id }).lean();
+    if (!questionedWindow || !["CLOSED", "EXPIRED", "ANSWERED"].includes(questionedWindow.status)) throw new ApiError(409, "The previous Direct Access window has not ended");
+  }
   return executeFinancialCommand({
     user: fan._id,
     commandType: "OPEN_DA_WINDOW",
     idempotencyKey: key,
-    requestFingerprint: fingerprint({ creatorId: String(creator._id), source, creatorQuestionMessageId, priceStars: source === "PREMIUM_INCLUDED" ? 0 : priceStars }),
+    requestFingerprint: fingerprint({ creatorId: String(creator._id), source, creatorQuestionMessageId, fanFollowupMessageId, previousWindowId, priceStars: source === "PREMIUM_INCLUDED" ? 0 : priceStars }),
   }, async (session, command) => {
     const activeWindowKey = `${fan._id}:${creator._id}`;
     const existing = await DAWindow.findOne({ activeWindowKey }).session(session);

@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import CreatorProfile from "../models/CreatorProfile.js";
+import FanProfile from "../models/FanProfile.js";
 import Conversation from "../models/Conversation.js";
 import Message from "../models/Message.js";
 import DAWindow from "../models/DAWindow.js";
@@ -195,23 +196,16 @@ export const listMessages = asyncHandler(async (req, res) => {
       ],
     });
     if (!requestedWindow) throw new ApiError(404, "Direct Access thread not found");
-    const threadRootId = requestedWindow.threadRootWindow || requestedWindow._id;
+    // A fan and creator have one visible Direct Access conversation. Individual
+    // paid windows remain separate financial records, but the thread shows the
+    // complete history for the pair regardless of how a window was opened.
     const threadWindows = await DAWindow.find({
       fan: requestedWindow.fan,
       creator: requestedWindow.creator,
-      $or: [
-        { _id: threadRootId },
-        { threadRootWindow: threadRootId },
-        { reopenedFromWindow: threadRootId },
-      ],
     }).sort({ createdAt: -1 });
     threadWindowIds = threadWindows.map((window) => window._id);
-    const missingRoots = threadWindows.filter((window) => !window.threadRootWindow).map((window) => window._id);
-    if (missingRoots.length) {
-      await DAWindow.updateMany({ _id: { $in: missingRoots } }, { $set: { threadRootWindow: threadRootId } });
-    }
     requestedWindow = threadWindows.find((window) => Boolean(window.activeWindowKey))
-      || threadWindows.find((window) => String(window._id) === String(requestedWindowId))
+      || threadWindows[0]
       || requestedWindow;
     if (
       ["OPEN", "ANSWERED"].includes(requestedWindow.status)
@@ -243,7 +237,17 @@ export const listMessages = asyncHandler(async (req, res) => {
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
   const participant = person(other);
-  if (other.role === "creator") participant.typicalReplyHours = await creatorTypicalReplyHours(other._id);
+  if (other.role === "creator") {
+    const profile = await CreatorProfile.findOne({ user: other._id }).select("bio orbitStatus directCallEnabled").lean();
+    participant.typicalReplyHours = await creatorTypicalReplyHours(other._id);
+    participant.statusLine = profile?.orbitStatus || "";
+    participant.personalLine = profile?.bio || "";
+    participant.callEnabled = Boolean(profile?.directCallEnabled);
+  } else if (other.role === "fan") {
+    const profile = await FanProfile.findOne({ user: other._id }).select("bio orbitStatus").lean();
+    participant.statusLine = profile?.orbitStatus || "";
+    participant.personalLine = profile?.bio || "";
+  }
   return sendResponse(res, 200, "Messages fetched", {
     participant,
     messages: page.reverse().map(serializedMessage),
@@ -545,7 +549,7 @@ export const forwardMessage = asyncHandler(async (req, res) => {
     const other = await assertAllowedPair(req.user, target.id);
     let conversation = await conversationFor(req.user, other);
     conversation = await prepareConversationForSend(req.user, other, conversation);
-    const forwarded = await Message.create({ sender: req.user._id, recipient: other._id, body: source.body, mediaType: source.mediaType, image: source.image, audio: source.audio, video: source.video, forwardedFrom: source._id });
+    const forwarded = await Message.create({ sender: req.user._id, recipient: other._id, body: source.body, mediaType: source.mediaType, image: source.image, audio: source.audio, video: source.video, sharedAttachment: source.sharedAttachment, forwardedFrom: source._id });
     const payload = serializedMessage(forwarded);
     req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
     results.push({ type: "direct", id: String(other._id), message: payload });

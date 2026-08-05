@@ -34,13 +34,21 @@ const messageSchema = new mongoose.Schema(
     },
     ppm: { type: Boolean, default: false },
     messageChannel: { type: String, enum: ["STANDARD", "DIRECT_ACCESS"], default: "STANDARD" },
-    messageKind: { type: String, enum: ["USER_MESSAGE", "CREATOR_ASK"], default: "USER_MESSAGE" },
+    messageKind: { type: String, enum: ["USER_MESSAGE", "CREATOR_ASK", "FAN_FREE_ASK"], default: "USER_MESSAGE" },
     directAccessWindow: { type: mongoose.Schema.Types.ObjectId, ref: "DAWindow", default: null },
     readAt: { type: Date, default: null },
     deletedAt: { type: Date, default: null },
     deletedFor: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [] },
     replyTo: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
     forwardedFrom: { type: mongoose.Schema.Types.ObjectId, default: null },
+    sharedAttachment: {
+      contentType: { type: String, enum: ["NOTE", "WORLD"], default: undefined },
+      contentId: { type: mongoose.Schema.Types.ObjectId, default: null },
+      title: { type: String, trim: true, maxlength: 180, default: "" },
+      previewImage: { type: String, maxlength: 1000, default: "" },
+      author: { id: { type: mongoose.Schema.Types.ObjectId, default: null }, name: { type: String, maxlength: 120, default: "" }, username: { type: String, maxlength: 80, default: "" } },
+      fallbackText: { type: String, trim: true, maxlength: 500, default: "" },
+    },
     reactions: {
       type: [{
         user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },

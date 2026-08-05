@@ -19,6 +19,11 @@ test("group messages persist replies, reactions, reads, and forwards", () => {
   assert.ok(GroupMessage.schema.path("deliveredBy"));
   assert.ok(GroupMessage.schema.path("readBy"));
   assert.ok(GroupMessage.schema.path("forwardedFrom"));
+  assert.deepEqual(GroupMessage.schema.path("mediaType").enumValues, ["text", "image", "video", "audio"]);
+  assert.ok(GroupMessage.schema.path("image.assetId"));
+  assert.ok(GroupMessage.schema.path("audio.assetId"));
+  assert.ok(GroupMessage.schema.path("video.assetId"));
+  assert.ok(GroupMessage.schema.path("sharedAttachment.contentType"));
 });
 
 test("direct conversations support general participant pairs and per-user preferences", () => {
