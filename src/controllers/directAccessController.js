@@ -136,9 +136,10 @@ export const sendFreeFanFollowup = asyncHandler(async (req, res) => {
   await processDueDirectAccessWindows(new Date(), req.app.get("io"));
   const existing = clientMessageId ? await Message.findOne({ sender: req.user._id, clientMessageId }) : null;
   if (existing) {
-    const reserved = await DAWindow.findOne({ creatorQuestionMessage: existing._id, source: "FAN_FOLLOWUP" });
-    return sendResponse(res, 200, "Follow-up already sent", { message: { id: String(existing._id), senderId: String(existing.sender), recipientId: String(existing.recipient), body: existing.body, mediaType: "text", messageKind: existing.messageKind, directAccessWindowId: String(existing.directAccessWindow), createdAt: existing.createdAt }, directAccessWindow: serializeDAWindow(reserved) });
+    const previousWindow = await DAWindow.findById(existing.directAccessWindow);
+    return sendResponse(res, 200, "Follow-up already sent", { message: { id: String(existing._id), senderId: String(existing.sender), recipientId: String(existing.recipient), body: existing.body, mediaType: "text", messageKind: existing.messageKind, directAccessWindowId: String(existing.directAccessWindow), createdAt: existing.createdAt }, directAccessWindow: serializeDAWindow(previousWindow) });
   }
+  if (await activeDirectAccessWindow(req.user._id, req.params.creatorId)) throw new ApiError(409, "A Direct Access window is already open");
   const previous = await DAWindow.findOne({ fan: req.user._id, creator: req.params.creatorId, status: { $in: ["CLOSED", "EXPIRED", "ANSWERED"] }, settlementStatus: { $in: ["CAPTURED", "INCLUDED", "REFUNDED"] } }).sort({ createdAt: -1 });
   if (!previous) throw new ApiError(409, "An ended Direct Access window is required");
   const unresolved = await Message.findOne({ sender: req.user._id, recipient: req.params.creatorId, messageKind: "FAN_FREE_ASK", directAccessWindow: previous._id }).sort({ createdAt: -1 });
@@ -146,20 +147,15 @@ export const sendFreeFanFollowup = asyncHandler(async (req, res) => {
     const opened = await DAWindow.exists({ creatorQuestionMessage: unresolved._id, source: "FAN_FOLLOWUP" });
     if (!opened) throw new ApiError(409, "Wait for the creator to answer your previous follow-up");
   }
-  const opened = await openDirectAccessWindow({ fan: req.user, creatorId: req.params.creatorId, key: req.body.idempotencyKey, source: "FAN_FOLLOWUP", previousWindowId: previous._id });
-  let message;
-  try {
-    message = await Message.create({ sender: req.user._id, recipient: req.params.creatorId, clientMessageId, body, mediaType: "text", messageKind: "FAN_FREE_ASK", messageChannel: "DIRECT_ACCESS", directAccessWindow: previous._id });
-    await DAWindow.updateOne({ _id: opened.window.id, creatorQuestionMessage: null }, { $set: { creatorQuestionMessage: message._id } });
-  } catch (error) {
-    await refundDirectAccessWindow(opened.window.id).catch(() => {});
-    throw error;
-  }
+  const profile = await CreatorProfile.findOne({ user: req.params.creatorId }).select("directAccessEnabled directAccessPriceStars").lean();
+  if (!profile?.directAccessEnabled) throw new ApiError(403, "This creator is not accepting Direct Access");
+  const wallet = await Wallet.findOne({ user: req.user._id }).select("balance").lean();
+  const priceStars = Number(profile.directAccessPriceStars || 100);
+  if (Number(wallet?.balance || 0) < priceStars) throw new ApiError(422, "Insufficient Stars", "INSUFFICIENT_STARS");
+  const message = await Message.create({ sender: req.user._id, recipient: req.params.creatorId, clientMessageId, body, mediaType: "text", messageKind: "FAN_FREE_ASK", messageChannel: "DIRECT_ACCESS", directAccessWindow: previous._id });
   const payload = { id: String(message._id), senderId: String(message.sender), recipientId: String(message.recipient), body: message.body, mediaType: "text", messageKind: "FAN_FREE_ASK", directAccessWindowId: String(previous._id), createdAt: message.createdAt };
-  const reservedWindow = serializeDAWindow(await DAWindow.findById(opened.window.id));
   req.app.get("io")?.to(`user:${req.params.creatorId}`).emit("message:new", { message: payload, conversationStatus: "ACTIVE" });
-  req.app.get("io")?.to(`user:${req.params.creatorId}`).to(`user:${req.user._id}`).emit("direct-access:updated", reservedWindow);
-  return sendResponse(res, 201, "Free follow-up sent", { message: payload, directAccessWindow: reservedWindow, wallet: opened.wallet });
+  return sendResponse(res, 201, "Free follow-up sent", { message: payload, directAccessWindow: serializeDAWindow(previous), chargePending: { priceStars } });
 });
 
 export const replyToFreeFanFollowup = asyncHandler(async (req, res) => {
@@ -175,11 +171,19 @@ export const replyToFreeFanFollowup = asyncHandler(async (req, res) => {
   const fan = await User.findOne({ _id: followup.sender, role: "fan", status: "active" });
   if (!fan) throw new ApiError(404, "Fan not found");
   let window = await DAWindow.findOne({ creatorQuestionMessage: followup._id, source: "FAN_FOLLOWUP" });
+  let openedNow = false;
   if (!window) {
     const opened = await openDirectAccessWindow({ fan, creatorId: req.user._id, key: req.body.idempotencyKey, source: "FAN_FOLLOWUP", fanFollowupMessageId: followup._id });
     window = await DAWindow.findById(opened.window.id);
+    openedNow = true;
   }
-  const committed = await createDirectAccessMessageAtomic({ windowId: window._id, sender: req.user, recipient: fan, message: { clientMessageId, body, mediaType: "text" } });
+  let committed;
+  try {
+    committed = await createDirectAccessMessageAtomic({ windowId: window._id, sender: req.user, recipient: fan, message: { clientMessageId, body, mediaType: "text" } });
+  } catch (error) {
+    if (openedNow) await refundDirectAccessWindow(window._id).catch(() => {});
+    throw error;
+  }
   const payload = { id: String(committed.message._id), clientMessageId, senderId: String(req.user._id), recipientId: String(fan._id), body, mediaType: "text", messageKind: "USER_MESSAGE", directAccessWindowId: String(window._id), createdAt: committed.message.createdAt };
   req.app.get("io")?.to(`user:${fan._id}`).emit("message:new", { message: payload, conversationStatus: "ACTIVE" });
   req.app.get("io")?.to(`user:${fan._id}`).to(`user:${req.user._id}`).emit("direct-access:updated", serializeDAWindow(committed.window));
