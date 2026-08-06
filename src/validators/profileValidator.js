@@ -130,7 +130,7 @@ function privacyKeysFor(role) {
 }
 
 function notificationKeysFor(role) {
-  return role === "admin" ? ["email", "inApp", "security"] : ["email", "inApp", "marketing"];
+  return role === "admin" ? ["email", "inApp", "security"] : ["email", "inApp", "marketing", "messages", "directAccess"];
 }
 
 export function validateSettingsPayload(role, type, payload = {}) {

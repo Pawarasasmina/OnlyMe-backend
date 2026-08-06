@@ -31,6 +31,8 @@ const fanProfileSchema = new mongoose.Schema(
       email: { type: Boolean, default: true },
       inApp: { type: Boolean, default: true },
       marketing: { type: Boolean, default: false },
+      messages: { type: Boolean, default: true },
+      directAccess: { type: Boolean, default: true },
     },
   },
   { timestamps: true }

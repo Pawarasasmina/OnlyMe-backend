@@ -3,8 +3,9 @@ import mongoose from "mongoose";
 const messageReportSchema = new mongoose.Schema({
   reporter: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   reportedUser: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
-  scope: { type: String, enum: ["MESSAGE", "CONVERSATION"], required: true },
+  scope: { type: String, enum: ["MESSAGE", "GROUP_MESSAGE", "CONVERSATION"], required: true },
   message: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
+  groupMessage: { type: mongoose.Schema.Types.ObjectId, ref: "GroupMessage", default: null },
   reason: {
     type: String,
     enum: ["SPAM", "HARASSMENT", "HATE", "SEXUAL_CONTENT", "VIOLENCE", "SCAM", "OTHER"],
@@ -31,5 +32,6 @@ messageReportSchema.index(
   { unique: true, partialFilterExpression: { scope: "MESSAGE" } },
 );
 messageReportSchema.index({ status: 1, createdAt: 1 });
+messageReportSchema.index({ reporter: 1, groupMessage: 1 }, { unique: true, partialFilterExpression: { scope: "GROUP_MESSAGE" } });
 
 export default mongoose.model("MessageReport", messageReportSchema);

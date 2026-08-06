@@ -36,7 +36,7 @@ function completion(owner, roleProfile) {
   return { completed, total: checks.length, percentage: Math.round((completed / checks.length) * 100) };
 }
 
-export function serializeUnifiedProfile({ content = [], followerCount = 0, followingCount = 0, owner, planets = [], publishedContentCount = content.length, roleProfile, seens = [], sharedSeens = [], sharedWallPosts = [], viewer, viewerRelationships = [] }) {
+export function serializeUnifiedProfile({ content = [], followerCount = 0, followingCount = 0, owner, pinnedMessageGroup = null, planets = [], publishedContentCount = content.length, roleProfile, seens = [], sharedSeens = [], sharedWallPosts = [], viewer, viewerRelationships = [] }) {
   const capabilities = profileViewerCapabilities(owner, viewer, roleProfile);
   const contentViewer = capabilities.isOwner ? viewer : null;
   const socialLinks = owner.role === "creator"
@@ -62,8 +62,12 @@ export function serializeUnifiedProfile({ content = [], followerCount = 0, follo
         priceStars: Number(roleProfile?.directAccessPriceStars || 100),
         durationHours: 48,
         messageLimit: 3,
+        callEnabled: Boolean(roleProfile?.directCallEnabled),
+        callPriceStars: Number(roleProfile?.directCallPriceStars || 500),
+        callDurationMinutes: Number(roleProfile?.directCallDurationMinutes || 5),
       },
     } : {}),
+    pinnedMessageGroup: pinnedMessageGroup ? { id: String(pinnedMessageGroup._id), name: pinnedMessageGroup.name, avatarUrl: pinnedMessageGroup.avatar || null, memberCount: pinnedMessageGroup.members?.length || 0 } : null,
   };
 
   if (capabilities.isOwner && owner.role === "creator") {
