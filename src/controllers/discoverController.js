@@ -819,6 +819,10 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const viewerCity = settings.preferredCity || viewerProfile?.city || "";
   const nearbyCreators = searchedCreators.filter((creator) => viewerCity && creator.city?.toLowerCase() === viewerCity.toLowerCase());
   const worlds = publications.map((publication) => serializeWorld(publication, { worldMemberCounts: worldsByPublication }));
+  const viewerWalks = await SeenEngagement.find({ user: req.user._id, type: "WALKED" }).select("publication").lean();
+  const walkedPublicationIds = viewerWalks.map((item) => item.publication);
+  const sharedWalkRows = walkedPublicationIds.length ? await SeenEngagement.find({ publication: { $in: walkedPublicationIds }, user: { $in: creatorIds }, type: "WALKED" }).populate("publication", "title planet").populate("user", "name username avatar").limit(12).lean() : [];
+  const sharedWalks = sharedWalkRows.map((item) => ({ id: item._id, world: { id: item.publication?._id, title: item.publication?.title, emoji: item.publication?.planet?.emoji || "🌍" }, person: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" } }));
   const discoverSeens = visibleSeens.map((publication) => serializeDiscoverSeen(publication, seenEngagementCounts));
   const trendingSeen = [...discoverSeens]
     .sort((left, right) => right.viewCount - left.viewCount || new Date(right.publishedAt || 0) - new Date(left.publishedAt || 0))[0] || null;
@@ -895,6 +899,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
     recentlyViewed: [],
     friendsOfFriends: searchedCreators.filter((creator) => !creator.following).slice(3, 15),
     popularWorlds: worlds.slice(0, 16),
+    sharedWalks,
     recommendedWorlds: worlds.filter((world) => interestTags.includes(world.category)).slice(0, 16),
     creatorStories: groupStories(stories),
     featuredExperiences: worlds.slice(0, 8).map((world) => ({
