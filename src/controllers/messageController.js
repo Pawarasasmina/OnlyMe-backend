@@ -3,8 +3,11 @@ import CreatorProfile from "../models/CreatorProfile.js";
 import Conversation from "../models/Conversation.js";
 import Message from "../models/Message.js";
 import DAWindow from "../models/DAWindow.js";
+import FeedPost from "../models/FeedPost.js";
 import MessageReport from "../models/MessageReport.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
+import Publication from "../models/Publication.js";
+import Story from "../models/Story.js";
 import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
 import ApiError from "../utils/ApiError.js";
@@ -15,16 +18,34 @@ import { messageVideoUrl, uploadMessageVideo } from "../services/messageVideoSto
 import { messageImageUrl, uploadMessageImage } from "../services/messageImageStorageService.js";
 import { assertMessagingAccess } from "../services/messagingAccessService.js";
 import { createDirectAccessMessageAtomic, releaseDirectAccessMessageReservation, reserveDirectAccessMessage, serializeDAWindow, settleDirectAccessReply } from "../services/directAccessService.js";
+import { serializePublication } from "../services/publicationAccessService.js";
 
 const userFields = "name username avatar role isVerified status lastSeenAt";
-const person = (user) => user && ({ id: user._id.toString(), displayName: user.name, username: user.username, avatarUrl: user.avatar || null, role: user.role, isVerified: Boolean(user.isVerified), lastSeenAt: user.lastSeenAt || null });
+const person = (user, reason = "") => user && ({ id: user._id.toString(), displayName: user.name, name: user.name, username: user.username, avatarUrl: user.avatar || null, role: user.role, isVerified: Boolean(user.isVerified), lastSeenAt: user.lastSeenAt || null, reason });
 const REACTION_EMOJIS = ["❤️", "😂", "😮", "😢", "😡", "👍"];
 const serializedReply = (reply) => reply ? {
   id: String(reply._id || reply),
   senderId: reply.sender ? String(reply.sender?._id || reply.sender) : null,
   body: reply.deletedAt ? "Message unavailable" : reply.body || "Original message",
 } : null;
-const serializedMessage = (message) => ({ id: message._id.toString(), clientMessageId: message.clientMessageId || null, senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "This message was deleted" : message.body, mediaType: message.mediaType || "text", messageKind: message.messageKind || "USER_MESSAGE", messageChannel: message.messageChannel || "STANDARD", directAccessWindowId: message.directAccessWindow ? String(message.directAccessWindow) : null, deletedAt: message.deletedAt || null, image: !message.deletedAt && message.mediaType === "image" && message.image?.assetId ? { url: messageImageUrl(message.image), width: message.image.width, height: message.image.height } : null, audio: !message.deletedAt && message.mediaType === "audio" && message.audio?.assetId ? { url: messageVoiceUrl(message.audio), duration: message.audio.duration, waveform: message.audio.waveform || [] } : null, video: !message.deletedAt && message.mediaType === "video" && message.video?.assetId ? { url: messageVideoUrl(message.video), duration: message.video.duration, width: message.video.width, height: message.video.height } : null, readAt: message.readAt || null, createdAt: message.createdAt, replyTo: serializedReply(message.replyTo), reactions: message.deletedAt ? [] : (message.reactions || []).map((reaction) => ({ userId: String(reaction.user?._id || reaction.user), emoji: reaction.emoji })), storyReply: !message.deletedAt && message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, expiresAt: message.storyReply.expiresAt || null } : null });
+const serializedSharedContent = (sharedContent, deletedAt = null) => {
+  if (deletedAt || !sharedContent?.contentType) return null;
+  return {
+    contentType: sharedContent.contentType,
+    contentId: sharedContent.contentId ? String(sharedContent.contentId) : null,
+    route: sharedContent.route || "",
+    title: sharedContent.title || "",
+    previewText: sharedContent.previewText || "",
+    imageUrl: sharedContent.imageUrl || "",
+    author: sharedContent.author?.id ? {
+      id: String(sharedContent.author.id),
+      name: sharedContent.author.name || "",
+      username: sharedContent.author.username || "",
+      avatarUrl: sharedContent.author.avatarUrl || "",
+    } : null,
+  };
+};
+const serializedMessage = (message) => ({ id: message._id.toString(), clientMessageId: message.clientMessageId || null, senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "This message was deleted" : message.body, mediaType: message.mediaType || "text", messageKind: message.messageKind || "USER_MESSAGE", messageChannel: message.messageChannel || "STANDARD", directAccessWindowId: message.directAccessWindow ? String(message.directAccessWindow) : null, deletedAt: message.deletedAt || null, image: !message.deletedAt && message.mediaType === "image" && message.image?.assetId ? { url: messageImageUrl(message.image), width: message.image.width, height: message.image.height } : null, audio: !message.deletedAt && message.mediaType === "audio" && message.audio?.assetId ? { url: messageVoiceUrl(message.audio), duration: message.audio.duration, waveform: message.audio.waveform || [] } : null, video: !message.deletedAt && message.mediaType === "video" && message.video?.assetId ? { url: messageVideoUrl(message.video), duration: message.video.duration, width: message.video.width, height: message.video.height } : null, readAt: message.readAt || null, createdAt: message.createdAt, replyTo: serializedReply(message.replyTo), reactions: message.deletedAt ? [] : (message.reactions || []).map((reaction) => ({ userId: String(reaction.user?._id || reaction.user), emoji: reaction.emoji })), storyReply: !message.deletedAt && message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, expiresAt: message.storyReply.expiresAt || null } : null, sharedContent: serializedSharedContent(message.sharedContent, message.deletedAt) });
 const validId = (value) => {
   if (!mongoose.isValidObjectId(value)) throw new ApiError(400, "Invalid account id");
 };
@@ -53,7 +74,9 @@ async function assertAllowedPair(current, otherId, { allowBlocked = false } = {}
   const other = await User.findOne({ _id: otherId, status: "active" }).select(userFields);
   if (!other) throw new ApiError(404, "Account not found");
   const roles = new Set([current.role, other.role]);
-  if (!roles.has("fan") || !roles.has("creator")) throw new ApiError(403, "Messages are currently available only between fans and creators");
+  const isFanCreatorPair = roles.has("fan") && roles.has("creator");
+  const isCreatorShareThread = current.role === "creator" && other.role === "creator";
+  if (!isFanCreatorPair && !isCreatorShareThread) throw new ApiError(403, "Messages are currently available only between fans and creators");
   if (other.role === "creator") {
     const profile = await CreatorProfile.findOne({ user: other._id }).select("messagingEnabled").lean();
     if (profile?.messagingEnabled === false) throw new ApiError(403, "This creator is not accepting messages");
@@ -65,11 +88,31 @@ async function assertAllowedPair(current, otherId, { allowBlocked = false } = {}
   return other;
 }
 
+async function assertAllowedShareRecipient(current, otherId) {
+  if (!mongoose.isValidObjectId(otherId)) throw new ApiError(400, "Invalid account id");
+  if (current._id.equals(otherId)) throw new ApiError(400, "You cannot message yourself");
+  const other = await User.findOne({ _id: otherId, status: "active" }).select(`${userFields} creatorApprovalStatus`);
+  if (!other || other.role === "admin") throw new ApiError(404, "Account not found");
+  if (current.role === "fan" && other.role !== "creator") throw new ApiError(403, "Fans can share posts with creators");
+  if (current.role === "creator" && !["fan", "creator"].includes(other.role)) throw new ApiError(403, "This account cannot receive shares");
+  if (other.role === "creator") {
+    if (other.creatorApprovalStatus !== "approved") throw new ApiError(403, "This creator cannot receive shares yet");
+    const profile = await CreatorProfile.findOne({ user: other._id }).select("messagingEnabled").lean();
+    if (profile?.messagingEnabled === false) throw new ApiError(403, "This creator is not accepting messages");
+  }
+  const blocks = await blockState(current._id, other._id);
+  if (blocks.blockedByMe || blocks.blockedMe) {
+    throw new ApiError(403, blocks.blockedByMe ? "Unblock this account before sharing" : "Sharing is unavailable");
+  }
+  return other;
+}
+
 const pairFor = (current, other) => current.role === "fan"
   ? { fan: current._id, creator: other._id }
   : { fan: other._id, creator: current._id };
 
 async function conversationFor(current, other) {
+  if (current.role === "creator" && other.role === "creator") return null;
   const pair = pairFor(current, other);
   let conversation = await Conversation.findOne(pair);
   if (!conversation) {
@@ -77,6 +120,166 @@ async function conversationFor(current, other) {
     if (hasMessages) conversation = await Conversation.findOneAndUpdate(pair, { $setOnInsert: { ...pair, status: "ACTIVE", acceptedAt: new Date(), acceptedByCreator: false } }, { new: true, upsert: true });
   }
   return conversation;
+}
+
+function cleanShareText(value, maxLength = 2000) {
+  const clean = String(value || "").trim().replace(/\r\n/g, "\n");
+  return clean.length > maxLength ? clean.slice(0, maxLength) : clean;
+}
+
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function compactPreview(value = "", maxLength = 160) {
+  const clean = String(value || "").trim().replace(/\s+/g, " ");
+  return clean.length > maxLength ? `${clean.slice(0, maxLength - 1).trim()}...` : clean;
+}
+
+function contentLabel(contentType = "") {
+  if (contentType === "feed_post") return "post";
+  if (contentType === "seen") return "Seen";
+  if (contentType === "world") return "World";
+  if (contentType === "experience") return "experience";
+  if (contentType === "profile") return "profile";
+  if (contentType === "story") return "story";
+  return "content";
+}
+
+function normalizeShareContentInput(sharedContent = {}) {
+  const contentType = String(sharedContent.contentType || "").trim();
+  const contentId = String(sharedContent.contentId || "").trim();
+  const allowed = new Set(["feed_post", "seen", "world", "experience", "profile", "story"]);
+  if (!allowed.has(contentType)) throw new ApiError(400, "Unsupported shared content type");
+  if (!mongoose.isValidObjectId(contentId)) throw new ApiError(400, "Invalid shared content id");
+  return { contentType, contentId };
+}
+
+async function blockedIdsFor(userId) {
+  const blocks = await UserBlock.find({
+    $or: [{ blocker: userId }, { blocked: userId }],
+  }).select("blocker blocked").lean();
+  return new Set(blocks.flatMap((item) => [String(item.blocker), String(item.blocked)]));
+}
+
+function shareRecipientMatch({ current, blockedIds = new Set(), ids = [], q = "" } = {}) {
+  const clauses = [
+    { status: "active" },
+    { role: current.role === "fan" ? "creator" : { $in: ["fan", "creator"] } },
+  ];
+  if (current.role === "fan") {
+    clauses.push({ creatorApprovalStatus: "approved" });
+  } else {
+    clauses.push({ $or: [{ role: "fan" }, { role: "creator", creatorApprovalStatus: "approved" }] });
+  }
+  const excludedIds = [...blockedIds].filter(Boolean);
+  if (excludedIds.length) clauses.push({ _id: { $nin: excludedIds } });
+  if (ids.length) clauses.push({ _id: { $in: ids } });
+  if (q) {
+    const escaped = escapeRegex(q);
+    clauses.push({
+      $or: [
+        { name: { $regex: escaped, $options: "i" } },
+        { username: { $regex: escaped, $options: "i" } },
+      ],
+    });
+  }
+  return { $and: clauses };
+}
+
+async function sharedContentSnapshot(input, viewer) {
+  const { contentType, contentId } = normalizeShareContentInput(input);
+  if (contentType === "feed_post") {
+    const post = await FeedPost.findOne({ _id: contentId, status: "published", visibility: "public", deletedAt: null })
+      .populate("author", "name username avatar isVerified role status")
+      .lean();
+    if (!post || post.author?.status !== "active") throw new ApiError(404, "This content is no longer available");
+    const blocked = await UserBlock.exists({ $or: [{ blocker: viewer._id, blocked: post.author._id }, { blocker: post.author._id, blocked: viewer._id }] });
+    if (blocked) throw new ApiError(403, "This content cannot be shared");
+    return {
+      contentType,
+      contentId: post._id,
+      route: `/posts/${post._id}`,
+      title: post.context ? `${post.context}${post.location ? ` - ${post.location}` : ""}` : "Home post",
+      previewText: compactPreview(post.text || "Shared a Home post"),
+      imageUrl: post.media?.[0]?.url || "",
+      author: { id: post.author._id, name: post.author.name, username: post.author.username, avatarUrl: post.author.avatar || "" },
+    };
+  }
+  if (["seen", "world", "experience"].includes(contentType)) {
+    const kind = contentType === "seen" ? "SEEN" : "WORLD";
+    const publication = await Publication.findOne({ _id: contentId, kind, status: "PUBLISHED" })
+      .populate("creator", "name username avatar role status")
+      .lean();
+    const serialized = publication ? serializePublication(publication, viewer) : null;
+    if (!publication || !serialized || publication.creator?.status !== "active") throw new ApiError(404, "This content is no longer available");
+    const blocked = await UserBlock.exists({ $or: [{ blocker: viewer._id, blocked: publication.creator._id }, { blocker: publication.creator._id, blocked: viewer._id }] });
+    if (blocked) throw new ApiError(403, "This content cannot be shared");
+    return {
+      contentType,
+      contentId: publication._id,
+      route: `/${contentType === "seen" ? "seen" : "world"}/${publication._id}`,
+      title: compactPreview(serialized.title || contentLabel(contentType), 120),
+      previewText: compactPreview(serialized.summary || serialized.description || serialized.title || ""),
+      imageUrl: serialized.coverMedia?.secureUrl || "",
+      author: { id: publication.creator._id, name: publication.creator.name, username: publication.creator.username, avatarUrl: publication.creator.avatar || "" },
+    };
+  }
+  if (contentType === "profile") {
+    const owner = await User.findOne({ _id: contentId, status: "active" }).select(userFields).lean();
+    if (!owner || owner.role === "admin") throw new ApiError(404, "Profile not found");
+    const blocked = await UserBlock.exists({ $or: [{ blocker: viewer._id, blocked: owner._id }, { blocker: owner._id, blocked: viewer._id }] });
+    if (blocked) throw new ApiError(403, "This profile cannot be shared");
+    return {
+      contentType,
+      contentId: owner._id,
+      route: `/profile/${encodeURIComponent(owner.username)}`,
+      title: owner.name,
+      previewText: `@${owner.username} on @seen`,
+      imageUrl: owner.avatar || "",
+      author: { id: owner._id, name: owner.name, username: owner.username, avatarUrl: owner.avatar || "" },
+    };
+  }
+  const story = await Story.findOne({ _id: contentId, expiresAt: { $gt: new Date() }, allowSharing: true })
+    .populate("creator", "name username avatar role status")
+    .lean();
+  if (!story || story.creator?.status !== "active" || story.audience === "only_me") throw new ApiError(404, "Story not available to share");
+  const blocked = await UserBlock.exists({ $or: [{ blocker: viewer._id, blocked: story.creator._id }, { blocker: story.creator._id, blocked: viewer._id }] });
+  if (blocked) throw new ApiError(403, "This story cannot be shared");
+  return {
+    contentType,
+    contentId: story._id,
+    route: `/stories/${story._id}`,
+    title: "Story",
+    previewText: compactPreview(story.caption || "Shared a story"),
+    imageUrl: story.image?.url || "",
+    author: { id: story.creator._id, name: story.creator.name, username: story.creator.username, avatarUrl: story.creator.avatar || "" },
+  };
+}
+
+async function readyStandardConversation(current, other) {
+  let conversation = await conversationFor(current, other);
+  if (current.role === "fan" && conversation?.status === "ACTIVE" && conversation.acceptedByCreator !== true) {
+    const follows = await ProfileRelationship.exists({ actor: current._id, target: other._id, type: "FOLLOW" });
+    if (!follows) conversation = await Conversation.findByIdAndUpdate(conversation._id, { $set: { status: "REQUEST", requestStartedAt: new Date(), acceptedAt: null } }, { new: true });
+  }
+  if (!conversation) {
+    if (current.role !== "fan") throw new ApiError(403, "Creators can share into accepted fan conversations only");
+    const follows = await ProfileRelationship.exists({ actor: current._id, target: other._id, type: "FOLLOW" });
+    conversation = await Conversation.create({ ...pairFor(current, other), status: follows ? "ACTIVE" : "REQUEST", acceptedAt: follows ? new Date() : null, acceptedByCreator: false, requestStartedAt: follows ? null : new Date() });
+  }
+  if (conversation.status === "REQUEST" && current.role === "creator") throw new ApiError(403, "Accept this message request before sharing");
+  if (conversation.status === "DECLINED") throw new ApiError(403, "This message request was declined");
+  if (conversation.status === "REQUEST" && current.role === "fan") {
+    const alreadySent = await Message.exists({ sender: current._id, recipient: other._id, createdAt: { $gte: conversation.requestStartedAt || conversation.createdAt } });
+    if (alreadySent) throw new ApiError(409, "Wait for the creator to accept your message request");
+  }
+  return conversation;
+}
+
+async function readyShareConversation(current, other) {
+  if (current.role === "creator" && other.role === "creator") return null;
+  return readyStandardConversation(current, other);
 }
 
 export const listConversations = asyncHandler(async (req, res) => {
@@ -228,6 +431,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
     throw new ApiError(400, "A valid client message id is required");
   }
   let conversation = await conversationFor(req.user, other);
+  const isCreatorPeerThread = req.user.role === "creator" && other.role === "creator";
   const existingMessage = await Message.findOne({ sender: req.user._id, clientMessageId }).populate("replyTo", "sender body deletedAt");
   if (existingMessage) {
     if (!existingMessage.recipient.equals(other._id) || existingMessage.body !== body) {
@@ -243,14 +447,14 @@ export const sendMessage = asyncHandler(async (req, res) => {
     const follows = await ProfileRelationship.exists({ actor: req.user._id, target: other._id, type: "FOLLOW" });
     if (!follows) conversation = await Conversation.findByIdAndUpdate(conversation._id, { $set: { status: "REQUEST", requestStartedAt: new Date(), acceptedAt: null } }, { new: true });
   }
-  if (!conversation) {
+  if (!conversation && !isCreatorPeerThread) {
     if (req.user.role !== "fan") throw new ApiError(403, "Creators can reply after accepting a fan request");
     const follows = await ProfileRelationship.exists({ actor: req.user._id, target: other._id, type: "FOLLOW" });
     conversation = await Conversation.create({ ...pairFor(req.user, other), status: follows ? "ACTIVE" : "REQUEST", acceptedAt: follows ? new Date() : null, acceptedByCreator: false, requestStartedAt: follows ? null : new Date() });
   }
-  if (conversation.status === "REQUEST" && req.user.role === "creator") throw new ApiError(403, "Accept this message request before replying");
-  if (conversation.status === "DECLINED") throw new ApiError(403, "This message request was declined");
-  if (conversation.status === "REQUEST" && req.user.role === "fan") {
+  if (conversation?.status === "REQUEST" && req.user.role === "creator") throw new ApiError(403, "Accept this message request before replying");
+  if (conversation?.status === "DECLINED") throw new ApiError(403, "This message request was declined");
+  if (conversation?.status === "REQUEST" && req.user.role === "fan") {
     const alreadySent = await Message.exists({ sender: req.user._id, recipient: other._id, createdAt: { $gte: conversation.requestStartedAt || conversation.createdAt } });
     if (alreadySent) throw new ApiError(409, "Wait for the creator to accept your message request");
   }
@@ -282,8 +486,9 @@ export const sendMessage = asyncHandler(async (req, res) => {
     emitDirectAccessUpdate(req, directAccessWindow);
     if (replyTo && created.populate) await created.populate("replyTo", "sender body deletedAt");
     const payload = serializedMessage(created);
-    if (createdNow) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
-    return sendResponse(res, createdNow ? 201 : 200, createdNow ? "Direct Access message sent" : "Message already sent", { message: payload, conversationStatus: conversation.status, directAccessWindow: serializeDAWindow(directAccessWindow), idempotentReplay: !createdNow });
+    const conversationStatus = conversation?.status || "ACTIVE";
+    if (createdNow) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus });
+    return sendResponse(res, createdNow ? 201 : 200, createdNow ? "Direct Access message sent" : "Message already sent", { message: payload, conversationStatus, directAccessWindow: serializeDAWindow(directAccessWindow), idempotentReplay: !createdNow });
   }
   const directAccess = await reserveDirectAccessMessage({
     windowId: req.body.directAccessWindowId,
@@ -310,10 +515,11 @@ export const sendMessage = asyncHandler(async (req, res) => {
   emitDirectAccessUpdate(req, directAccessWindow);
   if (replyTo) await created.populate("replyTo", "sender body deletedAt");
   const payload = serializedMessage(created);
+  const conversationStatus = conversation?.status || "ACTIVE";
   if (createdNow) {
-    req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
+    req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus });
   }
-  return sendResponse(res, createdNow ? 201 : 200, createdNow ? conversation.status === "REQUEST" ? "Message request sent" : "Message sent" : "Message already sent", { message: payload, conversationStatus: conversation.status, directAccessWindow: serializeDAWindow(directAccessWindow), idempotentReplay: !createdNow });
+  return sendResponse(res, createdNow ? 201 : 200, createdNow ? conversationStatus === "REQUEST" ? "Message request sent" : "Message sent" : "Message already sent", { message: payload, conversationStatus, directAccessWindow: serializeDAWindow(directAccessWindow), idempotentReplay: !createdNow });
 });
 
 export const sendVoiceMessage = asyncHandler(async (req, res) => {
@@ -671,6 +877,111 @@ export const declineMessageRequest = asyncHandler(async (req, res) => {
   if (!conversation) throw new ApiError(404, "Message request not found");
   req.app.get("io")?.to(`user:${req.params.userId}`).emit("conversation:status", { otherUserId: req.user._id.toString(), status: "DECLINED" });
   return sendResponse(res, 200, "Message request declined", { status: conversation.status });
+});
+
+export const listShareRecipients = asyncHandler(async (req, res) => {
+  assertMessagingAccess(req.user);
+  const q = String(req.query.q || "").trim().slice(0, 80);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 30);
+  const blockedIds = await blockedIdsFor(req.user._id);
+  blockedIds.add(String(req.user._id));
+  const reasonById = new Map();
+  const candidateIds = [];
+  const addCandidate = (id, reason) => {
+    const key = String(id);
+    if (!key || blockedIds.has(key) || reasonById.has(key)) return;
+    reasonById.set(key, reason);
+    candidateIds.push(id);
+  };
+
+  const conversationFilter = req.user.role === "creator"
+    ? { creator: req.user._id, status: "ACTIVE" }
+    : { fan: req.user._id, status: { $in: ["ACTIVE", "REQUEST"] } };
+  const conversations = await Conversation.find(conversationFilter).sort({ updatedAt: -1 }).limit(40).lean();
+  conversations.forEach((conversation) => addCandidate(req.user.role === "creator" ? conversation.fan : conversation.creator, "Recent chat"));
+
+  const following = await ProfileRelationship.find({ actor: req.user._id, type: "FOLLOW" }).sort({ createdAt: -1 }).limit(60).lean();
+  following.forEach((row) => addCandidate(row.target, "Following"));
+
+  if (req.user.role === "creator") {
+    const fanFollowers = await ProfileRelationship.find({ target: req.user._id, type: "FOLLOW" }).sort({ createdAt: -1 }).limit(60).lean();
+    const activeFanIds = new Set(conversations.map((conversation) => String(conversation.fan)));
+    fanFollowers.forEach((row) => {
+      if (activeFanIds.has(String(row.actor))) addCandidate(row.actor, "Follows you");
+    });
+  }
+
+  if (q || candidateIds.length < limit) {
+    const searchUsers = await User.find(shareRecipientMatch({ current: req.user, blockedIds, q }))
+      .select(userFields)
+      .sort({ isVerified: -1, role: 1, name: 1 })
+      .limit(30)
+      .lean();
+    searchUsers.forEach((user) => addCandidate(user._id, q ? "Search result" : "Suggested"));
+  }
+
+  const users = await User.find(shareRecipientMatch({ current: req.user, blockedIds, ids: candidateIds, q })).select(userFields).lean();
+  const userById = new Map(users.map((user) => [String(user._id), user]));
+  let people = candidateIds
+    .map((id) => userById.get(String(id)))
+    .filter(Boolean);
+  const creatorIds = people.filter((user) => user.role === "creator").map((user) => user._id);
+  if (creatorIds.length) {
+    const profiles = await CreatorProfile.find({ user: { $in: creatorIds }, messagingEnabled: { $ne: false } }).select("user").lean();
+    const enabled = new Set(profiles.map((profile) => String(profile.user)));
+    people = people.filter((user) => user.role !== "creator" || enabled.has(String(user._id)));
+  }
+  if (req.user.role === "creator") {
+    const activeConversationFanIds = new Set(conversations.map((conversation) => String(conversation.fan)));
+    people = people.filter((user) => user.role === "creator" || activeConversationFanIds.has(String(user._id)));
+  }
+  return sendResponse(res, 200, "Share recipients fetched", {
+    people: people.slice(0, limit).map((user) => person(user, reasonById.get(String(user._id)) || "Suggested")),
+  });
+});
+
+export const sendSharedContent = asyncHandler(async (req, res) => {
+  assertMessagingAccess(req.user);
+  const rawRecipientIds = Array.isArray(req.body.recipientIds) ? req.body.recipientIds : [];
+  const recipientIds = [...new Set(rawRecipientIds.map((id) => String(id || "").trim()).filter(Boolean))].slice(0, 10);
+  if (!recipientIds.length) throw new ApiError(400, "Select at least one recipient");
+  if (rawRecipientIds.length > 10 || recipientIds.length > 10) throw new ApiError(400, "You can share with up to 10 people at once");
+  recipientIds.forEach(validId);
+  const text = cleanShareText(req.body.text);
+  if (text.length > 2000) throw new ApiError(400, "Message must be 2000 characters or fewer");
+  const snapshot = await sharedContentSnapshot(req.body.sharedContent, req.user);
+  const sent = [];
+  const failed = [];
+  const io = req.app.get("io");
+
+  for (const recipientId of recipientIds) {
+    try {
+      const other = await assertAllowedShareRecipient(req.user, recipientId);
+      const conversation = await readyShareConversation(req.user, other);
+      const body = text || `Shared a ${contentLabel(snapshot.contentType)}`;
+      const clientMessageId = `share:${Date.now()}:${Math.random().toString(36).slice(2, 12)}`;
+      const created = await Message.create({
+        sender: req.user._id,
+        recipient: other._id,
+        clientMessageId,
+        body,
+        mediaType: "text",
+        ppm: false,
+        messageChannel: "STANDARD",
+        directAccessWindow: null,
+        sharedContent: snapshot,
+      });
+      const payload = serializedMessage(created);
+      const conversationStatus = conversation?.status || "ACTIVE";
+      io?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus });
+      sent.push({ recipientId: String(other._id), conversationId: conversation ? String(conversation._id) : null, threadId: String(other._id), message: payload, conversationStatus });
+    } catch (error) {
+      failed.push({ recipientId, message: error.message || "Could not send" });
+    }
+  }
+
+  if (!sent.length) throw new ApiError(400, failed[0]?.message || "Could not share this content");
+  return sendResponse(res, failed.length ? 207 : 201, failed.length ? "Some shares could not be sent" : "Shared content sent", { sent, failed });
 });
 
 export const searchMessagePeople = asyncHandler(async (req, res) => {

@@ -18,7 +18,21 @@ export const POST_CONTEXTS = [
 
 export const POST_STATUSES = ["draft", "published", "deleted"];
 export const POST_VISIBILITIES = ["public", "followers", "private"];
-export const POST_REACTIONS = ["like", "love", "care", "wow", "useful", "fire"];
+export const POST_REACTIONS = [
+  "like",
+  "love",
+  "care",
+  "wow",
+  "useful",
+  "fire",
+  "clap",
+  "laugh",
+  "see_you",
+  "sad",
+  "phone",
+  "strong",
+  "pray",
+];
 
 export const POST_TEXT_MAX_LENGTH = 2000;
 export const POST_COMMENT_MAX_LENGTH = 500;

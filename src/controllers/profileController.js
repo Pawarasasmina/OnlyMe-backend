@@ -43,6 +43,8 @@ function accountDetails(user) {
     profilePhoto: user.avatar,
     isVerified: user.isVerified,
     status: user.status,
+    activeStatus: user.activeStatus,
+    lastSeenAt: user.lastSeenAt,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };

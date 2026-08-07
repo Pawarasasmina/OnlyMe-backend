@@ -33,6 +33,8 @@ function sanitizeUser(user) {
     avatar: user.avatar,
     isVerified: user.isVerified,
     status: user.status,
+    activeStatus: user.activeStatus,
+    lastSeenAt: user.lastSeenAt,
     onboarding: user.onboarding,
     onboardingChecklist: user.onboardingChecklist,
     createdAt: user.createdAt,
