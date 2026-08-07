@@ -4,9 +4,11 @@ import StoryEngagement from "../models/StoryEngagement.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import Conversation from "../models/Conversation.js";
 import Message from "../models/Message.js";
+import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
 import { storeFile, deleteAsset } from "../services/storageService.js";
 import { parseStoryEditorMetadata, parseStoryOptions } from "../services/storyMetadataService.js";
+import { buildStatusFromPayload, serializeStatus } from "../services/statusService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -20,6 +22,7 @@ const activeStory = async (id) => {
 
 const followedStory = async (id, fanId) => {
   const story = await activeStory(id);
+  if (String(story.creator) === String(fanId)) return story;
   const blocked = await UserBlock.exists({ $or: [{ blocker: fanId, blocked: story.creator }, { blocker: story.creator, blocked: fanId }] });
   if (blocked || story.audience === "only_me") throw new ApiError(403, "This story is unavailable");
   if (story.audience === "everyone" || !story.audience) return story;
@@ -61,6 +64,21 @@ const defaultEditorMetadata = () => ({
   stickers: [],
   drawing: [],
 });
+
+const serializeUser = (user) => ({
+  id: String(user?._id || user?.id || ""),
+  name: user?.name || "Account",
+  firstName: String(user?.name || "Account").split(" ").filter(Boolean)[0] || "Account",
+  username: user?.username || "",
+  avatarUrl: user?.avatar || "",
+  avatar: user?.avatar || "",
+  verified: Boolean(user?.isVerified),
+  role: user?.role || "",
+});
+
+const statusActivityTime = (status) => status?.startedAt || status?.expiresAt || null;
+
+const recentTime = (values) => Math.max(0, ...values.filter(Boolean).map((value) => new Date(value).getTime() || 0));
 
 const serialize = (story, viewer, engagement, insights = null) => {
   const rawCreatorId = story.creator?._id || story.creator;
@@ -105,9 +123,7 @@ const serialize = (story, viewer, engagement, insights = null) => {
 };
 
 export const getStory = asyncHandler(async (req, res) => {
-  const story = await activeStory(req.params.id);
-  if (req.user.role === "creator" && String(story.creator) !== String(req.user._id)) throw new ApiError(403, "This story is unavailable");
-  if (req.user.role === "fan") await followedStory(req.params.id, req.user._id);
+  const story = await followedStory(req.params.id, req.user._id);
   await story.populate("creator", "name username avatar isVerified");
   return sendResponse(res, 200, "Story fetched", { story: serialize(story, req.user._id) });
 });
@@ -167,22 +183,32 @@ export const createStory = asyncHandler(async (req, res) => {
 });
 
 export const listStories = asyncHandler(async (req, res) => {
-  let creatorFilter = { creator: req.user._id };
-  if (req.user.role === "fan") {
-    const [follows, followsBack, blocks] = await Promise.all([
-      ProfileRelationship.find({ actor: req.user._id, type: "FOLLOW" }).select("target").lean(),
-      ProfileRelationship.find({ target: req.user._id, type: "FOLLOW" }).select("actor").lean(),
-      UserBlock.find({ $or: [{ blocker: req.user._id }, { blocked: req.user._id }] }).select("blocker blocked").lean(),
-    ]);
-    const blockedIds = new Set(blocks.flatMap((item) => [String(item.blocker), String(item.blocked)]));
-    const followedIds = follows.map((item) => item.target).filter((id) => !blockedIds.has(String(id)));
-    const followsBackIds = new Set(followsBack.map((item) => String(item.actor)));
-    const closeCircleIds = followedIds.filter((id) => followsBackIds.has(String(id)));
-    creatorFilter = { creator: { $nin: [...blockedIds] }, $or: [{ audience: "everyone" }, { audience: { $exists: false } }, { audience: "followers", creator: { $in: followedIds } }, { audience: "close_circle", creator: { $in: closeCircleIds } }] };
-  }
-  const stories = await Story.find({ expiresAt: { $gt: new Date() }, ...creatorFilter }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified").lean();
+  const now = new Date();
+  const [follows, followsBack, blocks] = await Promise.all([
+    ProfileRelationship.find({ actor: req.user._id, type: "FOLLOW" }).select("target").lean(),
+    ProfileRelationship.find({ target: req.user._id, type: "FOLLOW" }).select("actor").lean(),
+    UserBlock.find({ $or: [{ blocker: req.user._id }, { blocked: req.user._id }] }).select("blocker blocked").lean(),
+  ]);
+  const viewerId = String(req.user._id);
+  const blockedIds = new Set(blocks.map((item) => (String(item.blocker) === viewerId ? String(item.blocked) : String(item.blocker))));
+  const followedIds = follows.map((item) => item.target).filter((id) => !blockedIds.has(String(id)));
+  const followedSet = new Set(followedIds.map(String));
+  const followsBackIds = new Set(followsBack.map((item) => String(item.actor)));
+  const closeCircleIds = followedIds.filter((id) => followsBackIds.has(String(id)));
+  const creatorFilter = {
+    creator: { $nin: [...blockedIds] },
+    $or: [
+      { creator: req.user._id },
+      { audience: "everyone" },
+      { audience: { $exists: false } },
+      { audience: "followers", creator: { $in: followedIds } },
+      { audience: "close_circle", creator: { $in: closeCircleIds } },
+    ],
+  };
+  const rawStories = await Story.find({ expiresAt: { $gt: now }, ...creatorFilter }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified role status activeStatus lastSeenAt").lean();
+  const stories = rawStories.filter((story) => story.creator && story.creator.status === "active");
   const storyIds = stories.map((item) => item._id);
-  const engagements = req.user.role === "fan" ? await StoryEngagement.find({ fan: req.user._id, story: { $in: storyIds } }).lean() : [];
+  const engagements = await StoryEngagement.find({ fan: req.user._id, story: { $in: storyIds } }).lean();
   const byStory = new Map(engagements.map((item) => [String(item.story), item]));
   const creatorEngagements = req.user.role === "creator" ? await StoryEngagement.find({ story: { $in: storyIds } }).populate("fan", "name username avatar").sort({ updatedAt: -1 }).lean() : [];
   const insightsByStory = new Map();
@@ -197,7 +223,98 @@ export const listStories = asyncHandler(async (req, res) => {
     insightsByStory.set(key, insights);
   }
   for (const insights of insightsByStory.values()) insights.viewers.sort((left, right) => Number(Boolean(right.reaction)) - Number(Boolean(left.reaction)) || new Date(right.reactedAt || right.viewedAt) - new Date(left.reactedAt || left.viewedAt));
-  return sendResponse(res, 200, "Active stories fetched", stories.map((item) => serialize(item, req.user._id, byStory.get(String(item._id)), insightsByStory.get(String(item._id)))));
+
+  const viewerStories = [];
+  const groups = new Map();
+
+  for (const story of stories) {
+    const serialized = serialize(story, req.user._id, byStory.get(String(story._id)), insightsByStory.get(String(story._id)));
+    const creatorId = String(story.creator?._id || story.creator || "");
+    if (creatorId === viewerId) {
+      viewerStories.push(serialized);
+      continue;
+    }
+    if (!groups.has(creatorId)) {
+      groups.set(creatorId, {
+        user: serializeUser(story.creator),
+        stories: [],
+        hasUnseenStories: false,
+        activeStatus: serializeStatus(story.creator.activeStatus),
+        presence: { isOnline: false, lastActiveAt: story.creator.lastSeenAt || null },
+        followed: followedSet.has(creatorId),
+        latestActivityAt: null,
+      });
+    }
+    const group = groups.get(creatorId);
+    group.stories.push(serialized);
+    group.hasUnseenStories = group.hasUnseenStories || !serialized.viewed;
+    group.latestActivityAt = new Date(Math.max(recentTime([group.latestActivityAt, story.createdAt, statusActivityTime(story.creator.activeStatus), story.creator.lastSeenAt]))).toISOString();
+  }
+
+  const statusUsers = await User.find({
+    _id: { $nin: [req.user._id, ...[...blockedIds].filter((id) => mongoose.isValidObjectId(id))] },
+    role: { $in: ["fan", "creator"] },
+    status: "active",
+    "activeStatus.isActive": true,
+    "activeStatus.expiresAt": { $gt: now },
+  }).select("name username avatar isVerified role activeStatus lastSeenAt").limit(80).lean();
+
+  for (const person of statusUsers) {
+    const personId = String(person._id);
+    const activeStatus = serializeStatus(person.activeStatus);
+    if (!activeStatus) continue;
+    if (!groups.has(personId)) {
+      groups.set(personId, {
+        user: serializeUser(person),
+        stories: [],
+        hasUnseenStories: false,
+        activeStatus,
+        presence: { isOnline: false, lastActiveAt: person.lastSeenAt || null },
+        followed: followedSet.has(personId),
+        latestActivityAt: new Date(recentTime([statusActivityTime(person.activeStatus), person.lastSeenAt])).toISOString(),
+      });
+      continue;
+    }
+    const group = groups.get(personId);
+    group.activeStatus = group.activeStatus || activeStatus;
+    group.latestActivityAt = new Date(Math.max(recentTime([group.latestActivityAt, statusActivityTime(person.activeStatus), person.lastSeenAt]))).toISOString();
+  }
+
+  const items = [...groups.values()]
+    .filter((item) => item.stories.length || item.activeStatus || item.presence?.isOnline)
+    .map((item) => ({
+      ...item,
+      storyCount: item.stories.length,
+      latestStoryAt: item.stories[item.stories.length - 1]?.createdAt || null,
+    }))
+    .sort((left, right) => Number(right.hasUnseenStories) - Number(left.hasUnseenStories)
+      || Number(right.followed) - Number(left.followed)
+      || Number(Boolean(right.activeStatus)) - Number(Boolean(left.activeStatus))
+      || recentTime([right.latestActivityAt]) - recentTime([left.latestActivityAt])
+      || recentTime([right.latestStoryAt]) - recentTime([left.latestStoryAt]))
+    .map(({ followed: _followed, latestActivityAt: _latestActivityAt, latestStoryAt: _latestStoryAt, ...item }) => item);
+
+  viewerStories.sort((left, right) => new Date(left.createdAt) - new Date(right.createdAt));
+
+  return sendResponse(res, 200, "Wall stories fetched", {
+    viewer: {
+      ...serializeUser(req.user),
+      activeStatus: serializeStatus(req.user.activeStatus),
+      hasActiveStories: viewerStories.length > 0,
+      storyCount: viewerStories.length,
+      stories: viewerStories,
+      presence: { isOnline: false, lastActiveAt: req.user.lastSeenAt || null },
+    },
+    items,
+  });
+});
+
+export const updateStoryStatus = asyncHandler(async (req, res) => {
+  const currentStatus = serializeStatus(req.user.activeStatus);
+  const { activeStatus, cleared } = buildStatusFromPayload(req.body, currentStatus);
+  req.user.activeStatus = activeStatus;
+  await req.user.save();
+  return sendResponse(res, 200, cleared ? "Status cleared" : "Status updated", { activeStatus: serializeStatus(req.user.activeStatus) });
 });
 
 export const viewStory = asyncHandler(async (req, res) => {

@@ -15,6 +15,22 @@ const creatorProfileSchema = new mongoose.Schema(
       discoveryRange: { type: String, enum: ["city", "country", "global"], default: "global" },
       creatorStyle: { type: String, enum: ["practical", "personal", "aspirational", "educational", "any"], default: "any" },
     },
+    discoverSettings: {
+      recommendations: { type: Boolean, default: true },
+      peopleNearby: { type: Boolean, default: true },
+      risingCreators: { type: Boolean, default: true },
+      newCreators: { type: Boolean, default: true },
+      languages: [{ type: String, trim: true, maxlength: 40 }],
+      preferredCity: { type: String, trim: true, maxlength: 80, default: "" },
+      topics: [
+        {
+          label: { type: String, trim: true, maxlength: 40 },
+          preference: { type: String, enum: ["interested", "less", "neutral"], default: "neutral" },
+        },
+      ],
+      hiddenCreators: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+      updatedAt: { type: Date, default: null },
+    },
     orbitStatus: { type: String, default: "", maxlength: 80 },
     city: { type: String, default: "", maxlength: 80 },
     country: { type: String, default: "", maxlength: 80 },

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { acceptMessageRequest, archiveConversation, blockMessageAccount, declineMessageRequest, deleteConversation, deleteMessage, forwardMessage, listConversations, listMessages, muteConversation, removeMessageReaction, reportConversation, reportMessage, searchMessagePeople, sendImageMessage, sendMessage, sendVideoNote, sendVoiceMessage, setMessageReaction, unblockMessageAccount } from "../controllers/messageController.js";
+import { acceptMessageRequest, archiveConversation, blockMessageAccount, declineMessageRequest, deleteConversation, deleteMessage, forwardMessage, listConversations, listMessages, listShareRecipients, muteConversation, removeMessageReaction, reportConversation, reportMessage, searchMessagePeople, sendImageMessage, sendMessage, sendSharedContent, sendVideoNote, sendVoiceMessage, setMessageReaction, unblockMessageAccount } from "../controllers/messageController.js";
 import { askDirectAccessQuestion, getDirectAccessOffer, listDirectAccessWindows, openWindow, replyToFreeFanFollowup, sendFreeFanFollowup, updateDirectAccessSettings } from "../controllers/directAccessController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
@@ -27,6 +27,8 @@ router.post("/direct-access/follow-up/:creatorId", messageSendLimiter, sendFreeF
 router.post("/direct-access/follow-up/:messageId/reply", financialMutationLimit, messageSendLimiter, replyToFreeFanFollowup);
 router.get("/conversations", listConversations);
 router.get("/people", searchMessagePeople);
+router.get("/share/recipients", listShareRecipients);
+router.post("/share", messageSendLimiter, sendSharedContent);
 router.get("/groups", listGroups);
 router.put("/groups/receipts/delivered", syncGroupMessageDeliveries);
 router.post("/groups", messageSendLimiter, createGroup);

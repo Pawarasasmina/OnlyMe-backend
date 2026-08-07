@@ -63,6 +63,20 @@ const messageSchema = new mongoose.Schema(
       caption: { type: String, default: "", maxlength: 300 },
       expiresAt: { type: Date, default: null },
     },
+    sharedContent: {
+      contentType: { type: String, enum: ["", "feed_post", "seen", "world", "experience", "profile", "story"], default: "" },
+      contentId: { type: mongoose.Schema.Types.ObjectId, default: null },
+      route: { type: String, trim: true, maxlength: 240, default: "" },
+      title: { type: String, trim: true, maxlength: 160, default: "" },
+      previewText: { type: String, trim: true, maxlength: 300, default: "" },
+      imageUrl: { type: String, trim: true, maxlength: 600, default: "" },
+      author: {
+        id: { type: mongoose.Schema.Types.ObjectId, default: null },
+        name: { type: String, trim: true, maxlength: 120, default: "" },
+        username: { type: String, trim: true, maxlength: 60, default: "" },
+        avatarUrl: { type: String, trim: true, maxlength: 600, default: "" },
+      },
+    },
   },
   { timestamps: true }
 );
@@ -75,5 +89,6 @@ messageSchema.index(
 messageSchema.index({ recipient: 1, readAt: 1, createdAt: -1 });
 messageSchema.index({ replyTo: 1 });
 messageSchema.index({ directAccessWindow: 1, createdAt: 1 });
+messageSchema.index({ "sharedContent.contentType": 1, "sharedContent.contentId": 1, createdAt: -1 });
 
 export default mongoose.model("Message", messageSchema);
