@@ -13,6 +13,7 @@ import { assertPrivateStorageConfiguration } from "./services/privateDocumentSto
 
 assertPrivateStorageConfiguration();
 
+
 const app = express();
 const allowedOrigins = new Set([
   env.clientUrl,
