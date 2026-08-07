@@ -59,6 +59,16 @@ const userSchema = new mongoose.Schema(
     messagingRestrictedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     lastSeenAt: { type: Date, default: null },
     pinnedMessageGroup: { type: mongoose.Schema.Types.ObjectId, ref: "GroupConversation", default: null },
+    activeStatus: {
+      emoji: { type: String, trim: true, maxlength: 8, default: "" },
+      label: { type: String, trim: true, maxlength: 32, default: "" },
+      presetKey: { type: String, trim: true, maxlength: 40, default: "" },
+      isCustom: { type: Boolean, default: false },
+      color: { type: String, trim: true, maxlength: 20, default: "" },
+      startedAt: { type: Date, default: null },
+      expiresAt: { type: Date, default: null, index: true },
+      isActive: { type: Boolean, default: false },
+    },
     onboarding: {
       version: { type: Number, default: 1 },
       status: { type: String, enum: ["not_started", "in_progress", "completed", "skipped"], default: "not_started" },
@@ -124,6 +134,7 @@ userSchema.methods.passwordChangedAfter = function passwordChangedAfter(jwtIssue
 userSchema.index({ role: 1, status: 1, creatorApprovalStatus: 1 });
 userSchema.index({ username: 1, status: 1 });
 userSchema.index({ name: 1, status: 1 });
+userSchema.index({ "activeStatus.isActive": 1, "activeStatus.expiresAt": 1, status: 1 });
 
 const User = mongoose.model("User", userSchema);
 

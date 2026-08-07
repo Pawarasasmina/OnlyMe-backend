@@ -9,6 +9,7 @@ import {
   hideFeedPost,
   listFeedPosts,
   listMyPosts,
+  markFeedPostViewed,
   reportFeedPost,
   togglePostSave,
   togglePostShare,
@@ -31,6 +32,7 @@ router.get("/drafts", ...creatorOnly, (req, res, next) => {
 router.post("/", ...creatorOnly, uploadFeedPostImages.array("media", 4), createFeedPost);
 router.post("/drafts", ...creatorOnly, uploadFeedPostImages.array("media", 4), createDraftPost);
 router.get("/:id", protect, getFeedPost);
+router.post("/:id/views", protect, markFeedPostViewed);
 router.put("/:id/reaction", protect, updatePostReaction);
 router.put("/:id/save", protect, togglePostSave);
 router.put("/:id/share", protect, togglePostShare);

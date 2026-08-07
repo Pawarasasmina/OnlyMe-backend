@@ -40,6 +40,14 @@ const postSaveSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const postViewSchema = new mongoose.Schema(
+  {
+    user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    viewedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const postShareSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
@@ -78,13 +86,17 @@ const feedPostSchema = new mongoose.Schema(
     reactions: { type: [postReactionSchema], default: [] },
     comments: { type: [postCommentSchema], default: [] },
     saves: { type: [postSaveSchema], default: [] },
+    views: { type: [postViewSchema], default: [] },
     shares: { type: [postShareSchema], default: [] },
     hiddenBy: { type: [postHiddenSchema], default: [] },
     reports: { type: [postReportSchema], default: [] },
     supportCount: { type: Number, min: 0, default: 0 },
     commentCount: { type: Number, min: 0, default: 0 },
     saveCount: { type: Number, min: 0, default: 0 },
+    viewCount: { type: Number, min: 0, default: 0 },
     shareCount: { type: Number, min: 0, default: 0 },
+    seedSource: { type: String, trim: true, default: "", index: true },
+    seedKey: { type: String, trim: true, default: "", index: true },
     deletedAt: { type: Date, default: null },
     publishedAt: { type: Date, default: null, index: true },
   },
@@ -97,6 +109,7 @@ feedPostSchema.index({ context: 1 });
 feedPostSchema.index({ status: 1, visibility: 1, deletedAt: 1, publishedAt: -1 });
 feedPostSchema.index({ context: 1, location: 1 });
 feedPostSchema.index({ "saves.user": 1, status: 1, publishedAt: -1 });
+feedPostSchema.index({ "views.user": 1, status: 1, publishedAt: -1 });
 feedPostSchema.index({ "shares.user": 1, status: 1, publishedAt: -1 });
 feedPostSchema.index({ "shares.createdAt": -1, status: 1, deletedAt: 1 });
 feedPostSchema.index({ "hiddenBy.user": 1, status: 1, publishedAt: -1 });

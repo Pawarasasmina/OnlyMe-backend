@@ -57,6 +57,39 @@ function readReaction(value) {
   return reaction;
 }
 
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function feedFilterQuery(query = {}) {
+  const filter = String(query.filter || query.context || "all").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const location = cleanString(query.location || query.city, POST_LOCATION_MAX_LENGTH);
+  const extra = {};
+
+  if (filter && filter !== "all") {
+    if (filter === "right_now") extra.context = "Right now";
+    else if (filter === "events") extra.context = "Events";
+    else if (filter === "things_to_do") extra.context = "Things to do";
+    else if (filter === "food") extra.context = { $in: ["Coffee", "Restaurant"] };
+    else if (filter === "places") extra.location = { $ne: "" };
+    else {
+      const exact = POST_CONTEXTS.find((context) => context.toLowerCase().replace(/[\s-]+/g, "_") === filter);
+      if (exact) extra.context = exact;
+    }
+  }
+
+  if (location) {
+    const matcher = { $regex: escapeRegex(location), $options: "i" };
+    extra.location = extra.location && typeof extra.location === "object" && "$ne" in extra.location
+      ? { ...extra.location, ...matcher }
+      : matcher;
+  }
+
+  return extra;
+}
+
+export const postControllerTestUtils = { feedFilterQuery };
+
 function ensureCreatable({ files = [], status, text }) {
   if (files.length > POST_MAX_IMAGES) {
     throw new ApiError(400, `A post can include up to ${POST_MAX_IMAGES} images`);
@@ -113,12 +146,14 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
   const reactions = post.reactions || [];
   const comments = (post.comments || []).filter((comment) => !comment.deletedAt);
   const saves = post.saves || [];
+  const views = post.views || [];
   const shares = post.shares || [];
   const hiddenBy = post.hiddenBy || [];
   const viewerReaction = viewerId
     ? reactions.find((item) => String(item.user?._id || item.user) === viewerId)?.reaction || null
     : null;
   const viewerSaved = Boolean(viewerId && saves.some((item) => String(item.user?._id || item.user) === viewerId));
+  const viewerViewed = Boolean(viewerId && views.some((item) => String(item.user?._id || item.user) === viewerId));
   const viewerShared = Boolean(viewerId && shares.some((item) => String(item.user?._id || item.user) === viewerId));
   const viewerHidden = Boolean(viewerId && hiddenBy.some((item) => String(item.user?._id || item.user) === viewerId));
 
@@ -151,12 +186,14 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
     reactions: reactionSummary(reactions),
     viewerReaction,
     viewerSaved,
+    viewerViewed,
     viewerShared,
     viewerHidden,
     comments: comments.map(serializeComment),
     supportCount: reactions.length || post.supportCount || 0,
     commentCount: comments.length || post.commentCount || 0,
     saveCount: saves.length || post.saveCount || 0,
+    viewCount: Number(post.viewCount ?? views.length) || 0,
     shareCount: shares.length || post.shareCount || 0,
     reportCount: (post.reports || []).length,
     createdAt: post.createdAt,
@@ -241,6 +278,7 @@ export const listFeedPosts = asyncHandler(async (req, res) => {
     deletedAt: null,
     author: { $nin: blockedAuthorIds },
     "hiddenBy.user": { $ne: req.user._id },
+    ...feedFilterQuery(req.query),
   };
   const fetchLimit = Math.min(150, Math.max(limit * page * 2, limit));
   const [items, sharedSourcePosts, total] = await Promise.all([
@@ -293,6 +331,38 @@ export const getFeedPost = asyncHandler(async (req, res) => {
   }
   await populatePostForResponse(post);
   return sendResponse(res, 200, "Feed post fetched", { post: serializePost(post, req.user) });
+});
+
+export const markFeedPostViewed = asyncHandler(async (req, res) => {
+  const post = await findPublishedPost(req.params.id);
+  const authorId = post.author?._id || post.author;
+  const viewerId = req.user._id;
+  const currentCount = Number(post.viewCount ?? post.views?.length) || 0;
+
+  const blocked = await UserBlock.exists({ $or: [{ blocker: viewerId, blocked: authorId }, { blocker: authorId, blocked: viewerId }] });
+  if (blocked || post.hiddenBy.some((item) => String(item.user) === String(viewerId))) {
+    throw new ApiError(404, "Post not found");
+  }
+
+  if (String(authorId) === String(viewerId)) {
+    return sendResponse(res, 200, "Own post view ignored", {
+      postId: String(post._id),
+      viewCount: currentCount,
+      viewed: false,
+    });
+  }
+
+  const updated = await FeedPost.findOneAndUpdate(
+    { _id: post._id, "views.user": { $ne: viewerId } },
+    { $push: { views: { user: viewerId, viewedAt: new Date() } }, $inc: { viewCount: 1 } },
+    { new: true, runValidators: true, select: "viewCount views" }
+  ).lean();
+
+  return sendResponse(res, 200, updated ? "Post view recorded" : "Post view already recorded", {
+    postId: String(post._id),
+    viewCount: Number(updated?.viewCount ?? currentCount) || 0,
+    viewed: Boolean(updated),
+  });
 });
 
 export const listMyPosts = asyncHandler(async (req, res) => {
