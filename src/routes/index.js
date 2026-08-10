@@ -28,6 +28,7 @@ import orbitRoutes from "./orbitRoutes.js";
 import onboardingRoutes from "./onboardingRoutes.js";
 import searchRoutes from "./searchRoutes.js";
 import discoverRoutes from "./discoverRoutes.js";
+import dreamRoutes from "./dreamRoutes.js";
 import { sendResponse } from "../utils/response.js";
 
 const router = Router();
@@ -63,6 +64,7 @@ router.use("/orbit", orbitRoutes);
 router.use("/onboarding", onboardingRoutes);
 router.use("/search", searchRoutes);
 router.use("/discover", discoverRoutes);
+router.use("/dreams", dreamRoutes);
 
 export default router;
 
