@@ -93,6 +93,12 @@ export const uploadMessageImage = multer({
   },
 });
 
+export const uploadGiftImage = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fileSize: 8 * 1024 * 1024 },
+  fileFilter: imageFileFilter,
+});
+
 const allowedStoryTypes = new Set(["image/jpeg", "image/png", "image/webp", "video/mp4", "video/quicktime", "video/webm"]);
 export const uploadStoryMedia = multer({
   storage,

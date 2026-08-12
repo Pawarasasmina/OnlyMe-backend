@@ -1,8 +1,8 @@
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
-import { changeDreamStatus, DREAM_GIFTS, publicDream, saveDream, sendDreamGift } from "../services/dreamService.js";
+import { activeDreamGifts, changeDreamStatus, publicDream, saveDream, sendDreamGift } from "../services/dreamService.js";
 
-export const getDream = asyncHandler(async (req, res) => sendResponse(res, 200, "Dream fetched", { dream: await publicDream(req.params.username), gifts: DREAM_GIFTS }));
+export const getDream = asyncHandler(async (req, res) => sendResponse(res, 200, "Dream fetched", { dream: await publicDream(req.params.username), gifts: await activeDreamGifts() }));
 export const upsertMine = asyncHandler(async (req, res) => sendResponse(res, 200, "Dream saved", { dream: await saveDream(req.user._id, req.body) }));
 export const completeMine = asyncHandler(async (req, res) => sendResponse(res, 200, "Dream completed", { dream: await changeDreamStatus(req.user._id, req.params.id, "COMPLETED", req.body.version) }));
 export const removeMine = asyncHandler(async (req, res) => sendResponse(res, 200, "Dream removed", { dream: await changeDreamStatus(req.user._id, req.params.id, "REMOVED", req.body.version) }));
