@@ -5,6 +5,8 @@ const schema = new mongoose.Schema({
   supporter: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   creator: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   giftKey: { type: String, required: true, maxlength: 40 },
+  gift: { type: mongoose.Schema.Types.ObjectId, ref: "Gift", index: true },
+  giftImageUrl: { type: String, maxlength: 2000 },
   giftName: { type: String, required: true, maxlength: 80 },
   starsAmount: { type: Number, required: true, min: 1, validate: Number.isSafeInteger },
   privateSupport: { type: Boolean, default: false },
