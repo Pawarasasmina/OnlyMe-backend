@@ -32,6 +32,8 @@ const fanProfileSchema = new mongoose.Schema(
     orbitStatus: { type: String, default: "", maxlength: 80 },
     city: { type: String, default: "", maxlength: 80 },
     country: { type: String, default: "", maxlength: 80 },
+    phoneNumber: { type: String, default: "", maxlength: 40 },
+    whatsapp: { type: String, default: "", maxlength: 40 },
     profileVisibility: { type: String, enum: ["public", "private"], default: "private" },
     privacySettings: {
       showOnlineStatus: { type: Boolean, default: true },

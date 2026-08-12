@@ -34,6 +34,8 @@ const creatorProfileSchema = new mongoose.Schema(
     orbitStatus: { type: String, default: "", maxlength: 80 },
     city: { type: String, default: "", maxlength: 80 },
     country: { type: String, default: "", maxlength: 80 },
+    phoneNumber: { type: String, default: "", maxlength: 40 },
+    whatsapp: { type: String, default: "", maxlength: 40 },
     socialLinks: [
       {
         platform: { type: String, trim: true, maxlength: 40 },
