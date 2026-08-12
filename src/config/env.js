@@ -9,7 +9,7 @@ dotenv.config({ path: resolve(__dirname, "../controllers/.env") });
 
 export const env = {
   nodeEnv: process.env.NODE_ENV || "development",
-  port: Number(process.env.PORT) || 5000,
+  port: Number(process.env.PORT) || 3104,
   mongoUri: process.env.MONGODB_URI,
   accessSecret: process.env.JWT_ACCESS_SECRET || "replace_with_secure_access_secret",
   refreshSecret: process.env.JWT_REFRESH_SECRET || "replace_with_secure_refresh_secret",

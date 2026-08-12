@@ -4,11 +4,13 @@ import FanProfile from "../models/FanProfile.js";
 import User from "../models/User.js";
 import Publication from "../models/Publication.js";
 import FeedPost from "../models/FeedPost.js";
+import DreamGift from "../models/DreamGift.js";
 import SeenEngagement from "../models/SeenEngagement.js";
 import WallEngagement from "../models/WallEngagement.js";
 import WallPost from "../models/WallPost.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import Conversation from "../models/Conversation.js";
+import GroupConversation from "../models/GroupConversation.js";
 import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -23,19 +25,22 @@ async function loadProfile(owner, viewer) {
   const Model = profileModelFor(owner.role);
   const publishedFilter = { creator: owner._id, status: { $in: ["PUBLISHED", "published"] } };
   const profileOwner = Boolean(viewer?._id && String(viewer._id) === String(owner._id));
+  const seenStatus = profileOwner ? { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } : "PUBLISHED";
   const planetStatus = profileOwner ? { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } : { $in: ["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED"] };
-  const [roleProfile, content, publishedContentCount, seens, planets, shares, wallShares, feedSharePosts, followerCount, followingCount, viewerRelationships] = await Promise.all([
+  const [roleProfile, content, publishedContentCount, seens, planets, ownFeedPosts, shares, wallShares, feedSharePosts, followerCount, followingCount, supporterRows, viewerRelationships] = await Promise.all([
     Model.findOne({ user: owner._id }).lean(),
     Content.find(publishedFilter)
       .sort({ publishedAt: -1, _id: -1 }).limit(30).populate("creator", "name username avatar").lean(),
     Content.countDocuments(publishedFilter),
-    Publication.find({ creator: owner._id, kind: "SEEN", status: "PUBLISHED" }).sort({ publishedAt: -1 }).limit(30).populate("creator", "name username avatar").lean(),
+    Publication.find({ creator: owner._id, kind: "SEEN", status: seenStatus }).select("+submittedSnapshot").sort({ publishedAt: -1, updatedAt: -1 }).limit(30).populate("creator", "name username avatar").lean(),
     Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
+    FeedPost.find({ author: owner._id, status: "published", visibility: "public", deletedAt: null }).sort({ publishedAt: -1, createdAt: -1 }).limit(6).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }]).lean(),
     SeenEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("publication text").lean(),
     WallEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("post text createdAt").lean(),
     FeedPost.find({ status: "published", deletedAt: null, "shares.user": owner._id }).sort({ "shares.createdAt": -1 }).limit(30).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }, { path: "shares.user", select: "name username avatar isVerified role status" }]).lean(),
     ProfileRelationship.countDocuments({ target: owner._id, type: "FOLLOW" }),
     ProfileRelationship.countDocuments({ actor: owner._id, type: "FOLLOW" }),
+    owner.role === "creator" ? DreamGift.distinct("supporter", { creator: owner._id }) : [],
     viewer?._id && String(viewer._id) !== String(owner._id) ? ProfileRelationship.find({ actor: viewer._id, target: owner._id }).select("type").lean() : [],
   ]);
   if (!roleProfile) throw new ApiError(404, "Profile not found");
@@ -62,7 +67,20 @@ async function loadProfile(owner, viewer) {
       shareCaption: share.caption || "",
       sharedBy: { id: owner._id, name: owner.name, username: owner.username, avatar: owner.avatar || "", verified: Boolean(owner.isVerified) },
     })));
-  return serializeUnifiedProfile({ owner, roleProfile, content, planets, publishedContentCount, seens, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], viewer, followerCount, followingCount, viewerRelationships });
+  const pinnedMessageGroup = owner.pinnedMessageGroup ? await GroupConversation.findOne({ _id: owner.pinnedMessageGroup, members: owner._id, deletedAt: null }).select("name avatar members").lean() : null;
+  const ownWallPosts = ownFeedPosts.map((post) => serializePost(post, viewer));
+  const publicationPhotos = [...seens, ...planets].flatMap((publication) => [
+    publication.coverMedia ? { ...publication.coverMedia, title: publication.title, publishedAt: publication.publishedAt } : null,
+    publication.introMedia ? { ...publication.introMedia, title: publication.title, publishedAt: publication.publishedAt } : null,
+  ]).filter(Boolean);
+  const feedPhotos = ownFeedPosts.flatMap((post) => (post.media || []).map((media) => ({ ...media, url: media.url, caption: post.text, createdAt: post.createdAt })));
+  const profilePhotos = [
+    owner.avatar ? { url: owner.avatar, caption: "Profile photo", createdAt: owner.updatedAt } : null,
+    roleProfile.coverPhoto ? { url: roleProfile.coverPhoto, caption: "Cover photo", createdAt: roleProfile.updatedAt } : null,
+    ...publicationPhotos,
+    ...feedPhotos,
+  ].filter(Boolean);
+  return serializeUnifiedProfile({ owner, roleProfile, content, photos: profilePhotos, pinnedMessageGroup, planets, publishedContentCount, seens, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships });
 }
 
 async function relationshipTarget(username) {
@@ -88,6 +106,47 @@ export const toggleProfileSeeSignal = asyncHandler(async (req, res) => sendRespo
 export const getOwnUnifiedProfile = asyncHandler(async (req, res) => {
   if (!["fan", "creator"].includes(req.user.role)) throw new ApiError(404, "Profile not found");
   return sendResponse(res, 200, "Profile fetched", await loadProfile(req.user, req.user));
+});
+
+export const getOwnProfileViewers = asyncHandler(async (req, res) => {
+  if (!["fan", "creator"].includes(req.user.role)) throw new ApiError(403, "Profile activity is available to fan and creator accounts");
+  const limit = Math.min(30, Math.max(1, Number.parseInt(req.query.limit, 10) || 10));
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const [recentSignals, todaySignals] = await Promise.all([
+    ProfileRelationship.find({ target: req.user._id, type: "SEE_SIGNAL" })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(limit)
+      .populate({ path: "actor", match: { status: "active" }, select: "name username avatar isVerified role status" })
+      .lean(),
+    ProfileRelationship.find({ target: req.user._id, type: "SEE_SIGNAL", createdAt: { $gte: startOfToday } })
+      .select("actor")
+      .limit(500)
+      .populate({ path: "actor", match: { status: "active" }, select: "_id" })
+      .lean(),
+  ]);
+  const signals = recentSignals.flatMap((signal) => {
+    if (!signal.actor) return [];
+    return [{
+      id: signal._id,
+      type: "SEE_SIGNAL",
+      description: "said \"I see you\"",
+      createdAt: signal.createdAt,
+      actor: {
+        id: signal.actor._id,
+        displayName: signal.actor.name,
+        username: signal.actor.username,
+        avatarUrl: signal.actor.avatar || "",
+        verified: Boolean(signal.actor.isVerified),
+        role: signal.actor.role,
+      },
+    }];
+  });
+  return sendResponse(res, 200, "Profile activity fetched", {
+    seenTodayCount: todaySignals.filter((signal) => signal.actor).length,
+    signals,
+    worldVisitorCount: 0,
+  });
 });
 
 export const getOwnProfileConnections = asyncHandler(async (req, res) => {
