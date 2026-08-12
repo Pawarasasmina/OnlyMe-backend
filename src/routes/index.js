@@ -21,12 +21,14 @@ import wallRoutes from "./wallRoutes.js";
 import storyRoutes from "./storyRoutes.js";
 import savedRoutes from "./savedRoutes.js";
 import messageRoutes from "./messageRoutes.js";
+import callRoutes from "./callRoutes.js";
 import settingsRoutes from "./settingsRoutes.js";
 import postRoutes from "./postRoutes.js";
 import orbitRoutes from "./orbitRoutes.js";
 import onboardingRoutes from "./onboardingRoutes.js";
 import searchRoutes from "./searchRoutes.js";
 import discoverRoutes from "./discoverRoutes.js";
+import dreamRoutes from "./dreamRoutes.js";
 import { sendResponse } from "../utils/response.js";
 
 const router = Router();
@@ -42,6 +44,7 @@ router.use("/wall", wallRoutes);
 router.use("/stories", storyRoutes);
 router.use("/saved", savedRoutes);
 router.use("/messages", messageRoutes);
+router.use("/calls", callRoutes);
 router.use("/",walletRoutes);
 router.use("/worlds",purchaseRoutes);
 router.use("/premium-worlds",premiumWorldRoutes);
@@ -61,6 +64,7 @@ router.use("/orbit", orbitRoutes);
 router.use("/onboarding", onboardingRoutes);
 router.use("/search", searchRoutes);
 router.use("/discover", discoverRoutes);
+router.use("/dreams", dreamRoutes);
 
 export default router;
 

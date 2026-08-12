@@ -22,5 +22,10 @@ export const env = {
   contentMaxFileSize: Math.max(1024, Number(process.env.CONTENT_MAX_FILE_SIZE_BYTES) || 100 * 1024 * 1024),
   verificationMaxFileSize: Math.max(1024, Number(process.env.VERIFICATION_MAX_FILE_SIZE_BYTES) || 10 * 1024 * 1024),
   enableAdminStarCredits: process.env.ENABLE_ADMIN_STAR_CREDITS === "true",
+  stunUrls: (process.env.WEBRTC_STUN_URLS || "stun:stun.l.google.com:19302").split(",").map((value) => value.trim()).filter(Boolean),
+  turnUrls: (process.env.WEBRTC_TURN_URLS || "").split(",").map((value) => value.trim()).filter(Boolean),
+  turnUsername: process.env.WEBRTC_TURN_USERNAME || "",
+  turnCredential: process.env.WEBRTC_TURN_CREDENTIAL || "",
+  turnSecret: process.env.WEBRTC_TURN_SECRET || "",
 };
 
