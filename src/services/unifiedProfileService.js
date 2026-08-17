@@ -14,6 +14,9 @@ export function profileViewerCapabilities(owner, viewer, roleProfile = null) {
   const isOwner = Boolean(viewer?._id && String(viewer._id) === String(owner._id));
   const isCreatorOwner = isOwner && owner.role === "creator";
   const approved = isCreatorOwner && owner.creatorApprovalStatus === "approved";
+  const isMessagePair = viewer?.role === "creator"
+    ? ["fan", "creator"].includes(owner.role)
+    : viewer?.role === "fan" && owner.role === "creator";
   return {
     isOwner,
     canEditProfile: isOwner,
@@ -22,7 +25,7 @@ export function profileViewerCapabilities(owner, viewer, roleProfile = null) {
     canAccessVerification: isCreatorOwner,
     canAccessSettings: isOwner,
     canViewDrafts: approved,
-    canMessage: Boolean(viewer?._id && !isOwner && viewer.role === "fan" && owner.role === "creator" && roleProfile?.messagingEnabled !== false),
+    canMessage: Boolean(viewer?._id && !isOwner && isMessagePair && (owner.role !== "creator" || roleProfile?.messagingEnabled !== false)),
     canFollow: Boolean(viewer?._id && !isOwner && owner.role === "creator" && ["fan", "creator"].includes(viewer.role)),
     canSeePrivateAccountSummary: isOwner,
   };
