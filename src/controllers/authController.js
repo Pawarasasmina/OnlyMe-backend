@@ -9,6 +9,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { validateLoginPayload, validateRegisterPayload } from "../validators/authValidator.js";
 import { issueAuthTokens } from "../services/tokenService.js";
+import { sendWelcomeEmail } from "../services/emailService.js";
 import { env } from "../config/env.js";
 import jwt from "jsonwebtoken";
 
@@ -115,6 +116,10 @@ export const register = asyncHandler(async (req, res) => {
   const user = role === "creator" ? await createCreatorAccount(userData) : await User.create(userData);
   if (user.role !== "creator") await createRoleProfile(user);
 
+  // Email is a post-registration side effect: a provider outage must never
+  // roll back an account that was created successfully.
+  sendWelcomeEmail(user).catch((error) => console.error("Welcome email delivery failed", { userId: String(user._id), error: error.message }));
+
   const tokens = issueAuthTokens(user);
   res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
   return sendResponse(res, 201, "Registration successful", {
@@ -158,6 +163,21 @@ export const login = asyncHandler(async (req, res) => {
 export const logout = asyncHandler(async (_req, res) => {
   res.clearCookie("refreshToken", refreshCookieOptions);
   return sendResponse(res, 200, "Logout successful");
+});
+
+export const deleteAccount = asyncHandler(async (req, res) => {
+  if (req.user.role === "admin") {
+    throw new ApiError(403, "Administrator accounts cannot be deleted here");
+  }
+
+  req.user.status = "suspended";
+  req.user.deletionRequestedAt = new Date();
+  await req.user.save({ validateModifiedOnly: true });
+
+  res.clearCookie("refreshToken", refreshCookieOptions);
+  return sendResponse(res, 200, "Account deletion requested", {
+    deletionRequestedAt: req.user.deletionRequestedAt,
+  });
 });
 
 export const refreshSession = asyncHandler(async (req, res) => {
