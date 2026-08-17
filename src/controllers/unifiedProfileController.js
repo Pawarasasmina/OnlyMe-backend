@@ -35,7 +35,7 @@ async function loadProfile(owner, viewer) {
     Publication.find({ creator: owner._id, kind: "SEEN", status: seenStatus }).select("+submittedSnapshot").sort({ publishedAt: -1, updatedAt: -1 }).limit(30).populate("creator", "name username avatar").lean(),
     Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
     FeedPost.find({ author: owner._id, status: "published", visibility: "public", deletedAt: null }).sort({ publishedAt: -1, createdAt: -1 }).limit(6).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }]).lean(),
-    SeenEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("publication text").lean(),
+    SeenEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("publication text createdAt").lean(),
     WallEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("post text createdAt").lean(),
     FeedPost.find({ status: "published", deletedAt: null, "shares.user": owner._id }).sort({ "shares.createdAt": -1 }).limit(30).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }, { path: "shares.user", select: "name username avatar isVerified role status" }]).lean(),
     ProfileRelationship.countDocuments({ target: owner._id, type: "FOLLOW" }),
@@ -46,8 +46,14 @@ async function loadProfile(owner, viewer) {
   if (!roleProfile) throw new ApiError(404, "Profile not found");
   const sharedSeens = shares.length ? await Publication.find({ _id: { $in: shares.map((item) => item.publication) }, kind: "SEEN", status: "PUBLISHED" }).populate("creator", "name username avatar").lean() : [];
   const shareOrder = new Map(shares.map((item, index) => [String(item.publication), index]));
-  const seenCaptions = new Map(shares.map((item) => [String(item.publication), item.text || ""]));
-  for (const seen of sharedSeens) seen.shareCaption = seenCaptions.get(String(seen._id)) || "";
+  const seenShareByPublication = new Map(shares.map((item) => [String(item.publication), item]));
+  for (const seen of sharedSeens) {
+    const share = seenShareByPublication.get(String(seen._id));
+    seen.shareId = share?._id;
+    seen.shareCaption = share?.text || "";
+    seen.feedCreatedAt = share?.createdAt;
+    seen.sharedBy = { id: owner._id, name: owner.name, username: owner.username, avatar: owner.avatar || "", verified: Boolean(owner.isVerified) };
+  }
   sharedSeens.sort((left, right) => shareOrder.get(String(left._id)) - shareOrder.get(String(right._id)));
   const sharedWallPosts = wallShares.length ? await WallPost.find({ _id: { $in: wallShares.map((item) => item.post) }, status: "PUBLISHED" }).populate("creator", "name username avatar isVerified").lean() : [];
   const wallOrder = new Map(wallShares.map((item, index) => [String(item.post), index]));
