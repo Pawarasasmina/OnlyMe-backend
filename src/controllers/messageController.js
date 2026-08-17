@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import CreatorProfile from "../models/CreatorProfile.js";
+import FanProfile from "../models/FanProfile.js";
 import Conversation from "../models/Conversation.js";
 import Message from "../models/Message.js";
 import DAWindow from "../models/DAWindow.js";
@@ -10,6 +11,8 @@ import Publication from "../models/Publication.js";
 import Story from "../models/Story.js";
 import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
+import GroupConversation from "../models/GroupConversation.js";
+import GroupMessage from "../models/GroupMessage.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -17,7 +20,7 @@ import { messageVoiceUrl, uploadMessageVoice } from "../services/messageVoiceSto
 import { messageVideoUrl, uploadMessageVideo } from "../services/messageVideoStorageService.js";
 import { messageImageUrl, uploadMessageImage } from "../services/messageImageStorageService.js";
 import { assertMessagingAccess } from "../services/messagingAccessService.js";
-import { createDirectAccessMessageAtomic, releaseDirectAccessMessageReservation, reserveDirectAccessMessage, serializeDAWindow, settleDirectAccessReply } from "../services/directAccessService.js";
+import { createDirectAccessMessageAtomic, creatorTypicalReplyHours, releaseDirectAccessMessageReservation, reserveDirectAccessMessage, serializeDAWindow, settleDirectAccessReply } from "../services/directAccessService.js";
 import { serializePublication } from "../services/publicationAccessService.js";
 
 const userFields = "name username avatar role isVerified status lastSeenAt";
@@ -45,7 +48,7 @@ const serializedSharedContent = (sharedContent, deletedAt = null) => {
     } : null,
   };
 };
-const serializedMessage = (message) => ({ id: message._id.toString(), clientMessageId: message.clientMessageId || null, senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "This message was deleted" : message.body, mediaType: message.mediaType || "text", messageKind: message.messageKind || "USER_MESSAGE", messageChannel: message.messageChannel || "STANDARD", directAccessWindowId: message.directAccessWindow ? String(message.directAccessWindow) : null, deletedAt: message.deletedAt || null, image: !message.deletedAt && message.mediaType === "image" && message.image?.assetId ? { url: messageImageUrl(message.image), width: message.image.width, height: message.image.height } : null, audio: !message.deletedAt && message.mediaType === "audio" && message.audio?.assetId ? { url: messageVoiceUrl(message.audio), duration: message.audio.duration, waveform: message.audio.waveform || [] } : null, video: !message.deletedAt && message.mediaType === "video" && message.video?.assetId ? { url: messageVideoUrl(message.video), duration: message.video.duration, width: message.video.width, height: message.video.height } : null, readAt: message.readAt || null, createdAt: message.createdAt, replyTo: serializedReply(message.replyTo), reactions: message.deletedAt ? [] : (message.reactions || []).map((reaction) => ({ userId: String(reaction.user?._id || reaction.user), emoji: reaction.emoji })), storyReply: !message.deletedAt && message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, expiresAt: message.storyReply.expiresAt || null } : null, sharedContent: serializedSharedContent(message.sharedContent, message.deletedAt) });
+const serializedMessage = (message) => ({ id: message._id.toString(), clientMessageId: message.clientMessageId || null, senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "This message was deleted" : message.body, mediaType: message.mediaType || "text", messageKind: message.messageKind || "USER_MESSAGE", messageChannel: message.messageChannel || "STANDARD", directAccessWindowId: message.directAccessWindow ? String(message.directAccessWindow) : null, forwarded: Boolean(message.forwardedFrom), deletedAt: message.deletedAt || null, image: !message.deletedAt && message.mediaType === "image" && message.image?.assetId ? { url: messageImageUrl(message.image), width: message.image.width, height: message.image.height } : null, audio: !message.deletedAt && message.mediaType === "audio" && message.audio?.assetId ? { url: messageVoiceUrl(message.audio), duration: message.audio.duration, waveform: message.audio.waveform || [] } : null, video: !message.deletedAt && message.mediaType === "video" && message.video?.assetId ? { url: messageVideoUrl(message.video), duration: message.video.duration, width: message.video.width, height: message.video.height } : null, readAt: message.readAt || null, createdAt: message.createdAt, replyTo: serializedReply(message.replyTo), reactions: message.deletedAt ? [] : (message.reactions || []).map((reaction) => ({ userId: String(reaction.user?._id || reaction.user), emoji: reaction.emoji })), storyReply: !message.deletedAt && message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, expiresAt: message.storyReply.expiresAt || null } : null, sharedContent: serializedSharedContent(message.sharedContent, message.deletedAt) });
 const validId = (value) => {
   if (!mongoose.isValidObjectId(value)) throw new ApiError(400, "Invalid account id");
 };
@@ -88,6 +91,14 @@ async function assertAllowedPair(current, otherId, { allowBlocked = false } = {}
   return other;
 }
 
+const isFanCreatorPair = (current, other) => new Set([current.role, other.role]).has("fan") && new Set([current.role, other.role]).has("creator");
+const pairFor = (current, other) => {
+  const ids = [String(current._id), String(other._id)].sort();
+  if (isFanCreatorPair(current, other)) return current.role === "fan"
+    ? { fan: current._id, creator: other._id, participants: [current._id, other._id], participantKey: ids.join(":") }
+    : { fan: other._id, creator: current._id, participants: [current._id, other._id], participantKey: ids.join(":") };
+  return { fan: ids[0], creator: ids[1], participants: [current._id, other._id], participantKey: ids.join(":") };
+};
 async function assertAllowedShareRecipient(current, otherId) {
   if (!mongoose.isValidObjectId(otherId)) throw new ApiError(400, "Invalid account id");
   if (current._id.equals(otherId)) throw new ApiError(400, "You cannot message yourself");
@@ -107,17 +118,39 @@ async function assertAllowedShareRecipient(current, otherId) {
   return other;
 }
 
-const pairFor = (current, other) => current.role === "fan"
-  ? { fan: current._id, creator: other._id }
-  : { fan: other._id, creator: current._id };
-
 async function conversationFor(current, other) {
   if (current.role === "creator" && other.role === "creator") return null;
   const pair = pairFor(current, other);
-  let conversation = await Conversation.findOne(pair);
+  let conversation = await Conversation.findOne(pair.participantKey ? { $or: [{ participantKey: pair.participantKey }, ...(pair.fan ? [{ fan: pair.fan, creator: pair.creator }] : [])] } : pair);
   if (!conversation) {
     const hasMessages = await Message.exists({ $or: [{ sender: pair.fan, recipient: pair.creator }, { sender: pair.creator, recipient: pair.fan }] });
-    if (hasMessages) conversation = await Conversation.findOneAndUpdate(pair, { $setOnInsert: { ...pair, status: "ACTIVE", acceptedAt: new Date(), acceptedByCreator: false } }, { new: true, upsert: true });
+    if (hasMessages) conversation = await Conversation.findOneAndUpdate({ participantKey: pair.participantKey }, { $setOnInsert: { ...pair, status: "ACTIVE", acceptedAt: new Date(), acceptedByCreator: false } }, { new: true, upsert: true });
+  }
+  return conversation;
+}
+
+async function prepareConversationForSend(current, other, conversation) {
+  const creatorRequest = current.role === "fan" && other.role === "creator";
+  if (creatorRequest && conversation?.status === "ACTIVE" && conversation.acceptedByCreator !== true) {
+    const follows = await ProfileRelationship.exists({ actor: current._id, target: other._id, type: "FOLLOW" });
+    if (!follows) conversation = await Conversation.findByIdAndUpdate(conversation._id, { $set: { status: "REQUEST", requestRecipient: other._id, requestStartedAt: new Date(), acceptedAt: null } }, { new: true });
+  }
+  if (!conversation) {
+    const follows = Boolean(await ProfileRelationship.exists({ actor: current._id, target: other._id, type: "FOLLOW" }));
+    conversation = await Conversation.create({ ...pairFor(current, other), status: follows ? "ACTIVE" : "REQUEST", acceptedAt: follows ? new Date() : null, acceptedByCreator: false, requestRecipient: follows ? null : other._id, requestStartedAt: follows ? null : new Date() });
+  }
+  const recipientOfRequest = conversation.requestRecipient
+    ? String(conversation.requestRecipient) === String(current._id)
+    : current.role === "creator" && String(conversation.creator) === String(current._id);
+  if (conversation.status === "REQUEST" && recipientOfRequest) throw new ApiError(403, "Accept this message request before replying");
+  if (conversation.status === "DECLINED") throw new ApiError(403, "This message request was declined");
+  if (conversation.status === "REQUEST") {
+    const alreadySent = await Message.exists({ sender: current._id, recipient: other._id, createdAt: { $gte: conversation.requestStartedAt || conversation.createdAt } });
+    if (alreadySent) throw new ApiError(409, "Wait for this account to accept your message request");
+  }
+  if (conversation.archivedBy?.length) {
+    conversation.archivedBy = [];
+    await conversation.save();
   }
   return conversation;
 }
@@ -306,8 +339,12 @@ export const listConversations = asyncHandler(async (req, res) => {
   ]);
   const users = await User.find({ _id: { $in: grouped.map((item) => item._id) }, status: "active" }).select(userFields).lean();
   const userById = new Map(users.map((item) => [String(item._id), item]));
-  const conversationStates = await Conversation.find(req.user.role === "creator" ? { creator: me } : { fan: me }).lean();
-  const stateByOther = new Map(conversationStates.map((item) => [String(req.user.role === "creator" ? item.fan : item.creator), item.status]));
+  const conversationStates = await Conversation.find({ $or: [{ fan: me }, { creator: me }, { participants: me }] }).lean();
+  const stateByOther = new Map(conversationStates.flatMap((item) => {
+    const ids = item.participants?.length ? item.participants : [item.fan, item.creator];
+    const otherId = ids.find((id) => String(id) !== String(me));
+    return otherId ? [[String(otherId), item]] : [];
+  }));
   const conversations = grouped.flatMap((item) => {
     const participant = userById.get(String(item._id));
     if (!participant) return [];
@@ -316,7 +353,12 @@ export const listConversations = asyncHandler(async (req, res) => {
       participant: person(participant),
       lastMessage: serializedMessage(item.lastMessage),
       unreadCount: item.unreadCount,
-      status: stateByOther.get(String(item._id)) || "ACTIVE",
+      status: stateByOther.get(String(item._id))?.status || "ACTIVE",
+      archived: (stateByOther.get(String(item._id))?.archivedBy || []).some((id) => String(id) === String(me)),
+      muted: (stateByOther.get(String(item._id))?.mutedBy || []).some((id) => String(id) === String(me)),
+      requestReceived: stateByOther.get(String(item._id))?.status === "REQUEST" && (stateByOther.get(String(item._id))?.requestRecipient
+        ? String(stateByOther.get(String(item._id)).requestRecipient) === String(me)
+        : req.user.role === "creator" && String(stateByOther.get(String(item._id))?.creator) === String(me)),
     }];
   });
   return sendResponse(res, 200, "Conversations fetched", { conversations });
@@ -329,7 +371,10 @@ export const listMessages = asyncHandler(async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
   const cursor = req.query.cursor ? String(req.query.cursor) : null;
   if (cursor && !mongoose.isValidObjectId(cursor)) throw new ApiError(400, "Invalid message cursor");
-  if (!(req.user.role === "creator" && conversation?.status === "REQUEST")) {
+  const requestIsForMe = conversation?.status === "REQUEST" && (conversation.requestRecipient
+    ? String(conversation.requestRecipient) === String(req.user._id)
+    : req.user.role === "creator" && String(conversation.creator) === String(req.user._id));
+  if (!requestIsForMe) {
     const readAt = new Date();
     const result = await Message.updateMany(
       { sender: other._id, recipient: req.user._id, readAt: null },
@@ -355,23 +400,16 @@ export const listMessages = asyncHandler(async (req, res) => {
       ],
     });
     if (!requestedWindow) throw new ApiError(404, "Direct Access thread not found");
-    const threadRootId = requestedWindow.threadRootWindow || requestedWindow._id;
+    // A fan and creator have one visible Direct Access conversation. Individual
+    // paid windows remain separate financial records, but the thread shows the
+    // complete history for the pair regardless of how a window was opened.
     const threadWindows = await DAWindow.find({
       fan: requestedWindow.fan,
       creator: requestedWindow.creator,
-      $or: [
-        { _id: threadRootId },
-        { threadRootWindow: threadRootId },
-        { reopenedFromWindow: threadRootId },
-      ],
     }).sort({ createdAt: -1 });
     threadWindowIds = threadWindows.map((window) => window._id);
-    const missingRoots = threadWindows.filter((window) => !window.threadRootWindow).map((window) => window._id);
-    if (missingRoots.length) {
-      await DAWindow.updateMany({ _id: { $in: missingRoots } }, { $set: { threadRootWindow: threadRootId } });
-    }
     requestedWindow = threadWindows.find((window) => Boolean(window.activeWindowKey))
-      || threadWindows.find((window) => String(window._id) === String(requestedWindowId))
+      || threadWindows[0]
       || requestedWindow;
     if (
       ["OPEN", "ANSWERED"].includes(requestedWindow.status)
@@ -402,19 +440,30 @@ export const listMessages = asyncHandler(async (req, res) => {
   const rows = await Message.find(messageFilter).sort({ _id: -1 }).limit(limit + 1).populate("replyTo", "sender body deletedAt").lean();
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
-  const followsCreator = req.user.role === "fan"
-    ? Boolean(await ProfileRelationship.exists({ actor: req.user._id, target: other._id, type: "FOLLOW" }))
-    : null;
+  const participant = person(other);
+  if (other.role === "creator") {
+    const profile = await CreatorProfile.findOne({ user: other._id }).select("bio orbitStatus directCallEnabled").lean();
+    participant.typicalReplyHours = await creatorTypicalReplyHours(other._id);
+    participant.statusLine = profile?.orbitStatus || "";
+    participant.personalLine = profile?.bio || "";
+    participant.callEnabled = Boolean(profile?.directCallEnabled);
+  } else if (other.role === "fan") {
+    const profile = await FanProfile.findOne({ user: other._id }).select("bio orbitStatus").lean();
+    participant.statusLine = profile?.orbitStatus || "";
+    participant.personalLine = profile?.bio || "";
+  }
   return sendResponse(res, 200, "Messages fetched", {
-    participant: person(other),
+    participant,
     messages: page.reverse().map(serializedMessage),
     pageInfo: {
       hasMore,
       nextCursor: hasMore ? String(page[page.length - 1]._id) : null,
     },
     conversationStatus: conversation?.status || null,
-    requestRequired: req.user.role === "fan" && !followsCreator && (!conversation || (conversation.status === "ACTIVE" && conversation.acceptedByCreator !== true)),
+    requestRequired: conversation?.status === "REQUEST" && !requestIsForMe,
+    requestReceived: requestIsForMe,
     blockStatus: blocks,
+    muted: Boolean(conversation?.mutedBy?.some((id) => String(id) === String(req.user._id))),
     directAccessWindow: serializeDAWindow(requestedWindow),
     threadType: requestedWindow ? "DIRECT_ACCESS" : "STANDARD",
   });
@@ -431,7 +480,6 @@ export const sendMessage = asyncHandler(async (req, res) => {
     throw new ApiError(400, "A valid client message id is required");
   }
   let conversation = await conversationFor(req.user, other);
-  const isCreatorPeerThread = req.user.role === "creator" && other.role === "creator";
   const existingMessage = await Message.findOne({ sender: req.user._id, clientMessageId }).populate("replyTo", "sender body deletedAt");
   if (existingMessage) {
     if (!existingMessage.recipient.equals(other._id) || existingMessage.body !== body) {
@@ -443,21 +491,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
       idempotentReplay: true,
     });
   }
-  if (req.user.role === "fan" && conversation?.status === "ACTIVE" && conversation.acceptedByCreator !== true) {
-    const follows = await ProfileRelationship.exists({ actor: req.user._id, target: other._id, type: "FOLLOW" });
-    if (!follows) conversation = await Conversation.findByIdAndUpdate(conversation._id, { $set: { status: "REQUEST", requestStartedAt: new Date(), acceptedAt: null } }, { new: true });
-  }
-  if (!conversation && !isCreatorPeerThread) {
-    if (req.user.role !== "fan") throw new ApiError(403, "Creators can reply after accepting a fan request");
-    const follows = await ProfileRelationship.exists({ actor: req.user._id, target: other._id, type: "FOLLOW" });
-    conversation = await Conversation.create({ ...pairFor(req.user, other), status: follows ? "ACTIVE" : "REQUEST", acceptedAt: follows ? new Date() : null, acceptedByCreator: false, requestStartedAt: follows ? null : new Date() });
-  }
-  if (conversation?.status === "REQUEST" && req.user.role === "creator") throw new ApiError(403, "Accept this message request before replying");
-  if (conversation?.status === "DECLINED") throw new ApiError(403, "This message request was declined");
-  if (conversation?.status === "REQUEST" && req.user.role === "fan") {
-    const alreadySent = await Message.exists({ sender: req.user._id, recipient: other._id, createdAt: { $gte: conversation.requestStartedAt || conversation.createdAt } });
-    if (alreadySent) throw new ApiError(409, "Wait for the creator to accept your message request");
-  }
+  conversation = await prepareConversationForSend(req.user, other, conversation);
   let replyTo = null;
   if (req.body.replyToId) {
     validId(req.body.replyToId);
@@ -531,21 +565,7 @@ export const sendVoiceMessage = asyncHandler(async (req, res) => {
   const existing = await Message.findOne({ sender: req.user._id, clientMessageId });
   if (existing) return sendResponse(res, 200, "Voice message already sent", { message: serializedMessage(existing), idempotentReplay: true });
   let conversation = await conversationFor(req.user, other);
-  if (req.user.role === "fan" && conversation?.status === "ACTIVE" && conversation.acceptedByCreator !== true) {
-    const follows = await ProfileRelationship.exists({ actor: req.user._id, target: other._id, type: "FOLLOW" });
-    if (!follows) conversation = await Conversation.findByIdAndUpdate(conversation._id, { $set: { status: "REQUEST", requestStartedAt: new Date(), acceptedAt: null } }, { new: true });
-  }
-  if (!conversation) {
-    if (req.user.role !== "fan") throw new ApiError(403, "Creators can reply after accepting a fan request");
-    const follows = await ProfileRelationship.exists({ actor: req.user._id, target: other._id, type: "FOLLOW" });
-    conversation = await Conversation.create({ ...pairFor(req.user, other), status: follows ? "ACTIVE" : "REQUEST", acceptedAt: follows ? new Date() : null, acceptedByCreator: false, requestStartedAt: follows ? null : new Date() });
-  }
-  if (conversation.status === "REQUEST" && req.user.role === "creator") throw new ApiError(403, "Accept this message request before replying");
-  if (conversation.status === "DECLINED") throw new ApiError(403, "This message request was declined");
-  if (conversation.status === "REQUEST" && req.user.role === "fan") {
-    const alreadySent = await Message.exists({ sender: req.user._id, recipient: other._id, createdAt: { $gte: conversation.requestStartedAt || conversation.createdAt } });
-    if (alreadySent) throw new ApiError(409, "Wait for the creator to accept your message request");
-  }
+  conversation = await prepareConversationForSend(req.user, other, conversation);
   let waveform = [];
   try { waveform = JSON.parse(req.body.waveform || "[]"); } catch { throw new ApiError(400, "Invalid voice waveform"); }
   waveform = Array.isArray(waveform) ? waveform.slice(0, 48).map((value) => Math.min(1, Math.max(0.08, Number(value) || 0.08))) : [];
@@ -581,21 +601,7 @@ export const sendVideoNote = asyncHandler(async (req, res) => {
   const existing = await Message.findOne({ sender: req.user._id, clientMessageId });
   if (existing) return sendResponse(res, 200, "Video note already sent", { message: serializedMessage(existing), idempotentReplay: true });
   let conversation = await conversationFor(req.user, other);
-  if (req.user.role === "fan" && conversation?.status === "ACTIVE" && conversation.acceptedByCreator !== true) {
-    const follows = await ProfileRelationship.exists({ actor: req.user._id, target: other._id, type: "FOLLOW" });
-    if (!follows) conversation = await Conversation.findByIdAndUpdate(conversation._id, { $set: { status: "REQUEST", requestStartedAt: new Date(), acceptedAt: null } }, { new: true });
-  }
-  if (!conversation) {
-    if (req.user.role !== "fan") throw new ApiError(403, "Creators can reply after accepting a fan request");
-    const follows = await ProfileRelationship.exists({ actor: req.user._id, target: other._id, type: "FOLLOW" });
-    conversation = await Conversation.create({ ...pairFor(req.user, other), status: follows ? "ACTIVE" : "REQUEST", acceptedAt: follows ? new Date() : null, acceptedByCreator: false, requestStartedAt: follows ? null : new Date() });
-  }
-  if (conversation.status === "REQUEST" && req.user.role === "creator") throw new ApiError(403, "Accept this message request before replying");
-  if (conversation.status === "DECLINED") throw new ApiError(403, "This message request was declined");
-  if (conversation.status === "REQUEST" && req.user.role === "fan") {
-    const alreadySent = await Message.exists({ sender: req.user._id, recipient: other._id, createdAt: { $gte: conversation.requestStartedAt || conversation.createdAt } });
-    if (alreadySent) throw new ApiError(409, "Wait for the creator to accept your message request");
-  }
+  conversation = await prepareConversationForSend(req.user, other, conversation);
   const video = await uploadMessageVideo({ buffer: req.file.buffer, senderId: req.user._id });
   if (req.body.directAccessWindowId) {
     const committed = await createDirectAccessMessageAtomic({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other, message: { clientMessageId, body: "Video note", mediaType: "video", ppm: false, video } });
@@ -631,21 +637,7 @@ export const sendImageMessage = asyncHandler(async (req, res) => {
   if (existing) return sendResponse(res, 200, "Image already sent", { message: serializedMessage(existing), idempotentReplay: true });
 
   let conversation = await conversationFor(req.user, other);
-  if (req.user.role === "fan" && conversation?.status === "ACTIVE" && conversation.acceptedByCreator !== true) {
-    const follows = await ProfileRelationship.exists({ actor: req.user._id, target: other._id, type: "FOLLOW" });
-    if (!follows) conversation = await Conversation.findByIdAndUpdate(conversation._id, { $set: { status: "REQUEST", requestStartedAt: new Date(), acceptedAt: null } }, { new: true });
-  }
-  if (!conversation) {
-    if (req.user.role !== "fan") throw new ApiError(403, "Creators can reply after accepting a fan request");
-    const follows = await ProfileRelationship.exists({ actor: req.user._id, target: other._id, type: "FOLLOW" });
-    conversation = await Conversation.create({ ...pairFor(req.user, other), status: follows ? "ACTIVE" : "REQUEST", acceptedAt: follows ? new Date() : null, acceptedByCreator: false, requestStartedAt: follows ? null : new Date() });
-  }
-  if (conversation.status === "REQUEST" && req.user.role === "creator") throw new ApiError(403, "Accept this message request before replying");
-  if (conversation.status === "DECLINED") throw new ApiError(403, "This message request was declined");
-  if (conversation.status === "REQUEST" && req.user.role === "fan") {
-    const alreadySent = await Message.exists({ sender: req.user._id, recipient: other._id, createdAt: { $gte: conversation.requestStartedAt || conversation.createdAt } });
-    if (alreadySent) throw new ApiError(409, "Wait for the creator to accept your message request");
-  }
+  conversation = await prepareConversationForSend(req.user, other, conversation);
   const image = await uploadMessageImage({ buffer: req.file.buffer, senderId: req.user._id });
   if (req.body.directAccessWindowId) {
     const committed = await createDirectAccessMessageAtomic({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other, message: { clientMessageId, body: caption || "Image", mediaType: "image", image } });
@@ -717,6 +709,58 @@ export const deleteConversation = asyncHandler(async (req, res) => {
   };
   req.app.get("io")?.to(`user:${req.user._id}`).emit("conversation:hidden", payload);
   return sendResponse(res, 200, "Conversation deleted for you", payload);
+});
+
+export const archiveConversation = asyncHandler(async (req, res) => {
+  const other = await assertAllowedPair(req.user, req.params.userId, { allowBlocked: true });
+  const conversation = await conversationFor(req.user, other);
+  if (!conversation) throw new ApiError(404, "Conversation not found");
+  const archived = req.body.archived !== false;
+  if (archived) conversation.archivedBy.addToSet(req.user._id);
+  else conversation.archivedBy.pull(req.user._id);
+  await conversation.save();
+  return sendResponse(res, 200, archived ? "Conversation archived" : "Conversation unarchived", { archived });
+});
+
+export const muteConversation = asyncHandler(async (req, res) => {
+  const other = await assertAllowedPair(req.user, req.params.userId, { allowBlocked: true });
+  const conversation = await conversationFor(req.user, other);
+  if (!conversation) throw new ApiError(404, "Conversation not found");
+  const muted = req.body.muted !== false;
+  if (muted) conversation.mutedBy.addToSet(req.user._id);
+  else conversation.mutedBy.pull(req.user._id);
+  await conversation.save();
+  return sendResponse(res, 200, muted ? "Conversation muted" : "Conversation unmuted", { muted });
+});
+
+export const forwardMessage = asyncHandler(async (req, res) => {
+  validId(req.params.messageId);
+  const source = await Message.findOne({ _id: req.params.messageId, deletedAt: null, $or: [{ sender: req.user._id }, { recipient: req.user._id }] }).lean();
+  if (!source) throw new ApiError(404, "Message not found");
+  const targets = Array.isArray(req.body.targets) ? req.body.targets.slice(0, 20) : [];
+  if (!targets.length) throw new ApiError(400, "Choose at least one conversation");
+  const results = [];
+  for (const target of targets) {
+    if (target.type === "group") {
+      const group = await GroupConversation.findOne({ _id: target.id, members: req.user._id, deletedAt: null });
+      if (!group) throw new ApiError(404, "Forwarding group not found");
+      const forwarded = await GroupMessage.create({ group: group._id, sender: req.user._id, body: source.body, forwardedFrom: source._id, readBy: [{ user: req.user._id }] });
+      group.archivedBy = [];
+      await group.save();
+      const payload = { id: String(forwarded._id), groupId: String(group._id), senderId: String(req.user._id), body: forwarded.body, forwarded: true, reactions: [], createdAt: forwarded.createdAt };
+      for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId}`).emit("group:message", { groupId: String(group._id), message: payload });
+      results.push({ type: "group", id: String(group._id), message: payload });
+      continue;
+    }
+    const other = await assertAllowedPair(req.user, target.id);
+    let conversation = await conversationFor(req.user, other);
+    conversation = await prepareConversationForSend(req.user, other, conversation);
+    const forwarded = await Message.create({ sender: req.user._id, recipient: other._id, body: source.body, mediaType: source.mediaType, image: source.image, audio: source.audio, video: source.video, sharedAttachment: source.sharedAttachment, forwardedFrom: source._id });
+    const payload = serializedMessage(forwarded);
+    req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
+    results.push({ type: "direct", id: String(other._id), message: payload });
+  }
+  return sendResponse(res, 201, "Message forwarded", { results });
 });
 
 const REPORT_REASONS = new Set(["SPAM", "HARASSMENT", "HATE", "SEXUAL_CONTENT", "VIOLENCE", "SCAM", "OTHER"]);
@@ -854,10 +898,9 @@ export const removeMessageReaction = asyncHandler(async (req, res) => {
 });
 
 export const acceptMessageRequest = asyncHandler(async (req, res) => {
-  if (req.user.role !== "creator") throw new ApiError(403, "Only creators can accept message requests");
   validId(req.params.userId);
   const conversation = await Conversation.findOneAndUpdate(
-    { creator: req.user._id, fan: req.params.userId, status: "REQUEST" },
+    { status: "REQUEST", $or: [{ requestRecipient: req.user._id, participants: req.params.userId }, { creator: req.user._id, fan: req.params.userId }] },
     { $set: { status: "ACTIVE", acceptedAt: new Date(), acceptedByCreator: true, declinedAt: null } },
     { new: true },
   );
@@ -867,10 +910,9 @@ export const acceptMessageRequest = asyncHandler(async (req, res) => {
 });
 
 export const declineMessageRequest = asyncHandler(async (req, res) => {
-  if (req.user.role !== "creator") throw new ApiError(403, "Only creators can decline message requests");
   validId(req.params.userId);
   const conversation = await Conversation.findOneAndUpdate(
-    { creator: req.user._id, fan: req.params.userId, status: "REQUEST" },
+    { status: "REQUEST", $or: [{ requestRecipient: req.user._id, participants: req.params.userId }, { creator: req.user._id, fan: req.params.userId }] },
     { $set: { status: "DECLINED", declinedAt: new Date() } },
     { new: true },
   );
@@ -985,9 +1027,8 @@ export const sendSharedContent = asyncHandler(async (req, res) => {
 });
 
 export const searchMessagePeople = asyncHandler(async (req, res) => {
-  if (req.user.role !== "fan") return sendResponse(res, 200, "People fetched", { people: [] });
   const q = String(req.query.q || "").trim().slice(0, 80);
-  const match = { role: "creator", status: "active", creatorApprovalStatus: "approved" };
+  const match = { _id: { $ne: req.user._id }, status: "active", role: { $in: ["fan", "creator"] } };
   if (q) {
     const safe = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     match.$or = [{ name: { $regex: safe, $options: "i" } }, { username: { $regex: safe, $options: "i" } }];
@@ -997,7 +1038,7 @@ export const searchMessagePeople = asyncHandler(async (req, res) => {
     $or: [{ blocker: req.user._id }, { blocked: req.user._id }],
   }).select("blocker blocked").lean();
   const blockedIds = new Set(blocks.flatMap((item) => [String(item.blocker), String(item.blocked)]));
-  const profiles = await CreatorProfile.find({ user: { $in: users.map((user) => user._id) }, messagingEnabled: { $ne: false } }).select("user").lean();
-  const enabled = new Set(profiles.map((profile) => profile.user.toString()));
-  return sendResponse(res, 200, "People fetched", { people: users.filter((user) => enabled.has(user._id.toString()) && !blockedIds.has(user._id.toString())).map(person) });
+  const disabledProfiles = await CreatorProfile.find({ user: { $in: users.map((user) => user._id) }, messagingEnabled: false }).select("user").lean();
+  const disabled = new Set(disabledProfiles.map((profile) => profile.user.toString()));
+  return sendResponse(res, 200, "People fetched", { people: users.filter((user) => !disabled.has(user._id.toString()) && !blockedIds.has(user._id.toString())).map(person) });
 });

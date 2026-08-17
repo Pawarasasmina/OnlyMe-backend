@@ -58,6 +58,7 @@ const userSchema = new mongoose.Schema(
     messagingRestrictionReason: { type: String, trim: true, maxlength: 1000, default: "" },
     messagingRestrictedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     lastSeenAt: { type: Date, default: null },
+    pinnedMessageGroup: { type: mongoose.Schema.Types.ObjectId, ref: "GroupConversation", default: null },
     activeStatus: {
       emoji: { type: String, trim: true, maxlength: 8, default: "" },
       label: { type: String, trim: true, maxlength: 32, default: "" },

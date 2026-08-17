@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 
 const schema = new mongoose.Schema({
-  sourceType: { type: String, enum: ["DIRECT_ACCESS"], required: true },
+  sourceType: { type: String, enum: ["DIRECT_ACCESS", "PAID_CALL"], required: true },
   referenceId: { type: String, required: true, maxlength: 200 },
   fan: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   creator: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },

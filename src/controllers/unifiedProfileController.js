@@ -150,16 +150,36 @@ export const getOwnProfileViewers = asyncHandler(async (req, res) => {
 });
 
 export const getOwnProfileConnections = asyncHandler(async (req, res) => {
-  if (req.user.role !== "creator") throw new ApiError(403, "This list is available to creator accounts");
   const type = req.query.type;
-  if (!["followers", "following"].includes(type)) throw new ApiError(400, "Connection type must be followers or following");
+  if (!["followers", "following", "supporters"].includes(type)) throw new ApiError(400, "Connection type must be followers, following, or supporters");
+
+  return sendConnections({ owner: req.user, type, req, res });
+});
+
+async function sendConnections({ owner, type, req, res }) {
+  if (type === "supporters" && owner.role !== "creator") {
+    return sendResponse(res, 200, "Profile connections fetched", { accounts: [], pagination: { page: 1, limit: 30, total: 0, hasMore: false } });
+  }
 
   const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
   const limit = Math.min(50, Math.max(1, Number.parseInt(req.query.limit, 10) || 30));
+  if (type === "supporters") {
+    const supporterIds = await DreamGift.distinct("supporter", { creator: owner._id, privateSupport: false });
+    const total = supporterIds.length;
+    const pageIds = supporterIds.slice((page - 1) * limit, page * limit);
+    const users = await User.find({ _id: { $in: pageIds }, status: "active" }).select("name username avatar isVerified role").lean();
+    const byId = new Map(users.map((account) => [String(account._id), account]));
+    const accounts = pageIds.flatMap((id) => {
+      const account = byId.get(String(id));
+      return account ? [{ id: account._id, name: account.name, username: account.username, avatar: account.avatar || "", verified: Boolean(account.isVerified), role: account.role }] : [];
+    });
+    return sendResponse(res, 200, "Profile connections fetched", { accounts, pagination: { page, limit, total, hasMore: page * limit < total } });
+  }
+
   const userPath = type === "followers" ? "actor" : "target";
   const filter = type === "followers"
-    ? { target: req.user._id, type: "FOLLOW" }
-    : { actor: req.user._id, type: "FOLLOW" };
+    ? { target: owner._id, type: "FOLLOW" }
+    : { actor: owner._id, type: "FOLLOW" };
   const [relationships, total] = await Promise.all([
     ProfileRelationship.find(filter)
       .sort({ createdAt: -1, _id: -1 })
@@ -174,6 +194,14 @@ export const getOwnProfileConnections = asyncHandler(async (req, res) => {
     return account ? [{ id: account._id, name: account.name, username: account.username, avatar: account.avatar || "", verified: Boolean(account.isVerified), role: account.role }] : [];
   });
   return sendResponse(res, 200, "Profile connections fetched", { accounts, pagination: { page, limit, total, hasMore: page * limit < total } });
+}
+
+export const getProfileConnections = asyncHandler(async (req, res) => {
+  const type = req.query.type;
+  if (!["followers", "following", "supporters"].includes(type)) throw new ApiError(400, "Connection type must be followers, following, or supporters");
+  const owner = await User.findOne({ username: normalizeUsername(req.params.username), role: { $in: ["fan", "creator"] }, status: "active" });
+  if (!owner) throw new ApiError(404, "Profile not found");
+  return sendConnections({ owner, type, req, res });
 });
 
 export const getUnifiedProfileByUsername = asyncHandler(async (req, res) => {

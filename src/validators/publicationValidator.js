@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import ApiError from "../utils/ApiError.js";
-import { BLOCK_TYPES, KIND_RULES, PREMIUM_PRICE_PRESETS, PUBLICATION_KINDS, PUBLICATION_LIMITS, TEXT_BLOCK_TYPES } from "../constants/publicationConstants.js";
+import { BLOCK_TYPES, KIND_RULES, PLANET_MARKER_COLORS, PREMIUM_PRICE_PRESETS, PUBLICATION_KINDS, PUBLICATION_LIMITS, TEXT_BLOCK_TYPES } from "../constants/publicationConstants.js";
 
 const text = (value, max, name, required = false) => { const result = typeof value === "string" ? value.trim() : ""; if (required && !result) throw new ApiError(400, `${name} is required`); if (result.length > max) throw new ApiError(400, `${name} cannot exceed ${max} characters`); return result; };
 const safeUrl = (value) => { try { const url = new URL(String(value)); if (!["http:", "https:"].includes(url.protocol)) throw new Error(); return url.toString(); } catch { throw new ApiError(400, "Links must use http or https"); } };
 
 export function derivedPublicationPolicy(kind) {
   if (!PUBLICATION_KINDS.includes(kind)) throw new ApiError(400, "Unsupported publication kind");
-  return kind === "SEEN" ? { pricing: { mode: "FREE", starsAmount: null, presetId: null }, previewPolicy: "ALL_FREE", placement: "SEEN" } : kind === "WORLD" ? { previewPolicy: "ONE_CHAPTER", placement: "PROFILE_ORBIT" } : { previewPolicy: "ONE_OR_TWO_CHAPTERS", placement: "PROFILE_ORBIT" };
+  return kind === "SEEN" ? { pricing: { mode: "FREE", starsAmount: null, presetId: null }, previewPolicy: "ALL_FREE", placement: "SEEN" } : kind === "WORLD" ? { pricing: { mode: "FREE", starsAmount: null, presetId: null }, previewPolicy: "ALL_FREE", placement: "PROFILE_ORBIT" } : { previewPolicy: "ONE_CHAPTER", placement: "PROFILE_ORBIT" };
 }
 
 export function normalizePublicationDraft(payload = {}, { partial = false } = {}) {
@@ -28,7 +28,7 @@ export function normalizeBlocks(blocks = []) {
     if (!BLOCK_TYPES.includes(block.type)) throw new ApiError(400, "Unsupported block type");
     const id = text(block.id, 80, "Block ID") || crypto.randomUUID(); if (ids.has(id)) throw new ApiError(400, "Block IDs must be unique"); ids.add(id);
     const item = { id, type: block.type, order };
-    if (TEXT_BLOCK_TYPES.includes(block.type)) { item.text = text(block.text, PUBLICATION_LIMITS.chapterText, "Block text", true); textualCharacters += item.text.length; }
+    if (TEXT_BLOCK_TYPES.includes(block.type)) { item.text = text(block.text, PUBLICATION_LIMITS.chapterText, "Block text", true); textualCharacters += item.text.length; if (block.type === "HIGHLIGHT") { const color = String(block.metadata?.color || "ICE_BLUE").toUpperCase(); if (!PLANET_MARKER_COLORS.includes(color)) throw new ApiError(400, "Marker color must use one of the six brand colors"); item.metadata = { color }; } }
     if (block.type === "LINK") { item.url = safeUrl(block.url); item.label = text(block.label, PUBLICATION_LIMITS.blockLabel, "Link label", true); textualCharacters += item.label.length; }
     if (["IMAGE", "VIDEO", "AUDIO", "VOICE"].includes(block.type)) { if (!block.media?.assetId) throw new ApiError(400, "Verified media is required"); item.media = block.media; }
     return item;
@@ -47,7 +47,7 @@ export function assertCompletePublication(publication, chapters) {
   chapters.forEach((chapter) => normalizeChapter(chapter));
   const previews = chapters.filter((chapter) => chapter.isPreview).length;
   if (publication.kind === "SEEN") { if (publication.pricing?.mode !== "FREE" || publication.pricing?.starsAmount != null) throw new ApiError(400, "Seen must be free"); if (previews !== chapters.length) throw new ApiError(400, "Every Seen chapter must be public"); }
-  if (publication.kind === "WORLD") { if (publication.pricing?.mode !== "ONE_TIME" || !Number.isSafeInteger(publication.pricing?.starsAmount) || publication.pricing.starsAmount < 1) throw new ApiError(400, "World requires a positive one-time Stars price"); if (previews !== 1) throw new ApiError(400, "World requires exactly one preview chapter"); }
-  if (publication.kind === "PREMIUM_WORLD") { if (publication.pricing?.mode !== "MONTHLY" || !PREMIUM_PRICE_PRESETS.includes(publication.pricing?.starsAmount)) throw new ApiError(400, "Premium World price must be 90, 190, or 290 Stars"); if (previews < 1 || previews > 2 || previews === chapters.length) throw new ApiError(400, "Premium World requires 1-2 previews and at least one locked chapter"); }
+  if (publication.kind === "WORLD") { if (publication.pricing?.mode !== "FREE" || publication.pricing?.starsAmount != null) throw new ApiError(400, "Free Worlds cannot charge Stars"); if (previews !== chapters.length) throw new ApiError(400, "Every free World chapter must be open"); }
+  if (publication.kind === "PREMIUM_WORLD") { if (publication.pricing?.mode !== "MONTHLY" || !PREMIUM_PRICE_PRESETS.includes(publication.pricing?.starsAmount)) throw new ApiError(400, "Choose a supported creator residency price"); if (previews !== 1 || !chapters[0]?.isPreview) throw new ApiError(400, "Premium Planet Chapter 1 must be the only free chapter"); }
   return policy;
 }

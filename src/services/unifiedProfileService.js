@@ -52,7 +52,7 @@ function uniquePhotos(items = []) {
   });
 }
 
-export function serializeUnifiedProfile({ content = [], followerCount = 0, followingCount = 0, owner, ownWallPosts = [], photos = [], pinnedMessageGroup = null, planets = [], publishedContentCount = content.length, roleProfile, seens = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [] }) {
+export function serializeUnifiedProfile({ content = [], followerCount = 0, followingCount = 0, owner,  ownWallPosts = [], photos = [], pinnedMessageGroup = null, planets = [], publishedContentCount = content.length, roleProfile, seens = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [] }) {
   const capabilities = profileViewerCapabilities(owner, viewer, roleProfile);
   const contentViewer = capabilities.isOwner ? viewer : null;
   const socialLinks = owner.role === "creator"

@@ -515,20 +515,26 @@ function groupStories(stories) {
   return Array.from(groups.values());
 }
 
-async function publicProfilesByUser(users = []) {
+async function profilesByUser(users = [], { publicOnly = true } = {}) {
   const creatorIds = users.filter((user) => user.role === "creator").map((user) => user._id);
   const fanIds = users.filter((user) => user.role === "fan").map((user) => user._id);
-  const [creatorProfiles, fanProfiles] = await Promise.all([
-    creatorIds.length ? CreatorProfile.find({
+  const creatorMatch = publicOnly
+    ? {
       user: { $in: creatorIds },
       profileVisibility: "public",
       "privacySettings.allowDiscovery": { $ne: false },
-    }).lean() : [],
-    fanIds.length ? FanProfile.find({
+    }
+    : { user: { $in: creatorIds } };
+  const fanMatch = publicOnly
+    ? {
       user: { $in: fanIds },
       profileVisibility: "public",
       "privacySettings.allowDiscovery": { $ne: false },
-    }).lean() : [],
+    }
+    : { user: { $in: fanIds } };
+  const [creatorProfiles, fanProfiles] = await Promise.all([
+    creatorIds.length ? CreatorProfile.find(creatorMatch).lean() : [],
+    fanIds.length ? FanProfile.find(fanMatch).lean() : [],
   ]);
   return new Map([...creatorProfiles, ...fanProfiles].map((profile) => [String(profile.user), profile]));
 }
@@ -610,8 +616,9 @@ async function discoverConnections({ blockedIds, previewByCreator, viewerId }) {
   const users = relationships
     .map((relationship) => relationship.target)
     .filter((user) => user && (user.role !== "creator" || user.creatorApprovalStatus === "approved"));
-  const profilesById = await publicProfilesByUser(users);
-  const visibleUsers = users.filter((user) => profilesById.has(String(user._id)));
+  const uniqueUsers = Array.from(new Map(users.map((user) => [String(user?._id || ""), user])).values()).filter((user) => user?._id);
+  const profilesById = await profilesByUser(uniqueUsers, { publicOnly: false });
+  const visibleUsers = uniqueUsers;
   const ids = visibleUsers.map((user) => user._id);
   const mutualIds = mutualFollowIds(relationships, followerRows, viewerId, blockedIds);
   const mutualObjectIds = objectIdList([...mutualIds]);
@@ -643,7 +650,7 @@ async function discoverConnections({ blockedIds, previewByCreator, viewerId }) {
   const recentThreshold = Date.now() - 5 * 60 * 1000;
   const people = visibleUsers.map((user) => {
     const id = String(user._id);
-    const profile = profilesById.get(id);
+    const profile = profilesById.get(id) || {};
     const shared = {
     followerCounts,
       mutual: mutualIds.has(id),
@@ -662,9 +669,11 @@ async function discoverConnections({ blockedIds, previewByCreator, viewerId }) {
         stories: storiesByCreator.get(id) || [],
       });
   });
+  const uniquePeople = Array.from(new Map(people.map((person) => [String(person.id || person.username || ""), person])).values())
+    .filter((person) => (person?.id || person?.username) && String(person.id || "") !== String(viewerId || ""));
   return {
-    friends: sortDiscoverFriends(people.filter((person) => person.isMutualFollow)).slice(0, 12),
-    following: people.slice(0, 12),
+    friends: sortDiscoverFriends(uniquePeople.filter((person) => person.isMutualFollow)).slice(0, 12),
+    following: uniquePeople.slice(0, 12),
   };
 }
 
@@ -819,6 +828,10 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const viewerCity = settings.preferredCity || viewerProfile?.city || "";
   const nearbyCreators = searchedCreators.filter((creator) => viewerCity && creator.city?.toLowerCase() === viewerCity.toLowerCase());
   const worlds = publications.map((publication) => serializeWorld(publication, { worldMemberCounts: worldsByPublication }));
+  const viewerWalks = await SeenEngagement.find({ user: req.user._id, type: "WALKED" }).select("publication").lean();
+  const walkedPublicationIds = viewerWalks.map((item) => item.publication);
+  const sharedWalkRows = walkedPublicationIds.length ? await SeenEngagement.find({ publication: { $in: walkedPublicationIds }, user: { $in: creatorIds }, type: "WALKED" }).populate("publication", "title planet").populate("user", "name username avatar").limit(12).lean() : [];
+  const sharedWalks = sharedWalkRows.map((item) => ({ id: item._id, world: { id: item.publication?._id, title: item.publication?.title, emoji: item.publication?.planet?.emoji || "🌍" }, person: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" } }));
   const discoverSeens = visibleSeens.map((publication) => serializeDiscoverSeen(publication, seenEngagementCounts));
   const trendingSeen = [...discoverSeens]
     .sort((left, right) => right.viewCount - left.viewCount || new Date(right.publishedAt || 0) - new Date(left.publishedAt || 0))[0] || null;
@@ -895,6 +908,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
     recentlyViewed: [],
     friendsOfFriends: searchedCreators.filter((creator) => !creator.following).slice(3, 15),
     popularWorlds: worlds.slice(0, 16),
+    sharedWalks,
     recommendedWorlds: worlds.filter((world) => interestTags.includes(world.category)).slice(0, 16),
     creatorStories: groupStories(stories),
     featuredExperiences: worlds.slice(0, 8).map((world) => ({

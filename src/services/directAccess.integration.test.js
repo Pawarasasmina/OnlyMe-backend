@@ -136,3 +136,22 @@ test("creator-question reopen captures 80 percent for creator and links both win
   assert.equal(revenue.rateBasisPoints, 2000);
   assert.equal((await Wallet.findOne({ user: creator._id })).balance, creatorBalanceBefore + 80);
 });
+
+test("fan free follow-up uses configured price and the same idempotency key cannot double-charge", { skip: !uri }, async () => {
+  await DAWindow.updateMany({}, { $unset: { activeWindowKey: 1 } });
+  await CreatorProfile.updateOne({ user: creator._id }, { $set: { directAccessPriceStars: 200 } });
+  const previous = await DAWindow.findOne({ fan: fan._id, creator: creator._id, settlementStatus: { $in: ["CAPTURED", "INCLUDED"] } }).sort({ createdAt: -1 });
+  const followup = await Message.create({ sender: fan._id, recipient: creator._id, clientMessageId: "fan-free-followup-configured-price", body: "Can you explain one more thing?", messageKind: "FAN_FREE_ASK", messageChannel: "DIRECT_ACCESS", directAccessWindow: previous._id });
+  const balanceBefore = (await Wallet.findOne({ user: fan._id })).balance;
+  const first = await openDirectAccessWindow({ fan, creatorId: creator._id, key: "fan-followup-open-idempotent", source: "FAN_FOLLOWUP", fanFollowupMessageId: followup._id });
+  const replay = await openDirectAccessWindow({ fan, creatorId: creator._id, key: "fan-followup-open-idempotent", source: "FAN_FOLLOWUP", fanFollowupMessageId: followup._id });
+  assert.equal(first.window.id, replay.window.id);
+  assert.equal(first.window.priceStars, 200);
+  assert.equal((await Wallet.findOne({ user: fan._id })).balance, balanceBefore - 200);
+  assert.equal(await StarsLedgerEntry.countDocuments({ entryType: "DA_HOLD_DEBIT", referenceId: first.window.id }), 1);
+  const answer = await createDirectAccessMessageAtomic({ windowId: first.window.id, sender: creator, recipient: fan, message: { clientMessageId: "fan-followup-creator-paid-reply", body: "Here is the deeper answer.", mediaType: "text" } });
+  assert.equal(answer.window.settlementStatus, "CAPTURED");
+  const revenue = await PlatformRevenue.findOne({ referenceId: first.window.id });
+  assert.equal(revenue.creatorStars, 160);
+  assert.equal(revenue.platformStars, 40);
+});

@@ -2,7 +2,7 @@ import { publicationDeliveryUrl } from "./publicationMediaStorageService.js";
 
 const plain = (value) => typeof value?.toObject === "function" ? value.toObject() : value;
 const safeMedia = (media, includeAssetId = false) => media && ({ ...(includeAssetId && { assetId: media.assetId }), mediaType: media.mediaType, resourceType: media.resourceType, format: media.format, bytes: media.bytes, width: media.width, height: media.height, duration: media.duration, secureUrl: publicationDeliveryUrl(media) });
-const fullChapter = (chapter, includeAssetId = false) => ({ stableChapterId: chapter.stableChapterId, order: chapter.order, title: chapter.title, isPreview: chapter.isPreview, locked: false, blocks: chapter.blocks.map((block) => ({ id: block.id, type: block.type, order: block.order, ...(block.text && { text: block.text }), ...(block.url && { url: block.url, label: block.label }), ...(block.media && { media: safeMedia(block.media, includeAssetId) }) })) });
+const fullChapter = (chapter, includeAssetId = false) => ({ stableChapterId: chapter.stableChapterId, order: chapter.order, title: chapter.title, isPreview: chapter.isPreview, locked: false, blocks: chapter.blocks.map((block) => ({ id: block.id, type: block.type, order: block.order, ...(block.text && { text: block.text }), ...(block.url && { url: block.url, label: block.label }), ...(block.metadata && { metadata: block.metadata }), ...(block.media && { media: safeMedia(block.media, includeAssetId) }) })) });
 const lockedChapter = (chapter) => ({ stableChapterId: chapter.stableChapterId, order: chapter.order, title: chapter.title, isPreview: false, locked: true, blocks: [] });
 
 export function publicationAccess(publication, viewer, { entitlement = null } = {}) {
@@ -12,7 +12,7 @@ export function publicationAccess(publication, viewer, { entitlement = null } = 
   if (item.status === "REMOVED" || !item.publishedSnapshot) return "NOT_VISIBLE";
   if (!["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED", "ARCHIVED"].includes(item.status)) return "NOT_VISIBLE";
   if (item.kind === "SEEN") return "PUBLIC_FULL";
-  if (item.kind === "WORLD" && entitlement === "ENTITLED_WORLD") return "ENTITLED_WORLD";
+  if (item.kind === "WORLD") return "PUBLIC_FULL";
   if (item.kind === "PREMIUM_WORLD" && entitlement === "ACTIVE_PREMIUM_MEMBER") return "ACTIVE_PREMIUM_MEMBER";
   if (item.status === "ARCHIVED") return "NOT_VISIBLE";
   return "PUBLIC_PREVIEW";
