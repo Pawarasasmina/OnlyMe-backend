@@ -11,6 +11,8 @@ import {
 
 const file = { storageKey: "creator/file.jpg", originalName: "file.jpg", mimeType: "image/jpeg", size: 10, checksum: "a", uploadedAt: new Date() };
 const complete = () => ({
+  category: "Travel",
+  socialPages: [{ platform: "Instagram", handle: "@creator" }],
   legalFullName: "Adult Creator",
   dateOfBirth: new Date("1990-01-01"),
   country: "Sri Lanka",
@@ -42,16 +44,16 @@ test("document back rules are explicit", () => {
   assert.equal(documentBackRequired("passport"), false);
 });
 
-test("complete application requires the back of a national ID", () => {
+test("complete application requires one creator page", () => {
   const application = complete();
-  application.documentBack = null;
+  application.socialPages = [];
   assert.throws(() => assertCompleteApplication(application), ApiError);
 });
 
-test("complete application requires an adult creator", () => {
+test("complete application requires a category", () => {
   const application = complete();
-  application.dateOfBirth = new Date();
-  assert.throws(() => assertCompleteApplication(application), /at least 18/);
+  application.category = "";
+  assert.throws(() => assertCompleteApplication(application), /choose what you create/i);
 });
 
 test("pending review is not editable", () => {

@@ -25,6 +25,8 @@ const creatorVerificationSchema = new mongoose.Schema(
   {
     creator: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, unique: true, index: true },
     status: { type: String, enum: VERIFICATION_STATUSES, default: "NOT_STARTED", index: true },
+    category: { type: String, trim: true, default: "", maxlength: 40 },
+    socialPages: [{ platform: { type: String, trim: true, maxlength: 30 }, handle: { type: String, trim: true, maxlength: 120 } }],
     legalFullName: { type: String, trim: true, default: "", maxlength: 150 },
     dateOfBirth: { type: Date, default: null },
     country: { type: String, trim: true, default: "", maxlength: 80, index: true },

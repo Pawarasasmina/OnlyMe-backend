@@ -38,6 +38,8 @@ export function serializeCreatorVerification(verification) {
   return {
     id: verification._id,
     status: verification.status,
+    category: verification.category,
+    socialPages: verification.socialPages || [],
     legalFullName: verification.legalFullName,
     dateOfBirth: verification.dateOfBirth,
     country: verification.country,
