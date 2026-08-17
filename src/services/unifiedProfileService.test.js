@@ -47,6 +47,17 @@ test("profile contract separates published Seens, planets, and legacy content", 
   assert.equal(result.seens.length, 1); assert.equal(result.planets.length, 1); assert.equal(result.publicContent.length, 0);
 });
 
+test("profile contract exposes reposted Seen metadata", () => {
+  const snapshot = { metadata: { title: "Shared Seen", summary: "", description: "", category: "", tags: [], pricing: {}, planet: {} }, chapters: [{ stableChapterId: "c", order: 0, title: "C", isPreview: true, blocks: [] }], version: 1, frozenAt: new Date() };
+  const sharedAt = new Date();
+  const seen = { _id: "seen", creator: owner._id, kind: "SEEN", status: "PUBLISHED", publishedSnapshot: snapshot, shareId: "share-id", shareCaption: "nice", feedCreatedAt: sharedAt, sharedBy: { id: owner._id, name: owner.name } };
+  const result = serializeUnifiedProfile({ owner, roleProfile, viewer: null, content: [], sharedSeens: [seen] });
+  assert.equal(result.sharedSeens.length, 1);
+  assert.equal(result.sharedSeens[0].shareId, "share-id");
+  assert.equal(result.sharedSeens[0].shareCaption, "nice");
+  assert.equal(result.sharedSeens[0].feedCreatedAt, sharedAt);
+});
+
 test("creator profile exposes relationship counts and viewer state", () => {
   const result = serializeUnifiedProfile({ owner, roleProfile: { ...roleProfile, directAccessEnabled: true, directAccessPriceStars: 200 }, viewer: { _id: "fan-id", role: "fan" }, followerCount: 12, followingCount: 4, viewerRelationships: [{ type: "FOLLOW" }, { type: "SEE_SIGNAL" }] });
   assert.deepEqual(result.publicMetrics, { publishedContentCount: 0, followerCount: 12, followingCount: 4, supporterCount: 0 });

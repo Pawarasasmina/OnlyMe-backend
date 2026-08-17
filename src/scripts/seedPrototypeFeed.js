@@ -12,6 +12,8 @@ import User from "../models/User.js";
 const SEED_SOURCE = "prototype-feed-v1";
 const PASSWORD = "OnlyMeTest123!";
 const VIEWER_EMAIL = (process.env.PROTOTYPE_FEED_VIEWER_EMAIL || "creator2@gmail.com").trim().toLowerCase();
+const VALIDATE_IDEAS_COVER = "https://images.unsplash.com/photo-1497366811353-6870744d04b2?auto=format&fit=crop&w=1200&q=80";
+const VALIDATE_IDEAS_INTRO_VIDEO = "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4";
 const now = new Date();
 
 const PEOPLE = [
@@ -34,6 +36,16 @@ const PEOPLE = [
     name: "Ethan Ward",
     role: "creator",
     username: "prototype_ethan",
+  },
+  {
+    avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=320&q=80",
+    category: "Business",
+    city: "London",
+    country: "UK",
+    email: "prototype.james@test.onlyme.local",
+    name: "James Carter",
+    role: "creator",
+    username: "prototype_james",
   },
   {
     avatar: "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=320&q=80",
@@ -139,25 +151,93 @@ const FEED_POSTS = [
 
 const SEENS = [
   {
-    category: "Ideas",
-    cover: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=900&q=80",
-    creator: "prototype_mia",
+    category: "Business",
+    cover: VALIDATE_IDEAS_COVER,
+    creator: "prototype_james",
+    description: "The 48-hour test I run before building anything.",
+    introMedia: {
+      duration: 30,
+      mediaType: "VIDEO",
+      resourceType: "video",
+      secureUrl: VALIDATE_IDEAS_INTRO_VIDEO,
+    },
     key: "validate-ideas",
     title: "How I Validate Ideas",
+    chapters: [
+      {
+        title: "The test",
+        blocks: [
+          { type: "KEY_POINT", text: "If the idea cannot earn one clear yes in 48 hours, I do not build it yet.", metadata: { highlight: "one clear yes", highlightTone: "gold" } },
+          { type: "TEXT", text: "I write the promise in one sentence, send it to ten people who match the buyer, and ask for a tiny commitment." },
+          { type: "KEY_POINT", text: "Day one: define the buyer, write the promise, send ten honest messages.", metadata: { presentation: "CHECKLIST" } },
+          { type: "KEY_POINT", text: "Day two: ask for a deposit, a calendar slot, or a real referral.", metadata: { presentation: "CHECKLIST", highlight: "deposit", highlightTone: "green" } },
+          { type: "KEY_POINT", text: "If everyone says interesting but nobody moves, the idea is not ready.", metadata: { presentation: "CHECKLIST", highlight: "nobody moves", highlightTone: "rose" } },
+          { type: "IMAGE", mediaUrl: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=900&q=80" },
+        ],
+      },
+      {
+        title: "Real examples",
+        blocks: [
+          { type: "TEXT", text: "The strongest signal is not praise. It is behavior: someone forwards it, books it, pays, or asks when they can start." },
+          { type: "IMAGE", mediaUrl: "https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?auto=format&fit=crop&w=900&q=80" },
+          { type: "IMAGE", mediaUrl: "https://images.unsplash.com/photo-1519389950473-47ba0277781c?auto=format&fit=crop&w=900&q=80" },
+          { type: "KEY_POINT", text: "A landing page click is weak. A reply from the exact buyer is stronger.", metadata: { presentation: "CHECKLIST" } },
+          { type: "KEY_POINT", text: "A meeting is stronger than a like. Money is the cleanest signal.", metadata: { presentation: "CHECKLIST", highlight: "Money", highlightTone: "green" } },
+        ],
+      },
+    ],
   },
   {
     category: "Food",
     cover: "https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?auto=format&fit=crop&w=900&q=80",
     creator: "prototype_lina",
+    description: "A short coffee route with the notes I actually use when I want a calm morning in the city.",
     key: "coffee-notes",
     title: "Coffee Notes",
+    chapters: [
+      {
+        title: "The morning route",
+        blocks: [
+          { type: "KEY_POINT", text: "Start early, order simple, and sit where you can watch the room wake up." },
+          { type: "IMAGE", mediaUrl: "https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?auto=format&fit=crop&w=900&q=80" },
+          { type: "TEXT", text: "This is the route I use when I need one slow hour before the day gets loud." },
+          { type: "HIGHLIGHT", text: "Best window seat: arrive before 8:20." },
+        ],
+      },
+      {
+        title: "Order notes",
+        blocks: [
+          { type: "KEY_POINT", text: "Ask what was roasted most recently, not what is most popular." },
+          { type: "TEXT", text: "The best cup is usually the one the barista is most excited to explain." },
+        ],
+      },
+    ],
   },
   {
     category: "Places",
     cover: "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=900&q=80",
     creator: "prototype_mia",
+    description: "Three compact places worth saving for a weekend walk.",
     key: "hidden-places",
     title: "3 Hidden Places I Love",
+    chapters: [
+      {
+        title: "The quiet corner",
+        blocks: [
+          { type: "KEY_POINT", text: "Go just before sunset, when the street is still warm but the crowd has moved on." },
+          { type: "IMAGE", mediaUrl: "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=900&q=80" },
+          { type: "TEXT", text: "This is not a checklist place. Stay ten minutes and let the details show up." },
+          { type: "HIGHLIGHT", text: "Save the second alley, not the main square." },
+        ],
+      },
+      {
+        title: "Map notes",
+        blocks: [
+          { type: "KEY_POINT", text: "Pin the cafe nearby first. It is easier to find than the actual spot." },
+          { type: "TEXT", text: "I use this route when someone asks for a place that still feels personal." },
+        ],
+      },
+    ],
   },
 ];
 
@@ -291,7 +371,7 @@ async function follow(actor, target) {
 }
 
 function reactionRows(usersByUsername, keys = []) {
-  const users = ["prototype_fan_one", "prototype_lina", "prototype_mia", "prototype_ethan"];
+  const users = ["prototype_fan_one", "prototype_lina", "prototype_mia", "prototype_ethan", "prototype_james"];
   return keys.map((reaction, index) => ({
     reaction,
     user: usersByUsername.get(users[index % users.length])._id,
@@ -299,7 +379,7 @@ function reactionRows(usersByUsername, keys = []) {
 }
 
 function viewRows(usersByUsername, count = 0) {
-  const viewers = ["prototype_fan_one", "prototype_lina", "prototype_mia", "prototype_ethan"]
+  const viewers = ["prototype_fan_one", "prototype_lina", "prototype_mia", "prototype_ethan", "prototype_james"]
     .map((username) => usersByUsername.get(username))
     .filter(Boolean);
   return viewers.slice(0, Math.min(viewers.length, count)).map((user, index) => ({
@@ -362,39 +442,83 @@ async function ensureFeedPost(seed, usersByUsername) {
   return existing ? "skipped" : "created";
 }
 
+function seenBlock(seed, chapterIndex, block, blockIndex) {
+  const id = `${seed.key}-c${chapterIndex + 1}-b${blockIndex + 1}`;
+  const base = { id, order: blockIndex, type: block.type, ...(block.metadata && { metadata: block.metadata }) };
+  if (["TEXT", "KEY_POINT", "HIGHLIGHT"].includes(block.type)) return { ...base, text: block.text };
+  if (block.type === "LINK") return { ...base, label: block.label, url: block.url };
+  return {
+    ...base,
+    media: {
+      assetId: `prototype-seen-${seed.key}-${id}`,
+      mediaType: block.type === "VIDEO" ? "VIDEO" : block.type === "AUDIO" || block.type === "VOICE" ? "AUDIO" : "IMAGE",
+      resourceType: block.type === "VIDEO" ? "video" : "image",
+      secureUrl: block.mediaUrl || seed.cover,
+    },
+  };
+}
+
+function seenChapters(seed) {
+  const chapters = seed.chapters?.length ? seed.chapters : [
+    { title: seed.title, blocks: [{ type: "TEXT", text: seed.description || `${seed.title} chapter content.` }] },
+  ];
+  return chapters.map((chapter, chapterIndex) => ({
+    stableChapterId: `${seed.key}-chapter-${chapterIndex + 1}`,
+    order: chapterIndex,
+    title: chapter.title || `Chapter ${chapterIndex + 1}`,
+    blocks: (chapter.blocks || []).map((block, blockIndex) => seenBlock(seed, chapterIndex, block, blockIndex)),
+    isPreview: true,
+  }));
+}
+
 async function ensureSeen(seed, usersByUsername) {
   const creator = usersByUsername.get(seed.creator);
   const existing = await Publication.findOne({ seedSource: SEED_SOURCE, seedKey: seed.key });
   const published = publishedAt(seed.key === "validate-ideas" ? 80 : seed.key === "coffee-notes" ? 180 : 260);
+  const coverMedia = {
+    assetId: `prototype-seen-${seed.key}`,
+    mediaType: "IMAGE",
+    resourceType: "image",
+    secureUrl: seed.cover,
+  };
+  const introMedia = seed.introMedia ? {
+    assetId: `prototype-seen-${seed.key}-intro`,
+    duration: Number(seed.introMedia.duration) || undefined,
+    mediaType: seed.introMedia.mediaType || "VIDEO",
+    resourceType: seed.introMedia.resourceType || "video",
+    secureUrl: seed.introMedia.secureUrl,
+  } : null;
   const publication = await Publication.findOneAndUpdate(
     { seedSource: SEED_SOURCE, seedKey: seed.key },
     {
       $set: {
         category: seed.category,
-        coverMedia: {
-          assetId: `prototype-seen-${seed.key}`,
-          mediaType: "IMAGE",
-          resourceType: "image",
-          secureUrl: seed.cover,
-        },
+        coverMedia,
         creator: creator._id,
+        ...(introMedia ? { introMedia } : {}),
         kind: "SEEN",
         previewPolicy: "ALL_FREE",
-        pricing: { mode: "FREE", starsAmount: 0 },
+        pricing: { mode: "FREE", starsAmount: null, presetId: null },
         publishedAt: published,
         publishedSnapshot: {
-          chapters: [
-            { stableChapterId: `${seed.key}-chapter-1`, title: seed.title, blocks: [], isPreview: true },
-            { stableChapterId: `${seed.key}-chapter-2`, title: "Notes", blocks: [], isPreview: true },
-          ],
+          chapters: seenChapters(seed),
           frozenAt: published,
-          metadata: { title: seed.title, category: seed.category },
+          metadata: {
+            title: seed.title,
+            category: seed.category,
+            description: seed.description,
+            summary: seed.description,
+            coverMedia,
+            ...(introMedia ? { introMedia } : {}),
+            pricing: { mode: "FREE", starsAmount: null, presetId: null },
+          },
           version: 1,
         },
         seedKey: seed.key,
         seedSource: SEED_SOURCE,
         status: "PUBLISHED",
-        summary: `${seed.title} prototype feed seed.`,
+        description: seed.description || `${seed.title} prototype feed seed.`,
+        summary: seed.description || `${seed.title} prototype feed seed.`,
         title: seed.title,
       },
     },
@@ -424,6 +548,7 @@ async function main() {
   await Promise.all([
     follow(usersByUsername.get("prototype_lina"), viewer),
     follow(usersByUsername.get("prototype_mia"), viewer),
+    follow(usersByUsername.get("prototype_james"), viewer),
   ]);
 
   const postResults = await Promise.all(FEED_POSTS.map((seed) => ensureFeedPost(seed, usersByUsername)));

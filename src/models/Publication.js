@@ -8,6 +8,7 @@ const schema = new mongoose.Schema({
   creator: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   kind: { type: String, enum: PUBLICATION_KINDS, required: true }, title: { type: String, trim: true, default: "", maxlength: 120 }, summary: { type: String, trim: true, default: "", maxlength: 300 }, description: { type: String, trim: true, default: "", maxlength: 2000 }, category: { type: String, trim: true, default: "", maxlength: 40 }, tags: [{ type: String, trim: true, lowercase: true, maxlength: 40 }],
   coverMedia: { type: mediaSchema, default: undefined }, introMedia: { type: mediaSchema, default: undefined },
+  replyToSeen: { type: mongoose.Schema.Types.ObjectId, ref: "Publication", default: null, index: true },
   planet: { emoji: { type: String, default: "" }, slot: { type: String, enum: ["WORLD_1", "WORLD_2", "PREMIUM", null], default: null }, accent: { type: String, default: "" } },
   pricing: { mode: { type: String, enum: ["FREE", "ONE_TIME", "MONTHLY"], required: true }, starsAmount: { type: Number, default: null }, presetId: { type: String, default: null } },
   previewPolicy: { type: String, enum: ["ALL_FREE", "ONE_CHAPTER", "ONE_OR_TWO_CHAPTERS"], required: true },
