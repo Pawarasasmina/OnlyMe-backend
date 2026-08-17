@@ -5,6 +5,8 @@ import Notification from "../models/Notification.js";
 import Subscription from "../models/Subscription.js";
 import Transaction from "../models/Transaction.js";
 import Wallet from "../models/Wallet.js";
+import SeenEngagement from "../models/SeenEngagement.js";
+import WallEngagement from "../models/WallEngagement.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 
@@ -224,13 +226,15 @@ function serializeActivityItem(item) {
 }
 
 async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivity) {
-  const [subscriptions, notifications, transactions, messages] = await Promise.all([
+  const [subscriptions, notifications, transactions, messages, seenComments, wallComments] = await Promise.all([
     Subscription.find({ fan: fanId }).sort({ updatedAt: -1 }).limit(limit).populate("creator", "name username avatar").lean(),
     Notification.find({ user: fanId }).sort({ createdAt: -1 }).limit(limit).lean(),
     wallet
       ? Transaction.find({ wallet: wallet._id }).sort({ createdAt: -1 }).limit(limit).lean()
       : Promise.resolve([]),
     Message.find({ recipient: fanId }).sort({ createdAt: -1 }).limit(limit).populate("sender", "name username avatar role status").lean(),
+    SeenEngagement.find({ user: fanId, type: "COMMENT" }).sort({ createdAt: -1 }).limit(limit).populate({ path: "publication", select: "title creator", populate: { path: "creator", select: "name username avatar" } }).lean(),
+    WallEngagement.find({ user: fanId, type: "COMMENT" }).sort({ createdAt: -1 }).limit(limit).populate({ path: "post", select: "text creator", populate: { path: "creator", select: "name username avatar" } }).lean(),
   ]);
 
   return [
@@ -273,6 +277,24 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
         relatedCreator: serializeCreator(message.sender),
         actionPath: "/fan/messages",
       })),
+    ...seenComments.filter((comment) => comment.publication).map((comment) => ({
+      id: `seen-comment-${comment._id}`,
+      type: "comment",
+      description: `You commented on ${comment.publication.creator?.name || "a creator"}'s Seen`,
+      createdAt: comment.createdAt,
+      relatedCreator: serializeCreator(comment.publication.creator),
+      relatedContent: { title: comment.publication.title || "Seen", type: "seen" },
+      actionPath: `/seen/${comment.publication._id}`,
+    })),
+    ...wallComments.filter((comment) => comment.post).map((comment) => ({
+      id: `wall-comment-${comment._id}`,
+      type: "comment",
+      description: `You commented on ${comment.post.creator?.name || "a creator"}'s Wall post`,
+      createdAt: comment.createdAt,
+      relatedCreator: serializeCreator(comment.post.creator),
+      relatedContent: { title: String(comment.post.text || "Wall post").slice(0, 80), type: "wall" },
+      actionPath: `/posts/${comment.post._id}`,
+    })),
   ]
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
     .slice(0, limit)

@@ -54,6 +54,7 @@ const userSchema = new mongoose.Schema(
       enum: ["active", "suspended"],
       default: "active",
     },
+    deletionRequestedAt: { type: Date, default: null },
     messagingRestrictedUntil: { type: Date, default: null },
     messagingRestrictionReason: { type: String, trim: true, maxlength: 1000, default: "" },
     messagingRestrictedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },

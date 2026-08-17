@@ -165,6 +165,21 @@ export const logout = asyncHandler(async (_req, res) => {
   return sendResponse(res, 200, "Logout successful");
 });
 
+export const deleteAccount = asyncHandler(async (req, res) => {
+  if (req.user.role === "admin") {
+    throw new ApiError(403, "Administrator accounts cannot be deleted here");
+  }
+
+  req.user.status = "suspended";
+  req.user.deletionRequestedAt = new Date();
+  await req.user.save({ validateModifiedOnly: true });
+
+  res.clearCookie("refreshToken", refreshCookieOptions);
+  return sendResponse(res, 200, "Account deletion requested", {
+    deletionRequestedAt: req.user.deletionRequestedAt,
+  });
+});
+
 export const refreshSession = asyncHandler(async (req, res) => {
   const refreshToken = req.cookies.refreshToken;
   if (!refreshToken) {

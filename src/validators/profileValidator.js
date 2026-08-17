@@ -18,6 +18,7 @@ export const RESERVED_USERNAMES = new Set([
 
 const usernamePattern = /^[a-z0-9_.]+$/;
 const allowedVisibility = new Set(["public", "private"]);
+const allowedLanguages = new Set(["en", "ar", "ru", "es", "fr", "pt"]);
 
 export function sanitizeText(value, maxLength) {
   if (value === undefined || value === null) {
@@ -88,6 +89,22 @@ function validateVisibility(value) {
   return value;
 }
 
+function validateTimezone(value) {
+  const timezone = sanitizeText(value, 80) || "UTC";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format();
+  } catch {
+    throw new ApiError(400, "Select a valid time zone");
+  }
+  return timezone;
+}
+
+function validatePreferredLanguage(value) {
+  const language = sanitizeText(value, 12).toLowerCase() || "en";
+  if (!allowedLanguages.has(language)) throw new ApiError(400, "Select a supported language");
+  return language;
+}
+
 function validateNotificationPreferences(value, allowedKeys) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -136,10 +153,10 @@ function notificationKeysFor(role) {
 export function validateSettingsPayload(role, type, payload = {}) {
   const preferredLanguage = payload.preferredLanguage === undefined
     ? undefined
-    : sanitizeText(payload.preferredLanguage, 12) || "en";
+    : validatePreferredLanguage(payload.preferredLanguage);
   const timezone = payload.timezone === undefined
     ? undefined
-    : sanitizeText(payload.timezone, 80) || "UTC";
+    : validateTimezone(payload.timezone);
 
   if (type === "privacy") {
     return {
@@ -220,8 +237,8 @@ export function validateRoleProfilePayload(role, payload, user) {
   }
 
   const preferredLanguage =
-    payload.preferredLanguage === undefined ? undefined : sanitizeText(payload.preferredLanguage, 12) || "en";
-  const timezone = payload.timezone === undefined ? undefined : sanitizeText(payload.timezone, 80) || "UTC";
+    payload.preferredLanguage === undefined ? undefined : validatePreferredLanguage(payload.preferredLanguage);
+  const timezone = payload.timezone === undefined ? undefined : validateTimezone(payload.timezone);
 
   if (role === "creator") {
     const categories = payload.categories === undefined ? undefined : payload.categories;
