@@ -22,4 +22,8 @@ export async function verifyPublicationAsset({ assetId, blockId, chapterId, crea
   return { assetId: asset.public_id, resourceType: asset.resource_type, mediaType, secureUrl: asset.secure_url, format, bytes: asset.bytes, width: asset.width, height: asset.height, duration: asset.duration };
 }
 
-export function publicationDeliveryUrl(media) { if (!media?.assetId) return ""; return cloudinary.url(media.assetId, { secure: true, sign_url: true, type: "authenticated", resource_type: media.resourceType || (media.mediaType === "IMAGE" ? "image" : "video"), format: media.format || undefined }); }
+export function publicationDeliveryUrl(media) {
+  if (!media?.assetId) return "";
+  if (/^https?:\/\//i.test(media.secureUrl || "") && !String(media.assetId).startsWith("onlyme/publications/")) return media.secureUrl;
+  return cloudinary.url(media.assetId, { secure: true, sign_url: true, type: "authenticated", resource_type: media.resourceType || (media.mediaType === "IMAGE" ? "image" : "video"), format: media.format || undefined });
+}

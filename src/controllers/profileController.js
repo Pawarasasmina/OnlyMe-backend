@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import AdminProfile from "../models/AdminProfile.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
+import PublicationPreference from "../models/PublicationPreference.js";
 import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
 import Content from "../models/Content.js";
@@ -147,6 +148,44 @@ function serializeBlockedAccount(block) {
   };
 }
 
+function serializeMutedAccount(preference) {
+  const creator = preference.creator;
+
+  return {
+    id: creator._id,
+    mutedPreferenceId: preference._id,
+    displayName: creator.name,
+    username: creator.username,
+    role: creator.role,
+    profilePhoto: creator.avatar,
+    isVerified: creator.isVerified,
+    mutedAt: preference.createdAt,
+  };
+}
+
+function serializeHiddenSeen(preference) {
+  const publication = preference.publication;
+  const creator = publication.creator;
+
+  return {
+    id: publication._id,
+    hiddenPreferenceId: preference._id,
+    title: publication.title || "Untitled Seen",
+    summary: publication.summary || "",
+    coverMedia: publication.coverMedia || null,
+    creator: creator ? {
+      id: creator._id,
+      displayName: creator.name,
+      username: creator.username,
+      role: creator.role,
+      profilePhoto: creator.avatar,
+      isVerified: creator.isVerified,
+    } : null,
+    hiddenAt: preference.createdAt,
+    reason: preference.reason || "",
+  };
+}
+
 function calculateCompletion(user, profile) {
   if (user.role === "creator") {
     const categories = profile.categories?.length ? profile.categories : profile.category ? [profile.category] : [];
@@ -232,6 +271,68 @@ export const unblockAccount = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, result.deletedCount ? "Account unblocked" : "Account was not blocked", {
     blockedUserId: req.params.userId,
     unblocked: true,
+  });
+});
+
+export const listMyMutedAccounts = asyncHandler(async (req, res) => {
+  const preferences = await PublicationPreference.find({ user: req.user._id, type: "MUTED_CREATOR" })
+    .sort({ createdAt: -1 })
+    .populate("creator", "name username role avatar isVerified status")
+    .lean();
+
+  return sendResponse(res, 200, "Muted accounts fetched", {
+    items: preferences.filter((preference) => preference.creator).map(serializeMutedAccount),
+  });
+});
+
+export const unmuteAccount = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.userId)) {
+    throw new ApiError(400, "Invalid account");
+  }
+
+  const result = await PublicationPreference.deleteOne({
+    creator: req.params.userId,
+    type: "MUTED_CREATOR",
+    user: req.user._id,
+  });
+
+  return sendResponse(res, 200, result.deletedCount ? "Account unmuted" : "Account was not muted", {
+    mutedUserId: req.params.userId,
+    unmuted: true,
+  });
+});
+
+export const listMyHiddenSeens = asyncHandler(async (req, res) => {
+  const preferences = await PublicationPreference.find({ user: req.user._id, type: "HIDDEN_SEEN" })
+    .sort({ createdAt: -1 })
+    .populate({
+      path: "publication",
+      select: "title summary coverMedia creator kind status publishedAt",
+      populate: { path: "creator", select: "name username role avatar isVerified status" },
+    })
+    .lean();
+
+  return sendResponse(res, 200, "Hidden Seens fetched", {
+    items: preferences
+      .filter((preference) => preference.publication?.kind === "SEEN")
+      .map(serializeHiddenSeen),
+  });
+});
+
+export const showHiddenSeenAgain = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.seenId)) {
+    throw new ApiError(400, "Invalid Seen");
+  }
+
+  const result = await PublicationPreference.deleteOne({
+    publication: req.params.seenId,
+    type: "HIDDEN_SEEN",
+    user: req.user._id,
+  });
+
+  return sendResponse(res, 200, result.deletedCount ? "Seen will be shown again" : "Seen was not hidden", {
+    publicationId: req.params.seenId,
+    hidden: false,
   });
 });
 

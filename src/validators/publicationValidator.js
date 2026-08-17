@@ -4,6 +4,7 @@ import { BLOCK_TYPES, KIND_RULES, PLANET_MARKER_COLORS, PREMIUM_PRICE_PRESETS, P
 
 const text = (value, max, name, required = false) => { const result = typeof value === "string" ? value.trim() : ""; if (required && !result) throw new ApiError(400, `${name} is required`); if (result.length > max) throw new ApiError(400, `${name} cannot exceed ${max} characters`); return result; };
 const safeUrl = (value) => { try { const url = new URL(String(value)); if (!["http:", "https:"].includes(url.protocol)) throw new Error(); return url.toString(); } catch { throw new ApiError(400, "Links must use http or https"); } };
+const objectId = (value, name) => { const result = String(value || "").trim(); if (!result) return null; if (!/^[a-f\d]{24}$/i.test(result)) throw new ApiError(400, `${name} must be a valid ID`); return result; };
 
 export function derivedPublicationPolicy(kind) {
   if (!PUBLICATION_KINDS.includes(kind)) throw new ApiError(400, "Unsupported publication kind");
@@ -18,6 +19,7 @@ export function normalizePublicationDraft(payload = {}, { partial = false } = {}
   if (!partial || Object.hasOwn(payload, "tags")) { if (!Array.isArray(payload.tags || [])) throw new ApiError(400, "Tags must be an array"); result.tags = [...new Set((payload.tags || []).map((tag) => text(tag, PUBLICATION_LIMITS.tag, "tag").toLowerCase()).filter(Boolean))]; if (result.tags.length > PUBLICATION_LIMITS.tags) throw new ApiError(400, "Too many tags"); }
   if (Object.hasOwn(payload, "pricing")) result.pricing = payload.pricing;
   if (Object.hasOwn(payload, "planet")) result.planet = { emoji: text(payload.planet?.emoji, 16, "planet emoji"), accent: text(payload.planet?.accent, 40, "planet accent") };
+  if (Object.hasOwn(payload, "replyToSeenId") || Object.hasOwn(payload, "replyToSeen")) result.replyToSeen = objectId(payload.replyToSeenId || payload.replyToSeen, "replyToSeenId");
   return result;
 }
 
@@ -30,7 +32,7 @@ export function normalizeBlocks(blocks = []) {
     const item = { id, type: block.type, order };
     if (TEXT_BLOCK_TYPES.includes(block.type)) { item.text = text(block.text, PUBLICATION_LIMITS.chapterText, "Block text", true); textualCharacters += item.text.length; if (block.type === "HIGHLIGHT") { const color = String(block.metadata?.color || "ICE_BLUE").toUpperCase(); if (!PLANET_MARKER_COLORS.includes(color)) throw new ApiError(400, "Marker color must use one of the six brand colors"); item.metadata = { color }; } }
     if (block.type === "LINK") { item.url = safeUrl(block.url); item.label = text(block.label, PUBLICATION_LIMITS.blockLabel, "Link label", true); textualCharacters += item.label.length; }
-    if (["IMAGE", "VIDEO", "AUDIO", "VOICE"].includes(block.type)) { if (!block.media?.assetId) throw new ApiError(400, "Verified media is required"); item.media = block.media; }
+    if (["IMAGE", "VIDEO", "AUDIO", "VOICE"].includes(block.type)) { if (!block.media?.assetId) throw new ApiError(400, "Verified media is required"); item.media = block.media; if (block.metadata?.storyPreview) item.metadata = { label: text(block.metadata.label, PUBLICATION_LIMITS.blockLabel, "Story preview label"), storyPreview: true }; }
     return item;
   });
   if (textualCharacters > PUBLICATION_LIMITS.chapterText) throw new ApiError(400, "Chapter text cannot exceed 2000 characters");

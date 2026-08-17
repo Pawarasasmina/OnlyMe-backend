@@ -1,10 +1,12 @@
 import mongoose from "mongoose";
 
+export const SEEN_REACTIONS = ["LIKE", "LOVE", "FIRE", "CLAP", "LAUGH", "SEE_YOU", "SAD", "PHONE", "STRONG", "PRAY", "INSIGHTFUL"];
+
 const seenEngagementSchema = new mongoose.Schema({
   publication: { type: mongoose.Schema.Types.ObjectId, ref: "Publication", required: true, index: true },
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   type: { type: String, enum: ["REACTION", "COMMENT", "SHARE", "SAVE", "WALKED"], required: true, index: true },
-  reaction: { type: String, enum: ["LIKE", "LOVE", "INSIGHTFUL"], default: undefined },
+  reaction: { type: String, enum: SEEN_REACTIONS, default: undefined },
   text: { type: String, trim: true, maxlength: 500, default: undefined },
 }, { timestamps: true });
 

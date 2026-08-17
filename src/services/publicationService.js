@@ -13,7 +13,7 @@ const history = async (publication, action, previousStatus, transitionId = crypt
 const ensureId = (id) => { if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid publication ID"); };
 const editable = async (creatorId, id) => { ensureId(id); const publication = await Publication.findOne({ _id: id, creator: creatorId }).select("+submittedSnapshot"); if (!publication) throw new ApiError(404, "Publication not found"); if (!EDITABLE_PUBLICATION_STATUSES.includes(publication.status)) throw new ApiError(409, "Publication is not editable"); return publication; };
 const expectedVersion = (payload) => { if (!Number.isSafeInteger(payload.statusVersion)) throw new ApiError(400, "statusVersion is required"); return payload.statusVersion; };
-const metadataSnapshot = (publication) => ({ kind: publication.kind, title: publication.title, summary: publication.summary, description: publication.description, category: publication.category, tags: publication.tags, coverMedia: publication.coverMedia, introMedia: publication.introMedia, planet: publication.planet, pricing: publication.pricing, previewPolicy: publication.previewPolicy });
+const metadataSnapshot = (publication) => ({ kind: publication.kind, title: publication.title, summary: publication.summary, description: publication.description, category: publication.category, tags: publication.tags, coverMedia: publication.coverMedia, introMedia: publication.introMedia, replyToSeen: publication.replyToSeen, planet: publication.planet, pricing: publication.pricing, previewPolicy: publication.previewPolicy });
 const chapterSnapshot = (chapter) => ({ stableChapterId: chapter.stableChapterId, order: chapter.order, title: chapter.title, blocks: chapter.blocks.map((block) => plain(block)), isPreview: chapter.isPreview, releaseMode: chapter.releaseMode, releaseAt: chapter.releaseAt, draftVersion: chapter.draftVersion });
 const plain = (value) => typeof value?.toObject === "function" ? value.toObject() : value;
 
@@ -89,6 +89,7 @@ export async function cancelPublishedRevision(creatorId, id, payload) {
       planet: metadata.planet,
       pricing: metadata.pricing,
       previewPolicy: metadata.previewPolicy,
+      replyToSeen: metadata.replyToSeen || null,
       status: "PUBLISHED",
       creatorVisibleFeedback: "",
       submittedSnapshot: current.publishedSnapshot,
@@ -96,7 +97,7 @@ export async function cancelPublishedRevision(creatorId, id, payload) {
       lastTransitionId: transitionId,
     };
     const unsetMetadata = {};
-    for (const field of ["coverMedia", "introMedia"]) {
+    for (const field of ["coverMedia", "introMedia", "replyToSeen"]) {
       if (metadata[field]) restoredMetadata[field] = metadata[field];
       else unsetMetadata[field] = 1;
     }
