@@ -157,13 +157,14 @@ function scoreText(query, values = []) {
 }
 
 function serializePerson({ profile, user, query }) {
-  const categories = user.role === "creator"
+  const creatorEnabled = user.creatorApprovalStatus === "approved";
+  const categories = creatorEnabled
     ? [...new Set([...(profile.categories || []), profile.category].filter(Boolean))]
     : profile.interests || [];
   const location = profile.privacySettings?.showLocation === false ? publicLocation("", "") : publicLocation(profile.city, profile.country);
   const title = user.name || user.username;
   const subtitleParts = [`@${user.username}`];
-  if (user.role === "creator" && (profile.category || categories[0])) subtitleParts.push(profile.category || categories[0]);
+  if (creatorEnabled && (profile.category || categories[0])) subtitleParts.push(profile.category || categories[0]);
   if (location.city || location.country) subtitleParts.push([location.city, location.country].filter(Boolean).join(", "));
 
   return {
@@ -178,7 +179,7 @@ function serializePerson({ profile, user, query }) {
     category: profile.category || categories[0] || "",
     location,
     metadata: {
-      role: user.role,
+      role: creatorEnabled ? "creator" : "fan",
       username: user.username,
       profileCategory: profile.category || categories[0] || "",
       orbitStatus: cleanText(profile.orbitStatus, 80),
@@ -197,10 +198,6 @@ async function searchPeople({ blockedIds, category, cursor = 0, limit, location,
     _id: { $nin: [user._id, ...blockedObjectIds] },
     role: { $in: ["fan", "creator"] },
     status: "active",
-    $or: [
-      { role: "fan" },
-      { role: "creator", creatorApprovalStatus: "approved" },
-    ],
   };
   const matchingUserIds = query
     ? await User.find({
@@ -210,7 +207,6 @@ async function searchPeople({ blockedIds, category, cursor = 0, limit, location,
     : [];
   const profileTextOr = queryOr(query || " ", ["bio", "orbitQuote", "orbitStatus", "city", "country", "category", "categories", "interests"]);
   const commonProfileFilter = {
-    profileVisibility: "public",
     "privacySettings.allowDiscovery": { $ne: false },
     ...(category ? { $or: [{ category: regexFor(category) }, { categories: regexFor(category) }, { interests: regexFor(category) }] } : {}),
     ...(location ? { $or: [{ city: regexFor(location) }, { country: regexFor(location) }] } : {}),
@@ -220,8 +216,8 @@ async function searchPeople({ blockedIds, category, cursor = 0, limit, location,
     : commonProfileFilter;
 
   const [creatorProfiles, fanProfiles] = await Promise.all([
-    CreatorProfile.find(profileQuery).populate({ path: "user", match: { ...userMatch, role: "creator", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified role status creatorApprovalStatus createdAt" }).limit(300).lean(),
-    FanProfile.find(profileQuery).populate({ path: "user", match: { ...userMatch, role: "fan" }, select: "name username avatar isVerified role status createdAt" }).limit(300).lean(),
+    CreatorProfile.find(profileQuery).populate({ path: "user", match: { ...userMatch, role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved" }, select: "name username avatar isVerified role status creatorApprovalStatus createdAt" }).limit(300).lean(),
+    FanProfile.find(profileQuery).populate({ path: "user", match: { ...userMatch, creatorApprovalStatus: { $ne: "approved" } }, select: "name username avatar isVerified role status creatorApprovalStatus createdAt" }).limit(300).lean(),
   ]);
 
   const scored = [...creatorProfiles, ...fanProfiles]
@@ -267,7 +263,7 @@ async function eligibleCreatorIds(blockedIds) {
   const blockedObjectIds = objectIdList(blockedIds);
   const users = await User.find({
     _id: { $nin: blockedObjectIds },
-    role: "creator",
+    role: { $in: ["fan", "creator"] },
     status: "active",
     creatorApprovalStatus: "approved",
   }).select("_id").lean();
@@ -380,7 +376,7 @@ async function searchPlaces({ blockedIds, category, cursor = 0, limit, location,
       "privacySettings.allowDiscovery": { $ne: false },
       "privacySettings.showLocation": { $ne: false },
       city: { $ne: "" },
-    }).populate({ path: "user", match: { _id: { $nin: blockedObjectIds }, role: "creator", status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified" }).limit(200).lean(),
+    }).populate({ path: "user", match: { _id: { $nin: blockedObjectIds }, role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified" }).limit(200).lean(),
     FeedPost.find({ status: "published", visibility: "public", deletedAt: null, location: { $ne: "" } }).select("location").limit(200).lean(),
   ]);
 
@@ -445,7 +441,7 @@ async function searchJourneys({ blockedIds, cursor = 0, limit, query, sort }) {
       .sort(sort === "newest" ? { updatedAt: -1 } : { supporterCount: -1, updatedAt: -1 })
       .skip(cursor)
       .limit(limit)
-      .populate({ path: "user", match: { _id: { $nin: blockedObjectIds }, role: "creator", status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified" })
+      .populate({ path: "user", match: { _id: { $nin: blockedObjectIds }, role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified" })
       .lean(),
     OrbitDream.countDocuments(filter),
   ]);

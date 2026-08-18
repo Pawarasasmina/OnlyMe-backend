@@ -12,6 +12,8 @@
     "seed:prototype-feed": "node src/scripts/seedPrototypeFeed.js",
     "seed:orbit": "node src/scripts/seedOrbitData.js",
     "migrate:creator-verification": "node src/scripts/migrateCreatorVerification.js",
+    "migrate:accounts:dry-run": "node src/scripts/migrateUnifiedAccounts.js",
+    "migrate:accounts": "node src/scripts/migrateUnifiedAccounts.js --apply",
     "migrate:content:dry-run": "node src/scripts/migrateContentWorkflow.js --dry-run",
     "migrate:content": "node src/scripts/migrateContentWorkflow.js --apply",
     "analyze:publications": "node src/scripts/analyzeLegacyContentForPublications.js",

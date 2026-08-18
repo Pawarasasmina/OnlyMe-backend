@@ -89,7 +89,7 @@ const serialize = (story, viewer, engagement, insights = null) => {
     username: story.creator?.username,
     avatar: story.creator?.avatar || story.image.url,
     verified: Boolean(story.creator?.isVerified),
-    role: "creator",
+    role: story.creator?.creatorApprovalStatus === "approved" ? "creator" : "fan",
   };
 
   return {
@@ -205,12 +205,13 @@ export const listStories = asyncHandler(async (req, res) => {
       { audience: "close_circle", creator: { $in: closeCircleIds } },
     ],
   };
-  const rawStories = await Story.find({ expiresAt: { $gt: now }, ...creatorFilter }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified role status activeStatus lastSeenAt").lean();
+  const rawStories = await Story.find({ expiresAt: { $gt: now }, ...creatorFilter }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified role creatorApprovalStatus status activeStatus lastSeenAt").lean();
   const stories = rawStories.filter((story) => story.creator && story.creator.status === "active");
   const storyIds = stories.map((item) => item._id);
   const engagements = await StoryEngagement.find({ fan: req.user._id, story: { $in: storyIds } }).lean();
   const byStory = new Map(engagements.map((item) => [String(item.story), item]));
-  const creatorEngagements = req.user.role === "creator" ? await StoryEngagement.find({ story: { $in: storyIds } }).populate("fan", "name username avatar").sort({ updatedAt: -1 }).lean() : [];
+  const ownStoryIds = stories.filter((story) => String(story.creator?._id) === String(req.user._id)).map((story) => story._id);
+  const creatorEngagements = await StoryEngagement.find({ story: { $in: ownStoryIds } }).populate("fan", "name username avatar").sort({ updatedAt: -1 }).lean();
   const insightsByStory = new Map();
   for (const item of creatorEngagements) {
     const key = String(item.story);

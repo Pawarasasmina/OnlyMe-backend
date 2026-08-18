@@ -25,9 +25,9 @@ export function serializePaidCall(call) {
 }
 
 export async function paidCallOffer(fan, creatorId) {
-  if (fan.role !== "fan") throw new ApiError(403, "Only fans can request a paid creator call");
+  if (!["fan", "creator"].includes(fan.role)) throw new ApiError(403, "This account cannot request a paid creator call");
   const [creator, profile, wallet, blocked] = await Promise.all([
-    User.findOne({ _id: creatorId, role: "creator", status: "active" }).select("_id name username avatar role").lean(),
+    User.findOne({ _id: creatorId, role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved", status: "active" }).select("_id name username avatar role creatorApprovalStatus").lean(),
     CreatorProfile.findOne({ user: creatorId }).select("directCallEnabled directCallPriceStars directCallDurationMinutes directCallAutoDeclineAway").lean(),
     Wallet.findOne({ user: fan._id }).select("balance").lean(),
     UserBlock.exists({ $or: [{ blocker: fan._id, blocked: creatorId }, { blocker: creatorId, blocked: fan._id }] }),

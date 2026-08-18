@@ -23,8 +23,9 @@ import { assertMessagingAccess } from "../services/messagingAccessService.js";
 import { createDirectAccessMessageAtomic, creatorTypicalReplyHours, releaseDirectAccessMessageReservation, reserveDirectAccessMessage, serializeDAWindow, settleDirectAccessReply } from "../services/directAccessService.js";
 import { serializePublication } from "../services/publicationAccessService.js";
 
-const userFields = "name username avatar role isVerified status lastSeenAt";
-const person = (user, reason = "") => user && ({ id: user._id.toString(), displayName: user.name, name: user.name, username: user.username, avatarUrl: user.avatar || null, role: user.role, isVerified: Boolean(user.isVerified), lastSeenAt: user.lastSeenAt || null, reason });
+const userFields = "name username avatar role creatorApprovalStatus isVerified status lastSeenAt";
+const isApprovedCreator = (user) => user?.creatorApprovalStatus === "approved";
+const person = (user, reason = "") => user && ({ id: user._id.toString(), displayName: user.name, name: user.name, username: user.username, avatarUrl: user.avatar || null, role: user.creatorApprovalStatus === "approved" ? "creator" : "fan", isCreator: user.creatorApprovalStatus === "approved", isVerified: Boolean(user.isVerified), lastSeenAt: user.lastSeenAt || null, reason });
 const REACTION_EMOJIS = ["❤️", "😂", "😮", "😢", "😡", "👍"];
 const serializedReply = (reply) => reply ? {
   id: String(reply._id || reply),
@@ -76,11 +77,8 @@ async function assertAllowedPair(current, otherId, { allowBlocked = false } = {}
   if (current._id.equals(otherId)) throw new ApiError(400, "You cannot message yourself");
   const other = await User.findOne({ _id: otherId, status: "active" }).select(userFields);
   if (!other) throw new ApiError(404, "Account not found");
-  const roles = new Set([current.role, other.role]);
-  const isFanCreatorPair = roles.has("fan") && roles.has("creator");
-  const isCreatorShareThread = current.role === "creator" && other.role === "creator";
-  if (!isFanCreatorPair && !isCreatorShareThread) throw new ApiError(403, "Messages are currently available only between fans and creators");
-  if (other.role === "creator") {
+  if (!["fan", "creator"].includes(current.role) || !["fan", "creator"].includes(other.role)) throw new ApiError(403, "Messages are unavailable for this account");
+  if (isApprovedCreator(other)) {
     const profile = await CreatorProfile.findOne({ user: other._id }).select("messagingEnabled").lean();
     if (profile?.messagingEnabled === false) throw new ApiError(403, "This creator is not accepting messages");
   }
@@ -91,12 +89,10 @@ async function assertAllowedPair(current, otherId, { allowBlocked = false } = {}
   return other;
 }
 
-const isFanCreatorPair = (current, other) => new Set([current.role, other.role]).has("fan") && new Set([current.role, other.role]).has("creator");
 const pairFor = (current, other) => {
   const ids = [String(current._id), String(other._id)].sort();
-  if (isFanCreatorPair(current, other)) return current.role === "fan"
-    ? { fan: current._id, creator: other._id, participants: [current._id, other._id], participantKey: ids.join(":") }
-    : { fan: other._id, creator: current._id, participants: [current._id, other._id], participantKey: ids.join(":") };
+  if (isApprovedCreator(other) && !isApprovedCreator(current)) return { fan: current._id, creator: other._id, participants: [current._id, other._id], participantKey: ids.join(":") };
+  if (isApprovedCreator(current) && !isApprovedCreator(other)) return { fan: other._id, creator: current._id, participants: [current._id, other._id], participantKey: ids.join(":") };
   return { fan: ids[0], creator: ids[1], participants: [current._id, other._id], participantKey: ids.join(":") };
 };
 async function assertAllowedShareRecipient(current, otherId) {
@@ -104,10 +100,8 @@ async function assertAllowedShareRecipient(current, otherId) {
   if (current._id.equals(otherId)) throw new ApiError(400, "You cannot message yourself");
   const other = await User.findOne({ _id: otherId, status: "active" }).select(`${userFields} creatorApprovalStatus`);
   if (!other || other.role === "admin") throw new ApiError(404, "Account not found");
-  if (current.role === "fan" && other.role !== "creator") throw new ApiError(403, "Fans can share posts with creators");
-  if (current.role === "creator" && !["fan", "creator"].includes(other.role)) throw new ApiError(403, "This account cannot receive shares");
-  if (other.role === "creator") {
-    if (other.creatorApprovalStatus !== "approved") throw new ApiError(403, "This creator cannot receive shares yet");
+  if (!["fan", "creator"].includes(current.role) || !["fan", "creator"].includes(other.role)) throw new ApiError(403, "This account cannot receive shares");
+  if (isApprovedCreator(other)) {
     const profile = await CreatorProfile.findOne({ user: other._id }).select("messagingEnabled").lean();
     if (profile?.messagingEnabled === false) throw new ApiError(403, "This creator is not accepting messages");
   }
@@ -119,7 +113,6 @@ async function assertAllowedShareRecipient(current, otherId) {
 }
 
 async function conversationFor(current, other) {
-  if (current.role === "creator" && other.role === "creator") return null;
   const pair = pairFor(current, other);
   let conversation = await Conversation.findOne(pair.participantKey ? { $or: [{ participantKey: pair.participantKey }, ...(pair.fan ? [{ fan: pair.fan, creator: pair.creator }] : [])] } : pair);
   if (!conversation) {
@@ -130,7 +123,7 @@ async function conversationFor(current, other) {
 }
 
 async function prepareConversationForSend(current, other, conversation) {
-  const creatorRequest = current.role === "fan" && other.role === "creator";
+  const creatorRequest = !isApprovedCreator(current) && isApprovedCreator(other);
   if (creatorRequest && conversation?.status === "ACTIVE" && conversation.acceptedByCreator !== true) {
     const follows = await ProfileRelationship.exists({ actor: current._id, target: other._id, type: "FOLLOW" });
     if (!follows) conversation = await Conversation.findByIdAndUpdate(conversation._id, { $set: { status: "REQUEST", requestRecipient: other._id, requestStartedAt: new Date(), acceptedAt: null } }, { new: true });
@@ -141,7 +134,7 @@ async function prepareConversationForSend(current, other, conversation) {
   }
   const recipientOfRequest = conversation.requestRecipient
     ? String(conversation.requestRecipient) === String(current._id)
-    : current.role === "creator" && String(conversation.creator) === String(current._id);
+    : String(conversation.creator) === String(current._id);
   if (conversation.status === "REQUEST" && recipientOfRequest) throw new ApiError(403, "Accept this message request before replying");
   if (conversation.status === "DECLINED") throw new ApiError(403, "This message request was declined");
   if (conversation.status === "REQUEST") {
@@ -195,16 +188,11 @@ async function blockedIdsFor(userId) {
   return new Set(blocks.flatMap((item) => [String(item.blocker), String(item.blocked)]));
 }
 
-function shareRecipientMatch({ current, blockedIds = new Set(), ids = [], q = "" } = {}) {
+function shareRecipientMatch({ current: _current, blockedIds = new Set(), ids = [], q = "" } = {}) {
   const clauses = [
     { status: "active" },
-    { role: current.role === "fan" ? "creator" : { $in: ["fan", "creator"] } },
+    { role: { $in: ["fan", "creator"] } },
   ];
-  if (current.role === "fan") {
-    clauses.push({ creatorApprovalStatus: "approved" });
-  } else {
-    clauses.push({ $or: [{ role: "fan" }, { role: "creator", creatorApprovalStatus: "approved" }] });
-  }
   const excludedIds = [...blockedIds].filter(Boolean);
   if (excludedIds.length) clauses.push({ _id: { $nin: excludedIds } });
   if (ids.length) clauses.push({ _id: { $in: ids } });
@@ -292,18 +280,17 @@ async function sharedContentSnapshot(input, viewer) {
 
 async function readyStandardConversation(current, other) {
   let conversation = await conversationFor(current, other);
-  if (current.role === "fan" && conversation?.status === "ACTIVE" && conversation.acceptedByCreator !== true) {
+  if (conversation?.status === "ACTIVE" && conversation.acceptedByCreator !== true) {
     const follows = await ProfileRelationship.exists({ actor: current._id, target: other._id, type: "FOLLOW" });
     if (!follows) conversation = await Conversation.findByIdAndUpdate(conversation._id, { $set: { status: "REQUEST", requestStartedAt: new Date(), acceptedAt: null } }, { new: true });
   }
   if (!conversation) {
-    if (current.role !== "fan") throw new ApiError(403, "Creators can share into accepted fan conversations only");
     const follows = await ProfileRelationship.exists({ actor: current._id, target: other._id, type: "FOLLOW" });
-    conversation = await Conversation.create({ ...pairFor(current, other), status: follows ? "ACTIVE" : "REQUEST", acceptedAt: follows ? new Date() : null, acceptedByCreator: false, requestStartedAt: follows ? null : new Date() });
+    conversation = await Conversation.create({ ...pairFor(current, other), status: follows ? "ACTIVE" : "REQUEST", acceptedAt: follows ? new Date() : null, acceptedByCreator: false, requestRecipient: follows ? null : other._id, requestStartedAt: follows ? null : new Date() });
   }
-  if (conversation.status === "REQUEST" && current.role === "creator") throw new ApiError(403, "Accept this message request before sharing");
+  if (conversation.status === "REQUEST" && String(conversation.requestRecipient) === String(current._id)) throw new ApiError(403, "Accept this message request before sharing");
   if (conversation.status === "DECLINED") throw new ApiError(403, "This message request was declined");
-  if (conversation.status === "REQUEST" && current.role === "fan") {
+  if (conversation.status === "REQUEST") {
     const alreadySent = await Message.exists({ sender: current._id, recipient: other._id, createdAt: { $gte: conversation.requestStartedAt || conversation.createdAt } });
     if (alreadySent) throw new ApiError(409, "Wait for the creator to accept your message request");
   }
@@ -311,7 +298,6 @@ async function readyStandardConversation(current, other) {
 }
 
 async function readyShareConversation(current, other) {
-  if (current.role === "creator" && other.role === "creator") return null;
   return readyStandardConversation(current, other);
 }
 
@@ -358,7 +344,7 @@ export const listConversations = asyncHandler(async (req, res) => {
       muted: (stateByOther.get(String(item._id))?.mutedBy || []).some((id) => String(id) === String(me)),
       requestReceived: stateByOther.get(String(item._id))?.status === "REQUEST" && (stateByOther.get(String(item._id))?.requestRecipient
         ? String(stateByOther.get(String(item._id)).requestRecipient) === String(me)
-        : req.user.role === "creator" && String(stateByOther.get(String(item._id))?.creator) === String(me)),
+        : String(stateByOther.get(String(item._id))?.creator) === String(me)),
     }];
   });
   return sendResponse(res, 200, "Conversations fetched", { conversations });
@@ -373,7 +359,7 @@ export const listMessages = asyncHandler(async (req, res) => {
   if (cursor && !mongoose.isValidObjectId(cursor)) throw new ApiError(400, "Invalid message cursor");
   const requestIsForMe = conversation?.status === "REQUEST" && (conversation.requestRecipient
     ? String(conversation.requestRecipient) === String(req.user._id)
-    : req.user.role === "creator" && String(conversation.creator) === String(req.user._id));
+    : String(conversation.creator) === String(req.user._id));
   if (!requestIsForMe) {
     const readAt = new Date();
     const result = await Message.updateMany(
@@ -441,7 +427,7 @@ export const listMessages = asyncHandler(async (req, res) => {
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
   const participant = person(other);
-  if (other.role === "creator") {
+  if (isApprovedCreator(other)) {
     const profile = await CreatorProfile.findOne({ user: other._id }).select("bio orbitStatus directCallEnabled").lean();
     participant.typicalReplyHours = await creatorTypicalReplyHours(other._id);
     participant.statusLine = profile?.orbitStatus || "";

@@ -18,7 +18,7 @@ const clean = (value, max) => String(value || "").trim().slice(0, max);
 const serialize = (dream, supporters = []) => dream ? ({ id: dream._id, emoji: dream.emoji, title: dream.title, reason: dream.reason, goalStars: dream.goalStars, receivedStars: dream.receivedStars, supporterCount: dream.supporterCount, status: dream.status, completedAt: dream.completedAt, version: dream.version, creator: dream.creator?._id ? { id: dream.creator._id, name: dream.creator.name, username: dream.creator.username, avatar: dream.creator.avatar } : undefined, supporters }) : null;
 
 export async function publicDream(username) {
-  const creator = await User.findOne({ username: String(username).toLowerCase(), role: "creator", status: "active" }).select("name username avatar").lean();
+  const creator = await User.findOne({ username: String(username).toLowerCase(), role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved", status: "active" }).select("name username avatar").lean();
   if (!creator) throw new ApiError(404, "Creator not found");
   const dream = await Dream.findOne({ creator: creator._id, status: { $in: ["ACTIVE", "COMPLETED"] } }).sort({ status: 1, updatedAt: -1 }).populate("creator", "name username avatar").lean();
   if (!dream) return null;

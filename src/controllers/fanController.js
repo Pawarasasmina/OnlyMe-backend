@@ -7,6 +7,7 @@ import Transaction from "../models/Transaction.js";
 import Wallet from "../models/Wallet.js";
 import SeenEngagement from "../models/SeenEngagement.js";
 import WallEngagement from "../models/WallEngagement.js";
+import ProfileRelationship from "../models/ProfileRelationship.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 
@@ -222,11 +223,13 @@ function serializeActivityItem(item) {
     relatedCreator: item.relatedCreator || null,
     relatedContent: item.relatedContent || null,
     actionPath: item.actionPath || null,
+    direction: item.direction || null,
+    filter: item.filter || null,
   };
 }
 
 async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivity) {
-  const [subscriptions, notifications, transactions, messages, seenComments, wallComments] = await Promise.all([
+  const [subscriptions, notifications, transactions, messages, seenComments, wallComments, receivedSeeSignals, sentSeeSignals] = await Promise.all([
     Subscription.find({ fan: fanId }).sort({ updatedAt: -1 }).limit(limit).populate("creator", "name username avatar").lean(),
     Notification.find({ user: fanId }).sort({ createdAt: -1 }).limit(limit).lean(),
     wallet
@@ -235,9 +238,31 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
     Message.find({ recipient: fanId }).sort({ createdAt: -1 }).limit(limit).populate("sender", "name username avatar role status").lean(),
     SeenEngagement.find({ user: fanId, type: "COMMENT" }).sort({ createdAt: -1 }).limit(limit).populate({ path: "publication", select: "title creator", populate: { path: "creator", select: "name username avatar" } }).lean(),
     WallEngagement.find({ user: fanId, type: "COMMENT" }).sort({ createdAt: -1 }).limit(limit).populate({ path: "post", select: "text creator", populate: { path: "creator", select: "name username avatar" } }).lean(),
+    ProfileRelationship.find({ target: fanId, type: "SEE_SIGNAL" }).sort({ createdAt: -1 }).limit(limit).populate({ path: "actor", match: { status: "active" }, select: "name username avatar role status" }).lean(),
+    ProfileRelationship.find({ actor: fanId, type: "SEE_SIGNAL" }).sort({ createdAt: -1 }).limit(limit).populate({ path: "target", match: { status: "active" }, select: "name username avatar role status" }).lean(),
   ]);
 
   return [
+    ...receivedSeeSignals.filter((signal) => signal.actor).map((signal) => ({
+      id: `profile-see-received-${signal._id}`,
+      type: "profile_seen",
+      direction: "received",
+      filter: "seen",
+      description: `${signal.actor.name || `@${signal.actor.username}`} sees you`,
+      createdAt: signal.createdAt,
+      relatedCreator: serializeCreator(signal.actor),
+      actionPath: `/profile/${encodeURIComponent(signal.actor.username)}`,
+    })),
+    ...sentSeeSignals.filter((signal) => signal.target).map((signal) => ({
+      id: `profile-see-sent-${signal._id}`,
+      type: "profile_seen",
+      direction: "sent",
+      filter: "seen",
+      description: `You see ${signal.target.name || `@${signal.target.username}`}`,
+      createdAt: signal.createdAt,
+      relatedCreator: serializeCreator(signal.target),
+      actionPath: `/profile/${encodeURIComponent(signal.target.username)}`,
+    })),
     ...subscriptions.map((subscription) => ({
       id: `subscription-${subscription._id}`,
       type: "subscription",

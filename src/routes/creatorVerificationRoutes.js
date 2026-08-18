@@ -13,7 +13,7 @@ import { authorize } from "../middleware/roleMiddleware.js";
 import { uploadVerificationDocument } from "../middleware/verificationUploadMiddleware.js";
 
 const router = Router();
-router.use(protect, authorize("creator"));
+router.use(protect, authorize("fan", "creator"));
 router.get("/", getMyVerification);
 router.put("/draft", saveVerificationDraft);
 router.post("/upload/:documentType", uploadVerificationDocument.single("document"), uploadVerificationFile);

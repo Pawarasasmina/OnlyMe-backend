@@ -9,6 +9,7 @@ import User from "../models/User.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
+import { hasCreatorAccess, isConsumerAccount } from "../utils/accountCapabilities.js";
 import { activeDirectAccessWindow, createDirectAccessMessageAtomic, creatorTypicalReplyHours, openDirectAccessWindow, processDueDirectAccessWindows, refundDirectAccessWindow, serializeDAWindow } from "../services/directAccessService.js";
 
 const validId = (value) => {
@@ -19,8 +20,8 @@ export const getDirectAccessOffer = asyncHandler(async (req, res) => {
   validId(req.params.creatorId);
   const profile = await CreatorProfile.findOne({ user: req.params.creatorId }).select("directAccessEnabled directAccessPriceStars directCallEnabled directCallPriceStars directCallDurationMinutes directCallAutoDeclineAway").lean();
   if (!profile) throw new ApiError(404, "Creator profile not found");
-  const active = req.user.role === "fan" ? await activeDirectAccessWindow(req.user._id, req.params.creatorId) : null;
-  const [wallet, membership] = req.user.role === "fan" ? await Promise.all([
+  const active = isConsumerAccount(req.user) ? await activeDirectAccessWindow(req.user._id, req.params.creatorId) : null;
+  const [wallet, membership] = isConsumerAccount(req.user) ? await Promise.all([
     Wallet.findOne({ user: req.user._id }).select("balance").lean(),
     PremiumMembership.findOne({ user: req.user._id, creator: req.params.creatorId, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }).select("currentPeriodStart currentPeriodEnd directAccessAllowancePeriodStart directAccessAllowanceUsedAt").lean(),
   ]) : [null, null];
@@ -45,7 +46,7 @@ export const getDirectAccessOffer = asyncHandler(async (req, res) => {
 });
 
 export const updateDirectAccessSettings = asyncHandler(async (req, res) => {
-  if (req.user.role !== "creator") throw new ApiError(403, "Only creators can configure Direct Access");
+  if (!hasCreatorAccess(req.user)) throw new ApiError(403, "Only approved creators can configure Direct Access");
   const priceStars = Number(req.body.priceStars);
   if (!Number.isSafeInteger(priceStars) || priceStars < 10 || priceStars > 10000) throw new ApiError(400, "Direct Access price must be between 10 and 10,000 Stars");
   const callPriceStars = Number(req.body.callPriceStars ?? 500);
@@ -89,7 +90,7 @@ export const openWindow = asyncHandler(async (req, res) => {
 });
 
 export const askDirectAccessQuestion = asyncHandler(async (req, res) => {
-  if (req.user.role !== "creator") throw new ApiError(403, "Only creators can ask a Direct Access question");
+  if (!hasCreatorAccess(req.user)) throw new ApiError(403, "Only approved creators can ask a Direct Access question");
   validId(req.params.fanId);
   const body = String(req.body.body || "").trim();
   if (!body || body.length > 1000) throw new ApiError(400, "Question must be between 1 and 1,000 characters");
@@ -128,7 +129,7 @@ export const askDirectAccessQuestion = asyncHandler(async (req, res) => {
 });
 
 export const sendFreeFanFollowup = asyncHandler(async (req, res) => {
-  if (req.user.role !== "fan") throw new ApiError(403, "Only fans can send this follow-up");
+  if (!isConsumerAccount(req.user)) throw new ApiError(403, "This account cannot send a follow-up");
   validId(req.params.creatorId);
   const body = String(req.body.body || "").trim();
   const clientMessageId = String(req.body.clientMessageId || "").trim();
@@ -159,7 +160,7 @@ export const sendFreeFanFollowup = asyncHandler(async (req, res) => {
 });
 
 export const replyToFreeFanFollowup = asyncHandler(async (req, res) => {
-  if (req.user.role !== "creator") throw new ApiError(403, "Only creators can answer this follow-up");
+  if (!hasCreatorAccess(req.user)) throw new ApiError(403, "Only approved creators can answer this follow-up");
   validId(req.params.messageId);
   const body = String(req.body.body || "").trim();
   const clientMessageId = String(req.body.clientMessageId || "").trim();
@@ -168,7 +169,7 @@ export const replyToFreeFanFollowup = asyncHandler(async (req, res) => {
   if (existing) return sendResponse(res, 200, "Reply already sent", { message: { id: String(existing._id), senderId: String(existing.sender), recipientId: String(existing.recipient), body: existing.body, mediaType: existing.mediaType, messageKind: existing.messageKind, directAccessWindowId: String(existing.directAccessWindow), createdAt: existing.createdAt }, directAccessWindow: serializeDAWindow(await DAWindow.findById(existing.directAccessWindow)) });
   const followup = await Message.findOne({ _id: req.params.messageId, recipient: req.user._id, messageKind: "FAN_FREE_ASK" });
   if (!followup) throw new ApiError(404, "Fan follow-up not found");
-  const fan = await User.findOne({ _id: followup.sender, role: "fan", status: "active" });
+  const fan = await User.findOne({ _id: followup.sender, role: { $in: ["fan", "creator"] }, status: "active" });
   if (!fan) throw new ApiError(404, "Fan not found");
   let window = await DAWindow.findOne({ creatorQuestionMessage: followup._id, source: "FAN_FOLLOWUP" });
   let openedNow = false;
@@ -191,7 +192,7 @@ export const replyToFreeFanFollowup = asyncHandler(async (req, res) => {
 });
 
 export const listDirectAccessWindows = asyncHandler(async (req, res) => {
-  const filter = req.user.role === "creator" ? { creator: req.user._id } : { fan: req.user._id };
+  const filter = { $or: [{ creator: req.user._id }, { fan: req.user._id }] };
   if (req.query.status) filter.status = String(req.query.status).toUpperCase();
   const windows = await DAWindow.find(filter)
     .sort({ createdAt: -1 })

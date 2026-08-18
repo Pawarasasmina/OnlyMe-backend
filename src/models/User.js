@@ -38,7 +38,7 @@ const userSchema = new mongoose.Schema(
     },
     creatorApprovalStatus: {
       type: String,
-      enum: ["pending", "approved", "rejected", null],
+      enum: ["pending", "approved", "rejected", "suspended", null],
       default: null,
     },
     avatar: {

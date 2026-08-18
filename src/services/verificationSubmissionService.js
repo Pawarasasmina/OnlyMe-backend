@@ -15,7 +15,7 @@ async function runSubmission({ creatorId, allowedStatuses, action, transitionId 
   if (!initial) throw new ApiError(404, "Creator verification not found");
   const retrying = initial.status === "PENDING_REVIEW" && initial.stateSyncPending && initial.lastTransitionId;
   if (!retrying && !allowedStatuses.includes(initial.status)) {
-    throw new ApiError(409, action === "RESUBMITTED" ? "Only a changes-requested application can be resubmitted" : "Verification cannot be submitted in its current status");
+    throw new ApiError(409, action === "RESUBMITTED" ? "Only a changes-requested or rejected application can be resubmitted" : "Verification cannot be submitted in its current status");
   }
   assertCompleteApplication(initial);
   const previousStatus = retrying ? (action === "RESUBMITTED" ? "CHANGES_REQUESTED" : "DRAFT") : initial.status;
@@ -44,7 +44,7 @@ async function runSubmission({ creatorId, allowedStatuses, action, transitionId 
     if (!verification) throw new ApiError(409, "Verification changed while it was being submitted");
   }
 
-  await User.updateOne({ _id: creatorId }, { $set: { creatorApprovalStatus: "pending", isVerified: false } }, options(session));
+  await User.updateOne({ _id: creatorId }, { $set: { creatorApprovalStatus: "pending" } }, options(session));
   await CreatorProfile.updateOne(
     { user: creatorId },
     { $set: { verificationStatus: "pending" }, $setOnInsert: { user: creatorId } },

@@ -15,6 +15,14 @@ test("approved and pending creator capabilities are server-derived", () => {
   assert.equal(profileViewerCapabilities({ ...owner, creatorApprovalStatus: "pending" }, { _id: "owner-id" }).canCreate, false);
 });
 
+test("approved unified accounts receive creator capabilities while retaining the fan role", () => {
+  const unifiedOwner = { ...owner, role: "fan", creatorApprovalStatus: "approved" };
+  const capabilities = profileViewerCapabilities(unifiedOwner, { _id: "owner-id", role: "fan" });
+  assert.equal(capabilities.canCreate, true);
+  assert.equal(capabilities.canAccessStudio, true);
+  assert.equal(capabilities.canAccessVerification, true);
+});
+
 test("creators can message eligible fan and creator profiles", () => {
   const creatorViewer = { _id: "viewer-creator", role: "creator" };
   assert.equal(profileViewerCapabilities(owner, creatorViewer, roleProfile).canMessage, true);

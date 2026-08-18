@@ -12,7 +12,7 @@ import { authorize } from "../middleware/roleMiddleware.js";
 
 const router = Router();
 
-router.use(protect, authorize("fan"));
+router.use(protect, authorize("fan", "creator"));
 
 router.get("/dashboard", getFanDashboard);
 router.get("/subscriptions", getFanSubscriptions);

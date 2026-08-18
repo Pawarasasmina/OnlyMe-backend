@@ -6,8 +6,8 @@ import { requireApprovedCreator } from "../middleware/creatorApprovalMiddleware.
 
 const router = Router();
 router.get("/creator/:username", getDream);
-router.put("/mine", protect, authorize("creator"), requireApprovedCreator, upsertMine);
-router.post("/mine/:id/complete", protect, authorize("creator"), requireApprovedCreator, completeMine);
-router.delete("/mine/:id", protect, authorize("creator"), requireApprovedCreator, removeMine);
+router.put("/mine", protect, authorize("fan", "creator"), requireApprovedCreator, upsertMine);
+router.post("/mine/:id/complete", protect, authorize("fan", "creator"), requireApprovedCreator, completeMine);
+router.delete("/mine/:id", protect, authorize("fan", "creator"), requireApprovedCreator, removeMine);
 router.post("/:id/gifts", protect, authorize("fan", "creator"), giftDream);
 export default router;

@@ -61,9 +61,10 @@ export function serializeDAWindow(window) {
 }
 
 async function assertOpenPair(fan, creatorId) {
-  if (fan.role !== "fan") throw new ApiError(403, "Only fans can open Direct Access windows");
-  const creator = await User.findOne({ _id: creatorId, role: "creator", status: "active" }).select("_id name username avatar role");
+  if (!["fan", "creator"].includes(fan.role)) throw new ApiError(403, "This account cannot open Direct Access windows");
+  const creator = await User.findOne({ _id: creatorId, role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved", status: "active" }).select("_id name username avatar role creatorApprovalStatus");
   if (!creator) throw new ApiError(404, "Creator not found");
+  if (String(fan._id) === String(creator._id)) throw new ApiError(400, "You cannot open Direct Access with yourself");
   const [profile, blocked] = await Promise.all([
     CreatorProfile.findOne({ user: creator._id }).select("directAccessEnabled directAccessPriceStars").lean(),
     UserBlock.exists({ $or: [{ blocker: fan._id, blocked: creator._id }, { blocker: creator._id, blocked: fan._id }] }),
@@ -353,7 +354,7 @@ export async function reserveDirectAccessMessage({ windowId, sender, recipient, 
     if (window.settlementStatus === "HELD") await refundDirectAccessWindow(window._id, now);
     throw new ApiError(409, "Direct Access window is closed", FINANCIAL_ERROR_CODES.DA_WINDOW_CLOSED);
   }
-  if (sender.role === "fan") {
+  if (senderId === expectedFan) {
     const reserved = await DAWindow.findOneAndUpdate(
       {
         _id: window._id,
@@ -380,7 +381,7 @@ export async function releaseDirectAccessMessageReservation(prepared) {
 }
 
 export async function settleDirectAccessReply(prepared, sender) {
-  if (!prepared || sender.role !== "creator") {
+  if (!prepared || String(sender._id) !== String(prepared.window.creator)) {
     return prepared?.window || null;
   }
   if (prepared.window.settlementStatus === "INCLUDED") {

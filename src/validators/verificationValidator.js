@@ -2,7 +2,7 @@
 
 export const DOCUMENT_FIELDS = ["documentFront", "documentBack", "selfieWithDocument"];
 export const DOCUMENT_TYPES = ["national_id", "passport", "driver_license", "other"];
-export const EDITABLE_STATUSES = ["NOT_STARTED", "DRAFT", "CHANGES_REQUESTED"];
+export const EDITABLE_STATUSES = ["NOT_STARTED", "DRAFT", "CHANGES_REQUESTED", "REJECTED"];
 
 const text = (value, field, max) => {
   const normalized = String(value ?? "").trim();
