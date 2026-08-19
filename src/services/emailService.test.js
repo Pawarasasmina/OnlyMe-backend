@@ -9,10 +9,10 @@ test("welcome email is branded and role-aware for fans", () => {
   assert.match(email.html, /We see you, Pawara/);
 });
 
-test("welcome email directs creators to creator setup", () => {
+test("welcome email uses the same registration message regardless of later creator access", () => {
   const email = welcomeEmail({ name: "Lina", role: "creator" });
-  assert.match(email.text, /Set up your creator profile/);
-  assert.match(email.html, /creator space is ready/);
+  assert.match(email.text, /Start discovering/);
+  assert.match(email.html, /Your space is ready/);
 });
 
 test("welcome email escapes user-provided names", () => {

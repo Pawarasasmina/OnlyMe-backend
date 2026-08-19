@@ -16,11 +16,14 @@ import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { createGift, deleteGift, listGifts, reorderGifts, updateGift } from "../controllers/adminGiftController.js";
 import { uploadGiftImage } from "../middleware/uploadMiddleware.js";
+import { getWelcomeEmailTemplate, updateWelcomeEmailTemplate } from "../controllers/adminEmailTemplateController.js";
 
 const router = Router();
 
 router.use(protect, authorize("admin"));
 router.get("/dashboard", getAdminDashboard);
+router.get("/email-templates/welcome", getWelcomeEmailTemplate);
+router.patch("/email-templates/welcome", uploadGiftImage.single("logo"), updateWelcomeEmailTemplate);
 router.get("/gifts", listGifts);
 router.post("/gifts", uploadGiftImage.single("image"), createGift);
 router.patch("/gifts/reorder", reorderGifts);
