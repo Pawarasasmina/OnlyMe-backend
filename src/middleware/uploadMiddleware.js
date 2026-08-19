@@ -43,7 +43,7 @@ export const uploadCoverImage = multer({
 });
 
 const allowedContentTypes = new Set([
-  "image/jpeg", "image/png", "image/webp", "video/mp4", "video/quicktime",
+  "image/jpeg", "image/png", "image/webp", "video/mp4", "video/quicktime", "video/webm",
   "audio/mpeg", "audio/wav", "audio/x-wav", "audio/aac", "audio/flac", "audio/x-flac",
   "audio/webm", "audio/ogg", "audio/mp4", "audio/x-m4a",
 ]);

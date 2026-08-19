@@ -4,8 +4,14 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-dotenv.config({ path: resolve(__dirname, "../../.env") });
-dotenv.config({ path: resolve(__dirname, "../controllers/.env") });
+const rootEnv = dotenv.config({ path: resolve(__dirname, "../../.env") });
+dotenv.config({ path: resolve(__dirname, "../controllers/.env"), override: true });
+
+for (const key of ["NODE_ENV", "PORT", "CLIENT_URL"]) {
+  if (rootEnv.parsed?.[key]) {
+    process.env[key] = rootEnv.parsed[key];
+  }
+}
 
 export const env = {
   nodeEnv: process.env.NODE_ENV || "development",
