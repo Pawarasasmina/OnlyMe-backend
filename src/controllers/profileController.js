@@ -23,6 +23,7 @@ const profileModels = {
   creator: CreatorProfile,
   fan: FanProfile,
 };
+const effectiveProfileRole = (user) => user?.role === "admin" ? "admin" : user?.creatorApprovalStatus === "approved" ? "creator" : "fan";
 
 function stripUndefined(value) {
   return Object.entries(value).reduce((result, [key, entry]) => {
@@ -52,7 +53,7 @@ function accountDetails(user) {
 }
 
 async function ensureRoleProfile(user) {
-  const Model = profileModels[user.role];
+  const Model = profileModels[effectiveProfileRole(user)];
 
   if (!Model) {
     throw new ApiError(400, "Unsupported user role");
@@ -82,7 +83,7 @@ function serializeOwnProfile(user, profile) {
     },
   };
 
-  if (user.role === "creator") {
+  if (effectiveProfileRole(user) === "creator") {
     serialized.profile = {
       ...serialized.profile,
       coverPhoto: profile.coverPhoto,
@@ -187,7 +188,7 @@ function serializeHiddenSeen(preference) {
 }
 
 function calculateCompletion(user, profile) {
-  if (user.role === "creator") {
+  if (effectiveProfileRole(user) === "creator") {
     const categories = profile.categories?.length ? profile.categories : profile.category ? [profile.category] : [];
     const checks = [
       Boolean(user.name),
@@ -229,7 +230,7 @@ export const getMyPrivacySettings = asyncHandler(async (req, res) => {
   const profile = await ensureRoleProfile(req.user);
   return sendResponse(res, 200, "Privacy settings fetched", {
     role: req.user.role,
-    profileVisibility: profile.profileVisibility || (req.user.role === "creator" ? "public" : "private"),
+    profileVisibility: profile.profileVisibility || (effectiveProfileRole(req.user) === "creator" ? "public" : "private"),
     privacySettings: profile.privacySettings || {},
   });
 });
@@ -245,7 +246,7 @@ export const updateMyPrivacySettings = asyncHandler(async (req, res) => {
   const profile = await ensureRoleProfile(req.user);
   return sendResponse(res, 200, "Privacy settings updated", {
     role: req.user.role,
-    profileVisibility: profile.profileVisibility || (req.user.role === "creator" ? "public" : "private"),
+    profileVisibility: profile.profileVisibility || (effectiveProfileRole(req.user) === "creator" ? "public" : "private"),
     privacySettings: profile.privacySettings || {},
   });
 });
@@ -391,7 +392,7 @@ export const updateMyAccountSettings = asyncHandler(async (req, res) => {
 });
 
 export const updateMyProfile = asyncHandler(async (req, res) => {
-  const { common, profile } = validateRoleProfilePayload(req.user.role, req.body, req.user);
+  const { common, profile } = validateRoleProfilePayload(effectiveProfileRole(req.user), req.body, req.user);
   const commonUpdates = stripUndefined(common);
   const profileUpdates = stripUndefined(profile);
 
@@ -475,10 +476,6 @@ export const removeMyAvatar = asyncHandler(async (req, res) => {
 });
 
 export const uploadMyCover = asyncHandler(async (req, res) => {
-  if (req.user.role !== "creator") {
-    throw new ApiError(403, "Only creators can upload a cover photo");
-  }
-
   if (!req.file) {
     throw new ApiError(400, "Cover photo is required");
   }
@@ -498,10 +495,6 @@ export const uploadMyCover = asyncHandler(async (req, res) => {
 });
 
 export const removeMyCover = asyncHandler(async (req, res) => {
-  if (req.user.role !== "creator") {
-    throw new ApiError(403, "Only creators can remove a cover photo");
-  }
-
   const profile = await ensureRoleProfile(req.user);
   const oldCover = profile.coverPhoto;
 
@@ -536,9 +529,9 @@ export const getPublicCreatorProfile = asyncHandler(async (req, res) => {
   const username = normalizeUsername(req.params.username);
   const user = await User.findOne({
     username,
-    role: "creator",
-    status: "active",
+    role: { $in: ["fan", "creator"] },
     creatorApprovalStatus: "approved",
+    status: "active",
   });
 
   if (!user) {

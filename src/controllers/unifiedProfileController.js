@@ -9,7 +9,6 @@ import SeenEngagement from "../models/SeenEngagement.js";
 import WallEngagement from "../models/WallEngagement.js";
 import WallPost from "../models/WallPost.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
-import Conversation from "../models/Conversation.js";
 import GroupConversation from "../models/GroupConversation.js";
 import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
 import ApiError from "../utils/ApiError.js";
@@ -19,10 +18,10 @@ import { normalizeUsername } from "../validators/profileValidator.js";
 import { serializePost } from "./postController.js";
 import { engagementForWallPost, engagementForWallShare } from "./wallController.js";
 
-const profileModelFor = (role) => role === "creator" ? CreatorProfile : FanProfile;
+const profileModelFor = (owner) => owner.creatorApprovalStatus === "approved" || owner.role === "creator" ? CreatorProfile : FanProfile;
 
 async function loadProfile(owner, viewer) {
-  const Model = profileModelFor(owner.role);
+  const Model = profileModelFor(owner);
   const publishedFilter = { creator: owner._id, status: { $in: ["PUBLISHED", "published"] } };
   const profileOwner = Boolean(viewer?._id && String(viewer._id) === String(owner._id));
   const seenStatus = profileOwner ? { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } : "PUBLISHED";
@@ -90,8 +89,8 @@ async function loadProfile(owner, viewer) {
 }
 
 async function relationshipTarget(username) {
-  const target = await User.findOne({ username: normalizeUsername(username), role: "creator", status: "active", creatorApprovalStatus: "approved" }).select("_id");
-  if (!target) throw new ApiError(404, "Creator profile not found");
+  const target = await User.findOne({ username: normalizeUsername(username), role: { $in: ["fan", "creator"] }, status: "active" }).select("_id");
+  if (!target) throw new ApiError(404, "Profile not found");
   return target;
 }
 
@@ -163,7 +162,7 @@ export const getOwnProfileConnections = asyncHandler(async (req, res) => {
 });
 
 async function sendConnections({ owner, type, req, res }) {
-  if (type === "supporters" && owner.role !== "creator") {
+  if (type === "supporters" && owner.creatorApprovalStatus !== "approved") {
     return sendResponse(res, 200, "Profile connections fetched", { accounts: [], pagination: { page: 1, limit: 30, total: 0, hasMore: false } });
   }
 
@@ -214,22 +213,14 @@ export const getUnifiedProfileByUsername = asyncHandler(async (req, res) => {
   const username = normalizeUsername(req.params.username);
   const owner = await User.findOne({ username, role: { $in: ["fan", "creator"] }, status: "active" });
   if (!owner) throw new ApiError(404, "Profile not found");
-  const isOwner = Boolean(req.user?._id && String(req.user._id) === String(owner._id));
-  const Model = profileModelFor(owner.role);
+  const Model = profileModelFor(owner);
   const visibility = await Model.findOne({ user: owner._id }).select("profileVisibility").lean();
-  const creatorConversationAccess = Boolean(
-    !isOwner
-    && owner.role === "fan"
-    && req.user?.role === "creator"
-    && await Conversation.exists({ fan: owner._id, creator: req.user._id, status: { $in: ["REQUEST", "ACTIVE"] } }),
-  );
-  if (!visibility || (!isOwner && visibility.profileVisibility !== "public" && !creatorConversationAccess)) throw new ApiError(404, "Profile not found");
-  if (!isOwner && owner.role === "creator" && owner.creatorApprovalStatus !== "approved") throw new ApiError(404, "Profile not found");
+  if (!visibility) throw new ApiError(404, "Profile not found");
   return sendResponse(res, 200, "Profile fetched", await loadProfile(owner, req.user || null));
 });
 
 export const getOrbitCreators = asyncHandler(async (req, res) => {
-  const profiles = await CreatorProfile.find({ profileVisibility: "public" }).select("user city country bio coverPhoto").populate({ path: "user", match: { status: "active", role: "creator", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified" }).sort({ updatedAt: -1 }).limit(24).lean();
+  const profiles = await CreatorProfile.find({ profileVisibility: "public" }).select("user city country bio coverPhoto").populate({ path: "user", match: { status: "active", role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved" }, select: "name username avatar isVerified" }).sort({ updatedAt: -1 }).limit(24).lean();
   const visible = profiles.filter((profile) => profile.user && String(profile.user._id) !== String(req.user._id));
   const creatorIds = visible.map((profile) => profile.user._id);
   const publications = await Publication.find({ creator: { $in: creatorIds }, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: "PUBLISHED" }).select("creator kind title planet publishedAt").sort({ publishedAt: -1 }).lean();

@@ -12,24 +12,25 @@ const safeHttpUrl = (value) => {
 
 export function profileViewerCapabilities(owner, viewer, roleProfile = null) {
   const isOwner = Boolean(viewer?._id && String(viewer._id) === String(owner._id));
-  const isCreatorOwner = isOwner && owner.role === "creator";
-  const approved = isCreatorOwner && owner.creatorApprovalStatus === "approved";
+  const consumerOwner = ["fan", "creator"].includes(owner.role);
+  const consumerViewer = ["fan", "creator"].includes(viewer?.role);
+  const approved = consumerOwner && owner.creatorApprovalStatus === "approved";
   return {
     isOwner,
     canEditProfile: isOwner,
     canCreate: approved,
     canAccessStudio: approved,
-    canAccessVerification: isCreatorOwner,
+    canAccessVerification: isOwner && consumerOwner,
     canAccessSettings: isOwner,
     canViewDrafts: approved,
-    canMessage: Boolean(viewer?._id && !isOwner && viewer.role === "fan" && owner.role === "creator" && roleProfile?.messagingEnabled !== false),
-    canFollow: Boolean(viewer?._id && !isOwner && owner.role === "creator" && ["fan", "creator"].includes(viewer.role)),
+    canMessage: Boolean(viewer?._id && !isOwner && consumerViewer && consumerOwner && (!approved || roleProfile?.messagingEnabled !== false)),
+    canFollow: Boolean(viewer?._id && !isOwner && consumerViewer && consumerOwner),
     canSeePrivateAccountSummary: isOwner,
   };
 }
 
 function completion(owner, roleProfile) {
-  const checks = owner.role === "creator"
+  const checks = owner.creatorApprovalStatus === "approved"
     ? [owner.name, owner.username, owner.avatar, roleProfile?.bio, roleProfile?.categories?.length || roleProfile?.category, owner.isVerified || roleProfile?.verificationStatus !== "not_submitted"]
     : [owner.name, owner.username, owner.avatar, roleProfile?.bio];
   const completed = checks.filter(Boolean).length;
@@ -54,21 +55,23 @@ function uniquePhotos(items = []) {
 
 export function serializeUnifiedProfile({ content = [], followerCount = 0, followingCount = 0, owner,  ownWallPosts = [], photos = [], pinnedMessageGroup = null, planets = [], publishedContentCount = content.length, roleProfile, seens = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [] }) {
   const capabilities = profileViewerCapabilities(owner, viewer, roleProfile);
+  const creatorEnabled = owner.creatorApprovalStatus === "approved";
   const contentViewer = capabilities.isOwner ? viewer : null;
-  const socialLinks = owner.role === "creator"
+  const socialLinks = creatorEnabled
     ? (roleProfile?.socialLinks || []).map((item) => ({ platform: item.platform, url: safeHttpUrl(item.url) })).filter((item) => item.url)
     : [];
   const profile = {
     id: roleProfile?._id,
     ownerUserId: owner._id,
     role: owner.role,
+    isCreator: creatorEnabled,
     displayName: owner.name,
     username: owner.username,
     avatar: owner.avatar || "",
-    cover: owner.role === "creator" ? roleProfile?.coverPhoto || "" : "",
+    cover: roleProfile?.coverPhoto || "",
     bio: roleProfile?.bio || "",
-    categories: owner.role === "creator" ? (roleProfile?.categories?.length ? roleProfile.categories : roleProfile?.category ? [roleProfile.category] : []) : [],
-    location: owner.role === "creator" ? [roleProfile?.city, roleProfile?.country].filter(Boolean).join(", ") : "",
+    categories: creatorEnabled ? (roleProfile?.categories?.length ? roleProfile.categories : roleProfile?.category ? [roleProfile.category] : []) : [],
+    location: [roleProfile?.city, roleProfile?.country].filter(Boolean).join(", "),
     socialLinks,
     joinedAt: owner.createdAt,
     verified: Boolean(owner.isVerified),
@@ -80,7 +83,7 @@ export function serializeUnifiedProfile({ content = [], followerCount = 0, follo
       startedAt: owner.activeStatus.startedAt || null,
       expiresAt: owner.activeStatus.expiresAt || null,
     } : null,
-    ...(owner.role === "creator" ? {
+    ...(creatorEnabled ? {
       directAccess: {
         enabled: Boolean(roleProfile?.directAccessEnabled),
         priceStars: Number(roleProfile?.directAccessPriceStars || 100),
@@ -94,9 +97,9 @@ export function serializeUnifiedProfile({ content = [], followerCount = 0, follo
     pinnedMessageGroup: pinnedMessageGroup ? { id: String(pinnedMessageGroup._id), name: pinnedMessageGroup.name, avatarUrl: pinnedMessageGroup.avatar || null, memberCount: pinnedMessageGroup.members?.length || 0 } : null,
   };
 
-  if (capabilities.isOwner && owner.role === "creator") {
-    profile.creatorApprovalStatus = owner.creatorApprovalStatus || "pending";
-    profile.creatorVerificationStatus = owner.isVerified ? "verified" : roleProfile?.verificationStatus || "not_submitted";
+  if (capabilities.isOwner) {
+    profile.creatorApprovalStatus = owner.creatorApprovalStatus;
+    profile.creatorApplicationStatus = roleProfile?.verificationStatus || "not_submitted";
   }
 
   return {

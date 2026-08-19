@@ -34,7 +34,7 @@ export const listCreatorVerifications = asyncHandler(async (req, res) => {
   if (["national_id", "passport", "driver_license", "other"].includes(req.query.documentType)) filter.documentType = req.query.documentType;
   if (req.query.search) {
     const term = new RegExp(escapeRegex(req.query.search), "i");
-    const creatorIds = await User.find({ role: "creator", $or: [{ username: term }, { email: term }] }).distinct("_id");
+    const creatorIds = await User.find({ role: { $in: ["fan", "creator"] }, creatorApprovalStatus: { $ne: null }, $or: [{ username: term }, { email: term }] }).distinct("_id");
     filter.creator = { $in: creatorIds };
   }
   const [items, total] = await Promise.all([

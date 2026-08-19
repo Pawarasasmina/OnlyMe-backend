@@ -59,8 +59,8 @@ const DEFAULT_LIMIT = 8;
 const SESSION_WINDOW = 1000 * 60 * 30;
 const REPORT_REASONS = new Set(["SPAM", "HARASSMENT", "HATE", "SEXUAL_CONTENT", "VIOLENCE", "SCAM", "OTHER"]);
 
-function roleProfileModel(role) {
-  return role === "creator" ? CreatorProfile : FanProfile;
+function roleProfileModel(role, creatorApprovalStatus = null) {
+  return role === "creator" || creatorApprovalStatus === "approved" ? CreatorProfile : FanProfile;
 }
 
 function cleanText(value, maxLength = 120) {
@@ -516,8 +516,8 @@ function groupStories(stories) {
 }
 
 async function profilesByUser(users = [], { publicOnly = true } = {}) {
-  const creatorIds = users.filter((user) => user.role === "creator").map((user) => user._id);
-  const fanIds = users.filter((user) => user.role === "fan").map((user) => user._id);
+  const creatorIds = users.filter((user) => user.creatorApprovalStatus === "approved").map((user) => user._id);
+  const fanIds = users.filter((user) => user.creatorApprovalStatus !== "approved").map((user) => user._id);
   const creatorMatch = publicOnly
     ? {
       user: { $in: creatorIds },
@@ -541,12 +541,13 @@ async function profilesByUser(users = [], { publicOnly = true } = {}) {
 
 function serializeDiscoverPerson(user, profile, meta = {}) {
   const id = String(user._id);
-  const tags = user.role === "creator" ? creatorTags(profile) : (profile.interests || []);
+  const creatorEnabled = user.creatorApprovalStatus === "approved";
+  const tags = creatorEnabled ? creatorTags(profile) : (profile.interests || []);
   const location = profile.privacySettings?.showLocation === false
     ? { city: "", country: "" }
     : { city: cleanText(profile.city, 80), country: cleanText(profile.country, 80) };
   const displayName = user.name || user.username || "Profile";
-  const category = user.role === "creator" ? profile.category || tags[0] || "Creator" : tags[0] || "Member";
+  const category = creatorEnabled ? profile.category || tags[0] || "Creator" : tags[0] || "Member";
   const isFollowing = meta.following ?? true;
   const stories = (meta.stories || []).sort((left, right) => new Date(left.createdAt || 0) - new Date(right.createdAt || 0));
   const firstUnseenStory = stories.find((story) => !story.viewed);
@@ -743,7 +744,7 @@ function filterCreators(creators, term) {
 }
 
 export const getDiscover = asyncHandler(async (req, res) => {
-  const viewerModel = roleProfileModel(req.user.role);
+  const viewerModel = roleProfileModel(req.user.role, req.user.creatorApprovalStatus);
   const viewerProfile = ["fan", "creator"].includes(req.user.role) ? await viewerModel.findOne({ user: req.user._id }).lean() : null;
   const settings = discoverSettings(viewerProfile);
   const blockedIds = await blockedIdsFor(req.user._id);
@@ -760,7 +761,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
     profileVisibility: "public",
     "privacySettings.allowDiscovery": { $ne: false },
   })
-    .populate({ path: "user", match: { role: "creator", status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified role creatorApprovalStatus status createdAt lastSeenAt" })
+    .populate({ path: "user", match: { role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified role creatorApprovalStatus status createdAt lastSeenAt" })
     .sort({ updatedAt: -1 })
     .limit(80)
     .lean();
@@ -780,7 +781,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
     Publication.find({ creator: { $in: creatorIds }, kind: "SEEN", status: "PUBLISHED", publishedSnapshot: { $exists: true } })
       .sort({ publishedAt: -1, updatedAt: -1 })
       .limit(12)
-      .populate({ path: "creator", match: { role: "creator", status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified role status creatorApprovalStatus" })
+      .populate({ path: "creator", match: { role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified role status creatorApprovalStatus" })
       .lean(),
     FeedPost.find({ author: { $in: creatorIds }, status: "published", visibility: "public", deletedAt: null })
       .sort({ publishedAt: -1, createdAt: -1 })
@@ -927,7 +928,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
 export const hideDiscoverCreator = asyncHandler(async (req, res) => {
   requireObjectId(req.params.userId, "creator id");
   if (String(req.params.userId) === String(req.user._id)) throw new ApiError(400, "You cannot hide yourself");
-  const Model = roleProfileModel(req.user.role);
+  const Model = roleProfileModel(req.user.role, req.user.creatorApprovalStatus);
   const updated = await Model.findOneAndUpdate(
     { user: req.user._id },
     { $addToSet: { "discoverSettings.hiddenCreators": req.params.userId }, $set: { "discoverSettings.updatedAt": new Date() } },
@@ -1018,7 +1019,7 @@ function readTopics(value) {
 }
 
 export const updateDiscoverSettings = asyncHandler(async (req, res) => {
-  const Model = roleProfileModel(req.user.role);
+  const Model = roleProfileModel(req.user.role, req.user.creatorApprovalStatus);
   const currentProfile = await Model.findOne({ user: req.user._id });
   const current = discoverSettings(currentProfile || {});
   const payload = req.body || {};
@@ -1044,7 +1045,7 @@ export const updateDiscoverSettings = asyncHandler(async (req, res) => {
 });
 
 export const resetDiscoverSettings = asyncHandler(async (req, res) => {
-  const Model = roleProfileModel(req.user.role);
+  const Model = roleProfileModel(req.user.role, req.user.creatorApprovalStatus);
   const updated = await Model.findOneAndUpdate(
     { user: req.user._id },
     { $set: { discoverSettings: { ...DEFAULT_SETTINGS, updatedAt: new Date() } } },

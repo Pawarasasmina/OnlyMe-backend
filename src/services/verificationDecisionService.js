@@ -13,9 +13,9 @@ const unsupportedTransaction = (error) => /Transaction numbers are only allowed|
 const options = (session) => session ? { session } : {};
 
 export const DECISIONS = {
-  APPROVED: { approval: "approved", verified: true, profile: "verified", action: "APPROVED", notification: "Your creator verification was approved", notificationType: "verification_approved" },
-  CHANGES_REQUESTED: { approval: "pending", verified: false, profile: "pending", action: "CHANGES_REQUESTED", notification: "Changes were requested for your creator verification", notificationType: "verification_changes_requested" },
-  REJECTED: { approval: "rejected", verified: false, profile: "rejected", action: "REJECTED", notification: "Your creator verification was rejected", notificationType: "verification_rejected" },
+  APPROVED: { approval: "approved", profile: "verified", action: "APPROVED", notification: "Your creator application was approved", notificationType: "verification_approved" },
+  CHANGES_REQUESTED: { approval: "pending", profile: "pending", action: "CHANGES_REQUESTED", notification: "Changes were requested for your creator application", notificationType: "verification_changes_requested" },
+  REJECTED: { approval: "rejected", profile: "rejected", action: "REJECTED", notification: "Your creator application was rejected", notificationType: "verification_rejected" },
 };
 
 async function claimDecision({ id, targetStatus, adminId, review, transitionId, session }) {
@@ -54,7 +54,7 @@ async function synchronizeDecision(verification, config, previousStatus, session
   const transitionId = verification.lastTransitionId;
   await User.updateOne(
     { _id: verification.creator },
-    { $set: { creatorApprovalStatus: config.approval, isVerified: config.verified } },
+    { $set: { creatorApprovalStatus: config.approval } },
     options(session)
   );
   await CreatorProfile.updateOne(

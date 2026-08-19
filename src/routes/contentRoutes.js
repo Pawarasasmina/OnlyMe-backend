@@ -2,7 +2,7 @@ import { Router } from "express";
 import { archiveMyContent, createContentDraft, getMyContent, getUploadSignature, listContent, listMyContent, publishImageContent, resubmitForReview, submitContent, updateContentDraft, uploadDraftMedia } from "../controllers/contentController.js";
 import { protect } from "../middleware/authMiddleware.js"; import { authorize } from "../middleware/roleMiddleware.js"; import { requireApprovedCreator } from "../middleware/creatorApprovalMiddleware.js";
 import { uploadContentMedia } from "../middleware/uploadMiddleware.js";
-const router = Router(); const creatorOnly = [protect, authorize("creator"), requireApprovedCreator];
+const router = Router(); const creatorOnly = [protect, authorize("fan", "creator"), requireApprovedCreator];
 router.get("/", listContent); router.get("/creator/:creatorId", listContent);
 router.get("/mine", ...creatorOnly, listMyContent); router.get("/mine/:id", ...creatorOnly, getMyContent);
 router.post("/draft", ...creatorOnly, createContentDraft); router.put("/:id", ...creatorOnly, updateContentDraft);

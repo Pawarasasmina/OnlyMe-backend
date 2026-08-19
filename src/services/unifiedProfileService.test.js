@@ -15,6 +15,21 @@ test("approved and pending creator capabilities are server-derived", () => {
   assert.equal(profileViewerCapabilities({ ...owner, creatorApprovalStatus: "pending" }, { _id: "owner-id" }).canCreate, false);
 });
 
+test("approved unified accounts receive creator capabilities while retaining the fan role", () => {
+  const unifiedOwner = { ...owner, role: "fan", creatorApprovalStatus: "approved" };
+  const capabilities = profileViewerCapabilities(unifiedOwner, { _id: "owner-id", role: "fan" });
+  assert.equal(capabilities.canCreate, true);
+  assert.equal(capabilities.canAccessStudio, true);
+  assert.equal(capabilities.canAccessVerification, true);
+});
+
+test("creators can message eligible fan and creator profiles", () => {
+  const creatorViewer = { _id: "viewer-creator", role: "creator" };
+  assert.equal(profileViewerCapabilities(owner, creatorViewer, roleProfile).canMessage, true);
+  assert.equal(profileViewerCapabilities({ ...owner, _id: "fan-owner", role: "fan" }, creatorViewer, {}).canMessage, true);
+  assert.equal(profileViewerCapabilities(owner, creatorViewer, { ...roleProfile, messagingEnabled: false }).canMessage, false);
+});
+
 test("public profile contract excludes private account and verification fields", () => {
   const result = serializeUnifiedProfile({ owner: { ...owner, email: "private@example.com" }, roleProfile: { ...roleProfile, documentPath: "private/file", internalNote: "secret" }, viewer: null, content: [] });
   const json = JSON.stringify(result);

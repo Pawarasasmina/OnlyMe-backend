@@ -3,7 +3,6 @@ import User from "../models/User.js";
 import AdminProfile from "../models/AdminProfile.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
-import CreatorVerification from "../models/CreatorVerification.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -12,6 +11,8 @@ import { issueAuthTokens } from "../services/tokenService.js";
 import { sendWelcomeEmail } from "../services/emailService.js";
 import { env } from "../config/env.js";
 import jwt from "jsonwebtoken";
+
+void mongoose;
 
 const refreshCookieOptions = {
   httpOnly: true,
@@ -24,12 +25,14 @@ const refreshCookieOptions = {
 };
 
 function sanitizeUser(user) {
+  const effectiveRole = user.role === "admin" ? "admin" : user.creatorApprovalStatus === "approved" ? "creator" : "fan";
   return {
     id: user._id,
     name: user.name,
     username: user.username,
     email: user.email,
-    role: user.role,
+    role: effectiveRole,
+    accountRole: user.role === "admin" ? "admin" : "fan",
     creatorApprovalStatus: user.creatorApprovalStatus,
     avatar: user.avatar,
     isVerified: user.isVerified,
@@ -57,49 +60,8 @@ async function createRoleProfile(user) {
   }
 }
 
-const transactionsUnsupported = (error) => /Transaction numbers are only allowed|does not support transactions|replica set/i.test(error.message || "");
-
-async function createCreatorAccount(data) {
-  const session = await mongoose.startSession();
-  try {
-    let createdUser;
-    await session.withTransaction(async () => {
-      [createdUser] = await User.create([data], { session });
-      await CreatorProfile.create([{ user: createdUser._id, verificationStatus: "not_submitted" }], { session });
-      await CreatorVerification.create([{ creator: createdUser._id, status: "NOT_STARTED" }], { session });
-    });
-    return createdUser;
-  } catch (error) {
-    if (!transactionsUnsupported(error)) throw error;
-  } finally {
-    await session.endSession();
-  }
-
-  let createdUser;
-  try {
-    createdUser = await User.create(data);
-    await CreatorProfile.create({ user: createdUser._id, verificationStatus: "not_submitted" });
-    await CreatorVerification.create({ creator: createdUser._id, status: "NOT_STARTED" });
-    return createdUser;
-  } catch (error) {
-    if (createdUser) {
-      await Promise.all([
-        CreatorVerification.deleteOne({ creator: createdUser._id }),
-        CreatorProfile.deleteOne({ user: createdUser._id }),
-        User.deleteOne({ _id: createdUser._id }),
-      ]);
-    }
-    throw error;
-  }
-}
-
 export const register = asyncHandler(async (req, res) => {
   const { name, username, email, password } = validateRegisterPayload(req.body);
-  const { role } = req.body;
-
-  if (role && !["fan", "creator"].includes(role)) {
-    throw new ApiError(400, "You can only register as a fan or creator");
-  }
 
   const existingUser = await User.findOne({ $or: [{ email }, { username }] });
   if (existingUser) throw new ApiError(409, "A user with that email or username already exists");
@@ -109,12 +71,12 @@ export const register = asyncHandler(async (req, res) => {
     username,
     email,
     password,
-    role: role || "fan",
-    creatorApprovalStatus: role === "creator" ? "pending" : null,
+    role: "fan",
+    creatorApprovalStatus: null,
   };
 
-  const user = role === "creator" ? await createCreatorAccount(userData) : await User.create(userData);
-  if (user.role !== "creator") await createRoleProfile(user);
+  const user = await User.create(userData);
+  await createRoleProfile(user);
 
   // Email is a post-registration side effect: a provider outage must never
   // roll back an account that was created successfully.

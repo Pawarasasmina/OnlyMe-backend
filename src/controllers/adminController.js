@@ -12,10 +12,10 @@ export const getAdminDashboard = asyncHandler(async (_req, res) => {
     await Promise.all([
       User.countDocuments(),
       User.countDocuments({ role: "fan" }),
-      User.countDocuments({ role: "creator" }),
+      User.countDocuments({ role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved" }),
       User.countDocuments({ role: "admin" }),
       User.countDocuments({ status: "active" }),
-      User.countDocuments({ role: "creator", creatorApprovalStatus: { $in: ["pending", null] } }),
+      User.countDocuments({ role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "pending" }),
       Content.countDocuments({ status: { $in: ["PUBLISHED", "published"] } }),
       Content.countDocuments({ status: { $in: ["DRAFT", "draft"] } }),
       Subscription.countDocuments({ status: "active" }),

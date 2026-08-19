@@ -1,5 +1,7 @@
 ﻿import CreatorVerification from "../models/CreatorVerification.js";
 import VerificationReviewHistory from "../models/VerificationReviewHistory.js";
+import CreatorProfile from "../models/CreatorProfile.js";
+import FanProfile from "../models/FanProfile.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { performVerificationSubmission } from "../services/verificationSubmissionService.js";
 import { sendResponse } from "../utils/response.js";
@@ -38,6 +40,8 @@ export function serializeCreatorVerification(verification) {
   return {
     id: verification._id,
     status: verification.status,
+    category: verification.category,
+    socialPages: verification.socialPages || [],
     legalFullName: verification.legalFullName,
     dateOfBirth: verification.dateOfBirth,
     country: verification.country,
@@ -68,6 +72,24 @@ export function serializeCreatorVerification(verification) {
 }
 
 async function getOrCreateVerification(creatorId) {
+  const fanProfile = await FanProfile.findOne({ user: creatorId }).lean();
+  await CreatorProfile.updateOne(
+    { user: creatorId },
+    { $setOnInsert: {
+      user: creatorId,
+      verificationStatus: "not_submitted",
+      coverPhoto: fanProfile?.coverPhoto || "",
+      bio: fanProfile?.bio || "",
+      city: fanProfile?.city || "",
+      country: fanProfile?.country || "",
+      phoneNumber: fanProfile?.phoneNumber || "",
+      whatsapp: fanProfile?.whatsapp || "",
+      orbitStatus: fanProfile?.orbitStatus || "",
+      preferredLanguage: fanProfile?.preferredLanguage || "en",
+      timezone: fanProfile?.timezone || "UTC",
+    } },
+    { upsert: true, runValidators: true }
+  );
   return CreatorVerification.findOneAndUpdate(
     { creator: creatorId },
     { $setOnInsert: { creator: creatorId, status: "NOT_STARTED" } },
@@ -179,7 +201,7 @@ export const submitVerification = asyncHandler(async (req, res) => {
 export const resubmitVerification = asyncHandler(async (req, res) => {
   const verification = await performVerificationSubmission({
     creatorId: req.user._id,
-    allowedStatuses: ["CHANGES_REQUESTED"],
+    allowedStatuses: ["CHANGES_REQUESTED", "REJECTED"],
     action: "RESUBMITTED",
   });
   return sendResponse(res, 200, "Verification resubmitted for manual review", { verification: serializeCreatorVerification(verification) });

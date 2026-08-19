@@ -2,7 +2,7 @@
 
 export const DOCUMENT_FIELDS = ["documentFront", "documentBack", "selfieWithDocument"];
 export const DOCUMENT_TYPES = ["national_id", "passport", "driver_license", "other"];
-export const EDITABLE_STATUSES = ["NOT_STARTED", "DRAFT", "CHANGES_REQUESTED"];
+export const EDITABLE_STATUSES = ["NOT_STARTED", "DRAFT", "CHANGES_REQUESTED", "REJECTED"];
 
 const text = (value, field, max) => {
   const normalized = String(value ?? "").trim();
@@ -24,6 +24,11 @@ export function validateDraftPayload(payload = {}) {
   }
 
   return {
+    category: text(payload.category, "Creator category", 40),
+    socialPages: Array.isArray(payload.socialPages) ? payload.socialPages.slice(0, 5).map((item) => ({
+      platform: text(item?.platform, "Social platform", 30),
+      handle: text(item?.handle, "Social handle", 120),
+    })).filter((item) => item.platform && item.handle) : [],
     legalFullName: text(payload.legalFullName, "Legal full name", 150),
     dateOfBirth: optionalDate(payload.dateOfBirth, "Date of birth"),
     country: text(payload.country, "Country", 80),
@@ -47,29 +52,9 @@ export function documentBackRequired(documentType) {
 }
 
 export function assertCompleteApplication(verification) {
-  const requiredText = [
-    "legalFullName", "country", "nationality", "address", "city", "phoneNumber",
-    "documentType", "documentNumber", "issuingCountry", "policyVersion",
-  ];
-  const missing = requiredText.filter((field) => !String(verification[field] || "").trim());
-  if (!verification.dateOfBirth) missing.push("dateOfBirth");
-  if (missing.length) throw new ApiError(400, `Missing required verification fields: ${missing.join(", ")}`);
-  if (!verification.documentFront) throw new ApiError(400, "Document front is required");
-  if (!verification.selfieWithDocument) throw new ApiError(400, "Selfie with document is required");
-  if (documentBackRequired(verification.documentType) && !verification.documentBack) {
-    throw new ApiError(400, "Document back is required for this document type");
-  }
-
-  const birthDate = new Date(verification.dateOfBirth);
-  const now = new Date();
-  let age = now.getUTCFullYear() - birthDate.getUTCFullYear();
-  const beforeBirthday = now.getUTCMonth() < birthDate.getUTCMonth()
-    || (now.getUTCMonth() === birthDate.getUTCMonth() && now.getUTCDate() < birthDate.getUTCDate());
-  if (beforeBirthday) age -= 1;
-  if (age < 18) throw new ApiError(400, "Creator must be at least 18 years old");
-  if (!verification.ageConfirmed || !verification.informationConfirmed || !verification.policyAccepted) {
-    throw new ApiError(400, "All verification declarations must be accepted");
-  }
+  if (!String(verification.category || "").trim()) throw new ApiError(400, "Choose what you create");
+  if (!verification.socialPages?.some((item) => String(item.handle || "").trim())) throw new ApiError(400, "Add at least one creator page");
+  if (!verification.documentFront) throw new ApiError(400, "Upload an identity document");
 }
 
 export function assertDocumentField(value) {
