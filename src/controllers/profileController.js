@@ -75,6 +75,7 @@ function serializeOwnProfile(user, profile) {
       displayName: user.name,
       username: user.username,
       profilePhoto: user.avatar,
+      coverPhoto: profile.coverPhoto,
       preferredLanguage: profile.preferredLanguage,
       timezone: profile.timezone,
       notificationPreferences: profile.notificationPreferences,
@@ -86,7 +87,6 @@ function serializeOwnProfile(user, profile) {
   if (effectiveProfileRole(user) === "creator") {
     serialized.profile = {
       ...serialized.profile,
-      coverPhoto: profile.coverPhoto,
       bio: profile.bio,
       categories: profile.categories?.length ? profile.categories : profile.category ? [profile.category] : [],
       city: profile.city,
