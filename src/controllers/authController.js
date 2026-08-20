@@ -103,6 +103,9 @@ export const login = asyncHandler(async (req, res) => {
   if (user.status !== "active") {
     throw new ApiError(403, "This account is suspended");
   }
+  if (user.loginRestrictedUntil && user.loginRestrictedUntil > new Date()) {
+    throw new ApiError(403, `Account access is restricted until ${user.loginRestrictedUntil.toISOString()}`);
+  }
 
   if (user.role === "admin") {
     await AdminProfile.findOneAndUpdate(
@@ -157,9 +160,9 @@ export const refreshSession = asyncHandler(async (req, res) => {
   }
 
   const user = await User.findById(decoded.sub);
-  if (!user || user.status !== "active") {
+  if (!user || user.status !== "active" || (user.loginRestrictedUntil && user.loginRestrictedUntil > new Date())) {
     res.clearCookie("refreshToken", refreshCookieOptions);
-    throw new ApiError(401, "User is not available");
+    throw new ApiError(401, user?.loginRestrictedUntil > new Date() ? `Account access is restricted until ${user.loginRestrictedUntil.toISOString()}` : "User is not available");
   }
 
   const tokens = issueAuthTokens(user);

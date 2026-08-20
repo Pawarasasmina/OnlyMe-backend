@@ -58,6 +58,9 @@ const userSchema = new mongoose.Schema(
     messagingRestrictedUntil: { type: Date, default: null },
     messagingRestrictionReason: { type: String, trim: true, maxlength: 1000, default: "" },
     messagingRestrictedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    loginRestrictedUntil: { type: Date, default: null, index: true },
+    loginRestrictionReason: { type: String, trim: true, maxlength: 1000, default: "" },
+    loginRestrictedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     lastSeenAt: { type: Date, default: null },
     pinnedMessageGroup: { type: mongoose.Schema.Types.ObjectId, ref: "GroupConversation", default: null },
     activeStatus: {

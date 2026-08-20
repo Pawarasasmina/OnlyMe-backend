@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import FeedPost from "../models/FeedPost.js";
+import MessageReport from "../models/MessageReport.js";
 import UserBlock from "../models/UserBlock.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -500,19 +501,32 @@ export const hideFeedPost = asyncHandler(async (req, res) => {
 
 export const reportFeedPost = asyncHandler(async (req, res) => {
   const post = await findPublishedPost(req.params.id);
-  const reason = cleanString(req.body.reason || "Other", 80);
-  if (!reason) throw new ApiError(400, "Report reason is required");
-  const userId = String(req.user._id);
-  const existing = post.reports.find((item) => String(item.user) === userId && ["RECEIVED", "REVIEWING"].includes(item.status));
-  if (existing) {
-    existing.reason = reason;
-    existing.details = cleanString(req.body.details, 1000);
-  } else {
-    post.reports.push({ user: req.user._id, reason, details: cleanString(req.body.details, 1000) });
+  if (String(post.author) === String(req.user._id)) throw new ApiError(400, "You cannot report your own post");
+  const reason = cleanString(req.body.reason || "OTHER", 80).toUpperCase().replaceAll(/[^A-Z0-9]+/g, "_");
+  const allowed = new Set(["SPAM", "FALSE_INFORMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "OTHER"]);
+  if (!allowed.has(reason)) throw new ApiError(400, "Select a valid report reason");
+  try {
+    const report = await MessageReport.create({
+      reporter: req.user._id,
+      reportedUser: post.author,
+      scope: "FEED_POST",
+      feedPost: post._id,
+      reason,
+      details: cleanString(req.body.details, 1000),
+      snapshot: {
+        postId: String(post._id),
+        authorId: String(post.author),
+        text: post.text,
+        context: post.context,
+        media: post.media.map(({ url, type }) => ({ url, type })),
+        createdAt: post.createdAt,
+      },
+    });
+    return sendResponse(res, 201, "Post report received", { reportId: String(report._id), status: report.status });
+  } catch (error) {
+    if (error?.code === 11000) throw new ApiError(409, "You already reported this post");
+    throw error;
   }
-  await post.save();
-  const report = post.reports.find((item) => String(item.user) === userId && item.reason === reason);
-  return sendResponse(res, 201, "Post report received", { reportId: String(report?._id || ""), status: report?.status || "RECEIVED" });
 });
 
 export const blockPostAuthor = asyncHandler(async (req, res) => {
