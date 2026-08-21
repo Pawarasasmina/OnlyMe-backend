@@ -8,10 +8,10 @@ import ApiError from "../utils/ApiError.js";
 import { executeFinancialCommand } from "./financialCommandService.js";
 import { transferStars, safeWallet } from "./walletLedgerService.js";
 import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
+import { giftAllowedForRecipient, giftsForRecipient, serializeGift } from "./giftPreferenceService.js";
 
-export async function activeDreamGifts() {
-  const gifts = await Gift.find({ isActive: true }).sort({ sortOrder: 1, createdAt: 1 }).lean();
-  return gifts.map((gift) => ({ id: gift._id, key: String(gift._id), name: gift.name, stars: gift.stars, imageUrl: gift.image.url, displayScale: gift.displayScale, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0 }));
+export async function activeDreamGifts(recipientId) {
+  return (await giftsForRecipient(recipientId)).map(serializeGift);
 }
 
 const clean = (value, max) => String(value || "").trim().slice(0, max);
@@ -58,6 +58,7 @@ export async function sendDreamGift({ user, dreamId, giftKey, privateSupport, ke
     const dream = await Dream.findOne({ _id: dreamId, status: "ACTIVE" }).session(session);
     if (!dream) throw new ApiError(409, "This Dream is not accepting support");
     if (String(dream.creator) === String(user._id)) throw new ApiError(409, "You cannot send a gift to your own Dream");
+    if (!await giftAllowedForRecipient(dream.creator, gift._id, session)) throw new ApiError(409, "This creator is not accepting that gift");
     const wasSupporter = await DreamGift.exists({ dream: dream._id, supporter: user._id }).session(session);
     const moved = await transferStars({ fromUser: user._id, toUser: dream.creator, amount: gift.stars, debitType: "DREAM_GIFT_DEBIT", creditType: "DREAM_CREATOR_EARNING", referenceType: "DREAM_GIFT", referenceId: dream._id, creator: dream.creator, command, idempotencyKey: key, metadata: { dreamId: String(dream._id), giftKey: String(gift._id), giftName: gift.name } }, session);
     const [record] = await DreamGift.create([{ dream: dream._id, supporter: user._id, creator: dream.creator, gift: gift._id, giftKey: String(gift._id), giftName: gift.name, giftImageUrl: gift.image.url, starsAmount: gift.stars, privateSupport: Boolean(privateSupport), debitLedgerEntry: moved.debit.entry._id, creditLedgerEntry: moved.credit.entry._id, idempotencyKey: key }], { session });

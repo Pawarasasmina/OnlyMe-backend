@@ -13,6 +13,9 @@ import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
 import GroupConversation from "../models/GroupConversation.js";
 import GroupMessage from "../models/GroupMessage.js";
+import Gift from "../models/Gift.js";
+import ChatGift from "../models/ChatGift.js";
+import Notification from "../models/Notification.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -22,6 +25,10 @@ import { messageImageUrl, uploadMessageImage } from "../services/messageImageSto
 import { assertMessagingAccess } from "../services/messagingAccessService.js";
 import { createDirectAccessMessageAtomic, creatorTypicalReplyHours, releaseDirectAccessMessageReservation, reserveDirectAccessMessage, serializeDAWindow, settleDirectAccessReply } from "../services/directAccessService.js";
 import { serializePublication } from "../services/publicationAccessService.js";
+import { executeFinancialCommand } from "../services/financialCommandService.js";
+import { safeWallet, transferStars } from "../services/walletLedgerService.js";
+import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
+import { giftAllowedForRecipient, giftsForRecipient, serializeGift } from "../services/giftPreferenceService.js";
 
 const userFields = "name username avatar role creatorApprovalStatus isVerified status lastSeenAt";
 const isApprovedCreator = (user) => user?.creatorApprovalStatus === "approved";
@@ -49,7 +56,7 @@ const serializedSharedContent = (sharedContent, deletedAt = null) => {
     } : null,
   };
 };
-const serializedMessage = (message) => ({ id: message._id.toString(), clientMessageId: message.clientMessageId || null, senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "This message was deleted" : message.body, mediaType: message.mediaType || "text", messageKind: message.messageKind || "USER_MESSAGE", messageChannel: message.messageChannel || "STANDARD", directAccessWindowId: message.directAccessWindow ? String(message.directAccessWindow) : null, forwarded: Boolean(message.forwardedFrom), deletedAt: message.deletedAt || null, image: !message.deletedAt && message.mediaType === "image" && message.image?.assetId ? { url: messageImageUrl(message.image), width: message.image.width, height: message.image.height } : null, audio: !message.deletedAt && message.mediaType === "audio" && message.audio?.assetId ? { url: messageVoiceUrl(message.audio), duration: message.audio.duration, waveform: message.audio.waveform || [] } : null, video: !message.deletedAt && message.mediaType === "video" && message.video?.assetId ? { url: messageVideoUrl(message.video), duration: message.video.duration, width: message.video.width, height: message.video.height } : null, readAt: message.readAt || null, createdAt: message.createdAt, replyTo: serializedReply(message.replyTo), reactions: message.deletedAt ? [] : (message.reactions || []).map((reaction) => ({ userId: String(reaction.user?._id || reaction.user), emoji: reaction.emoji })), storyReply: !message.deletedAt && message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, expiresAt: message.storyReply.expiresAt || null } : null, sharedContent: serializedSharedContent(message.sharedContent, message.deletedAt) });
+const serializedMessage = (message) => ({ id: message._id.toString(), clientMessageId: message.clientMessageId || null, senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "This message was deleted" : message.body, mediaType: message.mediaType || "text", messageKind: message.messageKind || "USER_MESSAGE", messageChannel: message.messageChannel || "STANDARD", directAccessWindowId: message.directAccessWindow ? String(message.directAccessWindow) : null, forwarded: Boolean(message.forwardedFrom), deletedAt: message.deletedAt || null, gift: !message.deletedAt && message.mediaType === "gift" && message.gift?.giftId ? { id: String(message.gift.giftId), name: message.gift.name, stars: message.gift.stars, imageUrl: message.gift.imageUrl, displayScale: message.gift.displayScale || 100, imagePositionX: message.gift.imagePositionX || 0, imagePositionY: message.gift.imagePositionY || 0 } : null, image: !message.deletedAt && message.mediaType === "image" && message.image?.assetId ? { url: messageImageUrl(message.image), width: message.image.width, height: message.image.height } : null, audio: !message.deletedAt && message.mediaType === "audio" && message.audio?.assetId ? { url: messageVoiceUrl(message.audio), duration: message.audio.duration, waveform: message.audio.waveform || [] } : null, video: !message.deletedAt && message.mediaType === "video" && message.video?.assetId ? { url: messageVideoUrl(message.video), duration: message.video.duration, width: message.video.width, height: message.video.height } : null, readAt: message.readAt || null, createdAt: message.createdAt, replyTo: serializedReply(message.replyTo), reactions: message.deletedAt ? [] : (message.reactions || []).map((reaction) => ({ userId: String(reaction.user?._id || reaction.user), emoji: reaction.emoji })), storyReply: !message.deletedAt && message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, expiresAt: message.storyReply.expiresAt || null } : null, sharedContent: serializedSharedContent(message.sharedContent, message.deletedAt) });
 const validId = (value) => {
   if (!mongoose.isValidObjectId(value)) throw new ApiError(400, "Invalid account id");
 };
@@ -455,6 +462,49 @@ export const listMessages = asyncHandler(async (req, res) => {
   });
 });
 
+export const listChatGifts = asyncHandler(async (req, res) => {
+  validId(req.query.recipientId);
+  const other = await assertAllowedPair(req.user, req.query.recipientId, { allowBlocked: true });
+  const gifts = await giftsForRecipient(other._id);
+  return sendResponse(res, 200, "Chat gifts fetched", { gifts: gifts.map(serializeGift) });
+});
+
+export const sendChatGift = asyncHandler(async (req, res) => {
+  assertMessagingAccess(req.user);
+  const other = await assertAllowedPair(req.user, req.params.userId);
+  const giftId = String(req.body.giftId || "");
+  const key = idempotencyKey(req.body.idempotencyKey);
+  const gift = mongoose.isValidObjectId(giftId) ? await Gift.findOne({ _id: giftId, isActive: true }).lean() : null;
+  if (!gift) throw new ApiError(400, "Choose an available gift");
+
+  let conversation = await conversationFor(req.user, other);
+  if (!conversation || conversation.status !== "ACTIVE") throw new ApiError(409, "Gifts can be sent after the message request is accepted");
+
+  const result = await executeFinancialCommand({
+    user: req.user._id,
+    commandType: "SEND_CHAT_GIFT",
+    idempotencyKey: key,
+    requestFingerprint: fingerprint({ recipientId: String(other._id), giftId: String(gift._id) }),
+  }, async (session, command) => {
+    if (!await giftAllowedForRecipient(other._id, gift._id, session)) throw new ApiError(409, "This person is not accepting that gift");
+    const [message] = await Message.create([{
+      sender: req.user._id,
+      recipient: other._id,
+      clientMessageId: key,
+      body: `Sent ${gift.name}`,
+      mediaType: "gift",
+      gift: { giftId: gift._id, name: gift.name, stars: gift.stars, imageUrl: gift.image.url, displayScale: gift.displayScale || 100, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0 },
+    }], { session });
+    const moved = await transferStars({ fromUser: req.user._id, toUser: other._id, amount: gift.stars, debitType: "CHAT_GIFT_DEBIT", creditType: "CHAT_GIFT_EARNING", referenceType: "CHAT_GIFT", referenceId: message._id, creator: other._id, command, idempotencyKey: key, metadata: { messageId: String(message._id), giftId: String(gift._id), giftName: gift.name } }, session);
+    const [record] = await ChatGift.create([{ message: message._id, sender: req.user._id, recipient: other._id, gift: gift._id, giftName: gift.name, giftImageUrl: gift.image.url, starsAmount: gift.stars, debitLedgerEntry: moved.debit.entry._id, creditLedgerEntry: moved.credit.entry._id, idempotencyKey: key }], { session });
+    await Notification.create([{ user: other._id, type: "chat_gift", title: `${req.user.name} sent you ${gift.name} (✦${gift.stars})`, dedupeKey: `chat-gift:${record._id}` }], { session });
+    return { resultReference: record._id, message: serializedMessage(message), wallet: safeWallet(moved.debit.wallet) };
+  });
+  const payload = result.message;
+  req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation?.status || "ACTIVE" });
+  return sendResponse(res, 201, "Gift sent", { ...result, conversationStatus: conversation?.status || "ACTIVE" });
+});
+
 export const sendMessage = asyncHandler(async (req, res) => {
   assertMessagingAccess(req.user);
   const other = await assertAllowedPair(req.user, req.params.userId);
@@ -723,6 +773,7 @@ export const forwardMessage = asyncHandler(async (req, res) => {
   validId(req.params.messageId);
   const source = await Message.findOne({ _id: req.params.messageId, deletedAt: null, $or: [{ sender: req.user._id }, { recipient: req.user._id }] }).lean();
   if (!source) throw new ApiError(404, "Message not found");
+  if (source.mediaType === "gift") throw new ApiError(409, "Financial gift messages cannot be forwarded");
   const targets = Array.isArray(req.body.targets) ? req.body.targets.slice(0, 20) : [];
   if (!targets.length) throw new ApiError(400, "Choose at least one conversation");
   const results = [];
