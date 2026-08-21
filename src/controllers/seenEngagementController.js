@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import Publication from "../models/Publication.js";
 import PublicationPreference from "../models/PublicationPreference.js";
-import PublicationReport, { PUBLICATION_REPORT_REASONS } from "../models/PublicationReport.js";
+import MessageReport from "../models/MessageReport.js";
 import SeenEngagement, { SEEN_REACTIONS } from "../models/SeenEngagement.js";
 import UserBlock from "../models/UserBlock.js";
 import ApiError from "../utils/ApiError.js";
@@ -107,16 +107,20 @@ export const reportSeen = asyncHandler(async (req, res) => {
   const publication = await Publication.findOne({ _id: req.params.id, kind: "SEEN", status: "PUBLISHED" }).select("_id creator kind title summary publishedAt").lean();
   if (!publication) throw new ApiError(404, "Published Seen not found");
 
-  const reason = cleanString(req.body.reason || "OTHER", 80).toUpperCase();
-  if (!PUBLICATION_REPORT_REASONS.includes(reason)) throw new ApiError(400, "Select a valid report reason");
+  if (String(publication.creator) === String(req.user._id)) throw new ApiError(400, "You cannot report your own Seen");
+  const reason = cleanString(req.body.reason || "OTHER", 80).toUpperCase().replaceAll(/[^A-Z0-9]+/g, "_");
+  const allowed = new Set(["SPAM", "FALSE_INFORMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "OTHER"]);
+  if (!allowed.has(reason)) throw new ApiError(400, "Select a valid report reason");
 
   const payload = {
-    creator: publication.creator,
+    reporter: req.user._id,
+    reportedUser: publication.creator,
+    scope: "SEEN",
+    publication: publication._id,
     details: cleanString(req.body.details, 1000),
-    kind: publication.kind,
     reason,
-    reasonLabel: cleanString(req.body.label, 80),
     snapshot: {
+      publicationId: String(publication._id),
       title: publication.title || "",
       summary: publication.summary || "",
       creatorId: String(publication.creator || ""),
@@ -124,11 +128,11 @@ export const reportSeen = asyncHandler(async (req, res) => {
     },
   };
 
-  const report = await PublicationReport.findOneAndUpdate(
-    { publication: publication._id, reporter: req.user._id, status: { $in: ["RECEIVED", "REVIEWING"] } },
-    { $set: payload, $setOnInsert: { publication: publication._id, reporter: req.user._id } },
-    { new: true, runValidators: true, upsert: true }
-  );
-
-  return sendResponse(res, 201, "Seen report received", { reportId: String(report._id), status: report.status });
+  try {
+    const report = await MessageReport.create(payload);
+    return sendResponse(res, 201, "Seen report received", { reportId: String(report._id), status: report.status });
+  } catch (error) {
+    if (error?.code === 11000) throw new ApiError(409, "You already reported this Seen");
+    throw error;
+  }
 });

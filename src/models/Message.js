@@ -6,7 +6,16 @@ const messageSchema = new mongoose.Schema(
     recipient: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     clientMessageId: { type: String, trim: true, maxlength: 100, default: null },
     body: { type: String, required: true, trim: true, maxlength: 2000 },
-    mediaType: { type: String, enum: ["text", "image", "video", "audio"], default: "text" },
+    mediaType: { type: String, enum: ["text", "image", "video", "audio", "gift"], default: "text" },
+    gift: {
+      giftId: { type: mongoose.Schema.Types.ObjectId, ref: "Gift", default: null },
+      name: { type: String, trim: true, maxlength: 80, default: "" },
+      stars: { type: Number, min: 1, default: undefined },
+      imageUrl: { type: String, maxlength: 2000, default: "" },
+      displayScale: { type: Number, min: 40, max: 140, default: undefined },
+      imagePositionX: { type: Number, min: -50, max: 50, default: 0 },
+      imagePositionY: { type: Number, min: -50, max: 50, default: 0 },
+    },
     image: {
       assetId: { type: String, default: "" },
       resourceType: { type: String, default: "" },

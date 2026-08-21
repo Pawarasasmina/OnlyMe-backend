@@ -19,6 +19,8 @@ import { uploadGiftImage } from "../middleware/uploadMiddleware.js";
 import { getWelcomeEmailTemplate, updateWelcomeEmailTemplate } from "../controllers/adminEmailTemplateController.js";
 
 const router = Router();
+const messageReportScope = (req, _res, next) => { req.reportScopes = ["MESSAGE", "GROUP_MESSAGE", "CONVERSATION"]; next(); };
+const userReportScope = (req, _res, next) => { req.reportScopes = ["FEED_POST", "PROFILE", "SEEN"]; next(); };
 
 router.use(protect, authorize("admin"));
 router.get("/dashboard", getAdminDashboard);
@@ -32,11 +34,15 @@ router.delete("/gifts/:id", deleteGift);
 router.get("/users", listUsers);
 router.patch("/users/:userId/status", updateUserStatus);
 router.patch("/users/:userId/creator-approval", updateCreatorApproval);
-router.get("/message-reports", listMessageReports);
-router.get("/message-report-users", listReportedMessageUsers);
-router.get("/message-report-users/:userId", getReportedMessageUser);
-router.post("/message-reports/:reportId/review", startMessageReportReview);
-router.post("/message-reports/:reportId/resolve", resolveMessageReport);
+router.get("/message-reports", messageReportScope, listMessageReports);
+router.get("/message-report-users", messageReportScope, listReportedMessageUsers);
+router.get("/message-report-users/:userId", messageReportScope, getReportedMessageUser);
+router.post("/message-reports/:reportId/review", messageReportScope, startMessageReportReview);
+router.post("/message-reports/:reportId/resolve", messageReportScope, resolveMessageReport);
+router.get("/user-report-users", userReportScope, listReportedMessageUsers);
+router.get("/user-report-users/:userId", userReportScope, getReportedMessageUser);
+router.post("/user-reports/:reportId/review", userReportScope, startMessageReportReview);
+router.post("/user-reports/:reportId/resolve", userReportScope, resolveMessageReport);
 router.get("/content", listContentForModeration);
 router.patch("/content/:contentId/status", updateContentStatus);
 

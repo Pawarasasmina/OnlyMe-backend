@@ -10,6 +10,7 @@ import WallEngagement from "../models/WallEngagement.js";
 import WallPost from "../models/WallPost.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import GroupConversation from "../models/GroupConversation.js";
+import MessageReport from "../models/MessageReport.js";
 import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -107,6 +108,32 @@ async function toggleRelationship(req, type) {
 
 export const toggleProfileFollow = asyncHandler(async (req, res) => sendResponse(res, 200, "Follow relationship updated", { relationship: await toggleRelationship(req, "FOLLOW") }));
 export const toggleProfileSeeSignal = asyncHandler(async (req, res) => sendResponse(res, 200, "See signal updated", { relationship: await toggleRelationship(req, "SEE_SIGNAL") }));
+
+const PROFILE_REPORT_REASONS = new Set(["SPAM", "FALSE_INFORMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "OTHER"]);
+
+export const reportUnifiedProfile = asyncHandler(async (req, res) => {
+  const username = normalizeUsername(req.params.username);
+  const reportedUser = await User.findOne({ username }).select("name username avatar role");
+  if (!reportedUser) throw new ApiError(404, "Profile not found");
+  if (String(reportedUser._id) === String(req.user._id)) throw new ApiError(400, "You cannot report your own profile");
+  const reason = String(req.body.reason || "").trim().toUpperCase().replaceAll(/[^A-Z0-9]+/g, "_");
+  if (!PROFILE_REPORT_REASONS.has(reason)) throw new ApiError(400, "Select a valid report reason");
+  const details = String(req.body.details || "").trim().slice(0, 1000);
+  try {
+    const report = await MessageReport.create({
+      reporter: req.user._id,
+      reportedUser: reportedUser._id,
+      scope: "PROFILE",
+      reason,
+      details,
+      snapshot: { userId: String(reportedUser._id), username: reportedUser.username, name: reportedUser.name, avatar: reportedUser.avatar, role: reportedUser.role },
+    });
+    return sendResponse(res, 201, "Profile report received", { reportId: String(report._id), status: report.status });
+  } catch (error) {
+    if (error?.code === 11000) throw new ApiError(409, "You already reported this profile");
+    throw error;
+  }
+});
 
 export const getOwnUnifiedProfile = asyncHandler(async (req, res) => {
   if (!["fan", "creator"].includes(req.user.role)) throw new ApiError(404, "Profile not found");

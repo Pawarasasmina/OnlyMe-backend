@@ -1,6 +1,6 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { acceptMessageRequest, archiveConversation, blockMessageAccount, declineMessageRequest, deleteConversation, deleteMessage, forwardMessage, listConversations, listMessages, listShareRecipients, muteConversation, removeMessageReaction, reportConversation, reportMessage, searchMessagePeople, sendImageMessage, sendMessage, sendSharedContent, sendVideoNote, sendVoiceMessage, setMessageReaction, unblockMessageAccount } from "../controllers/messageController.js";
+import { acceptMessageRequest, archiveConversation, blockMessageAccount, declineMessageRequest, deleteConversation, deleteMessage, forwardMessage, listChatGifts, listConversations, listMessages, listShareRecipients, muteConversation, removeMessageReaction, reportConversation, reportMessage, searchMessagePeople, sendChatGift, sendImageMessage, sendMessage, sendSharedContent, sendVideoNote, sendVoiceMessage, setMessageReaction, unblockMessageAccount } from "../controllers/messageController.js";
 import { askDirectAccessQuestion, getDirectAccessOffer, listDirectAccessWindows, openWindow, replyToFreeFanFollowup, sendFreeFanFollowup, updateDirectAccessSettings } from "../controllers/directAccessController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
@@ -26,6 +26,7 @@ router.post("/direct-access/ask/:fanId", messageSendLimiter, askDirectAccessQues
 router.post("/direct-access/follow-up/:creatorId", messageSendLimiter, sendFreeFanFollowup);
 router.post("/direct-access/follow-up/:messageId/reply", financialMutationLimit, messageSendLimiter, replyToFreeFanFollowup);
 router.get("/conversations", listConversations);
+router.get("/gifts", listChatGifts);
 router.get("/people", searchMessagePeople);
 router.get("/share/recipients", listShareRecipients);
 router.post("/share", messageSendLimiter, sendSharedContent);
@@ -55,6 +56,7 @@ router.post("/groups/messages/:messageId/report", reportGroupMessage);
 router.post("/groups/messages/:messageId/forward", messageSendLimiter, forwardGroupMessage);
 router.get("/conversations/:userId", listMessages);
 router.post("/conversations/:userId", messageSendLimiter, sendMessage);
+router.post("/conversations/:userId/gifts", financialMutationLimit, messageSendLimiter, sendChatGift);
 router.post("/conversations/:userId/voice", messageSendLimiter, uploadVoiceMessage.single("voice"), sendVoiceMessage);
 router.post("/conversations/:userId/video-note", messageSendLimiter, uploadVideoNote.single("video"), sendVideoNote);
 router.post("/conversations/:userId/image", messageSendLimiter, uploadMessageImage.single("image"), sendImageMessage);

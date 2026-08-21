@@ -29,6 +29,9 @@ export const protect = asyncHandler(async (req, _res, next) => {
   if (user.status !== "active") {
     throw new ApiError(403, "This account is suspended");
   }
+  if (user.loginRestrictedUntil && user.loginRestrictedUntil > new Date()) {
+    throw new ApiError(403, `Account access is restricted until ${user.loginRestrictedUntil.toISOString()}`);
+  }
 
   req.user = user;
   next();
@@ -49,6 +52,7 @@ export const optionalProtect = asyncHandler(async (req, _res, next) => {
   const user = await User.findById(decoded.sub);
   if (!user) throw new ApiError(401, "User not found");
   if (user.status !== "active") throw new ApiError(403, "This account is suspended");
+  if (user.loginRestrictedUntil && user.loginRestrictedUntil > new Date()) throw new ApiError(403, `Account access is restricted until ${user.loginRestrictedUntil.toISOString()}`);
   req.user = user;
   return next();
 });

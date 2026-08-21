@@ -276,10 +276,17 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
     })),
     ...notifications.map((notification) => ({
       id: `notification-${notification._id}`,
+      warningId: notification.type === "moderation_warning" ? String(notification._id) : null,
       type: notification.type || "notification",
-      description: notification.title,
+      description: notification.type === "moderation_warning" ? (notification.message || notification.title) : notification.title,
+      title: notification.title,
+      severity: notification.severity,
+      priority: notification.priority || 0,
+      acknowledged: Boolean(notification.acknowledgedAt),
+      direction: "received",
+      filter: notification.type === "moderation_warning" ? "moderation" : "other",
       createdAt: notification.createdAt,
-      actionPath: "/fan/activity",
+      actionPath: "/activity",
     })),
     ...transactions.map((transaction) => {
       const direction = transactionDirection(transaction);
