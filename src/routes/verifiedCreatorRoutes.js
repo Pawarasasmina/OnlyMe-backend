@@ -1,0 +1,10 @@
+import { Router } from "express";
+import { applyForVerifiedCreator, getMyVerifiedCreator, renewVerifiedCreator } from "../controllers/verifiedCreatorController.js";
+import { protect } from "../middleware/authMiddleware.js";
+import { authorize } from "../middleware/roleMiddleware.js";
+const router = Router();
+router.use(protect, authorize("fan", "creator"));
+router.get("/", getMyVerifiedCreator);
+router.post("/apply", applyForVerifiedCreator);
+router.post("/renew", renewVerifiedCreator);
+export default router;

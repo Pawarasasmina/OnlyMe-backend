@@ -3,6 +3,7 @@ import { env } from "../config/env.js";
 import User from "../models/User.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { expireVerifiedCreator } from "../services/verifiedCreatorService.js";
 
 export const protect = asyncHandler(async (req, _res, next) => {
   const authHeader = req.headers.authorization;
@@ -31,6 +32,11 @@ export const protect = asyncHandler(async (req, _res, next) => {
   }
   if (user.loginRestrictedUntil && user.loginRestrictedUntil > new Date()) {
     throw new ApiError(403, `Account access is restricted until ${user.loginRestrictedUntil.toISOString()}`);
+  }
+
+  if (user.isVerified && user.creatorApprovalStatus === "approved") {
+    const expired = await expireVerifiedCreator(user._id);
+    if (expired) user.isVerified = false;
   }
 
   req.user = user;
