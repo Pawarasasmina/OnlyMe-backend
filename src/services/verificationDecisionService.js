@@ -13,7 +13,7 @@ const unsupportedTransaction = (error) => /Transaction numbers are only allowed|
 const options = (session) => session ? { session } : {};
 
 export const DECISIONS = {
-  APPROVED: { approval: "approved", profile: "verified", action: "APPROVED", notification: "Your creator application was approved", notificationType: "verification_approved" },
+  APPROVED: { approval: "approved", profile: "not_submitted", action: "APPROVED", notification: "Your creator application was approved", notificationType: "verification_approved" },
   CHANGES_REQUESTED: { approval: "pending", profile: "pending", action: "CHANGES_REQUESTED", notification: "Changes were requested for your creator application", notificationType: "verification_changes_requested" },
   REJECTED: { approval: "rejected", profile: "rejected", action: "REJECTED", notification: "Your creator application was rejected", notificationType: "verification_rejected" },
 };
@@ -54,7 +54,7 @@ async function synchronizeDecision(verification, config, previousStatus, session
   const transitionId = verification.lastTransitionId;
   await User.updateOne(
     { _id: verification.creator },
-    { $set: { creatorApprovalStatus: config.approval } },
+    { $set: { creatorApprovalStatus: config.approval, ...(config.approval === "approved" ? { isVerified: false } : {}) } },
     options(session)
   );
   await CreatorProfile.updateOne(

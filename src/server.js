@@ -8,6 +8,7 @@ import { processDuePremiumMemberships } from "./services/premiumMembershipServic
 import { configureMessagingSocket } from "./realtime/messagingSocket.js";
 import { processDueDirectAccessWindows } from "./services/directAccessService.js";
 import { processDuePaidCalls } from "./services/paidCallService.js";
+import { reconcileVerifiedCreatorBadges } from "./services/verifiedCreatorService.js";
 
 async function startServer() {
   try {
@@ -16,6 +17,7 @@ async function startServer() {
     await processDuePremiumMemberships();
     await processDueDirectAccessWindows();
     await processDuePaidCalls();
+    await reconcileVerifiedCreatorBadges();
     const premiumRenewalTimer = setInterval(
       () => processDuePremiumMemberships().catch((error) =>
         console.error("Premium renewal worker failed", error),
@@ -35,6 +37,11 @@ async function startServer() {
       60 * 1000,
     );
     paidCallExpiryTimer.unref();
+    const verifiedCreatorRenewalTimer = setInterval(
+      () => reconcileVerifiedCreatorBadges().catch((error) => console.error("Verified Creator renewal worker failed", error)),
+      60 * 1000,
+    );
+    verifiedCreatorRenewalTimer.unref();
     const server = http.createServer(app);
     const io = new Server(server, { cors: { origin: env.clientUrl, credentials: true } });
     configureMessagingSocket(io);

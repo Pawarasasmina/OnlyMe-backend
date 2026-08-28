@@ -1,0 +1,11 @@
+import { Router } from "express";
+import { approveVerifiedCreator, listVerifiedCreatorApplications, rejectVerifiedCreator, updateVerifiedCreatorPrice } from "../controllers/verifiedCreatorController.js";
+import { protect } from "../middleware/authMiddleware.js";
+import { authorize } from "../middleware/roleMiddleware.js";
+const router = Router();
+router.use(protect, authorize("admin"));
+router.get("/", listVerifiedCreatorApplications);
+router.put("/plan", updateVerifiedCreatorPrice);
+router.post("/:id/approve", approveVerifiedCreator);
+router.post("/:id/reject", rejectVerifiedCreator);
+export default router;
