@@ -18,30 +18,18 @@ Express API starter for the OnlyMe platform.
 
 ## Voice transcript translation
 
-Voice note transcription remains handled by Deepgram. Transcript translation uses a self-hosted LibreTranslate instance through the backend only; React never calls LibreTranslate directly.
+Voice note transcription remains handled by Deepgram. Transcript translation uses Lara Translate API through the backend only; React never calls Lara directly and no provider credentials are exposed to the browser.
 
-For local Windows development with Docker:
-
-```sh
-docker run -ti --rm -p 5000:5000 libretranslate/libretranslate
-```
-
-Or from the repository root:
-
-```sh
-docker compose -f docker-compose.libretranslate.yml up
-```
-
-LibreTranslate should then be available at `http://127.0.0.1:5000`. Configure the backend with:
+Configure the backend with Lara credentials:
 
 ```env
-LIBRETRANSLATE_URL=http://127.0.0.1:5000
-LIBRETRANSLATE_API_KEY=
+LARA_ACCESS_KEY_ID=
+LARA_ACCESS_KEY_SECRET=
 ```
 
-`LIBRETRANSLATE_API_KEY` is optional and should be left empty unless your self-hosted instance has API-key mode enabled. Do not add `VITE_LIBRETRANSLATE_*` variables; provider access stays server-side.
+Do not add `VITE_LARA_*` variables. Lara credentials belong only in the backend runtime environment. In Vercel, add `LARA_ACCESS_KEY_ID` and `LARA_ACCESS_KEY_SECRET` to the backend project environment variables.
 
-The backend uses `GET /api/voice/translation-languages` to proxy LibreTranslate `/languages`, so the UI only shows language models that are actually installed in the running instance. Sinhala, Tamil, and any other language appear only if LibreTranslate reports support for them.
+The backend keeps the existing `GET /api/voice/translation-languages` and `POST /api/voice/translate` endpoints. Languages are Lara locale codes such as `fr-FR`, `es-ES`, `si-LK`, and `ta-IN`; older saved short codes such as `fr`, `es`, and `de` continue to render with friendly labels.
 
 ## Profile API
 

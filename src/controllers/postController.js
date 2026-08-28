@@ -16,7 +16,7 @@ import {
 import { deleteFeedPostMedia, uploadFeedPostImage, uploadFeedPostVoice } from "../services/feedPostMediaStorageService.js";
 import { recordChecklistEvent } from "../services/onboardingService.js";
 import { listSupportedTranslationLanguages } from "../services/translationService.js";
-import { normalizeVoiceLanguageCode } from "../../../shared/voiceTranslationLanguages.js";
+import { getVoiceLanguageName, normalizeVoiceLanguageCode, resolveSupportedVoiceLanguage } from "../constants/voiceTranslationLanguages.js";
 
 function pageOptions(req) {
   return {
@@ -189,7 +189,7 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
         transcriptLanguage: item.transcriptLanguage || "",
         translations: (item.translations || []).map((translation) => ({
           language: translation.language,
-          languageName: translation.languageName || "",
+          languageName: translation.languageName || getVoiceLanguageName(translation.language),
           text: translation.text,
         })),
         waveform: item.waveform || [],
@@ -267,10 +267,10 @@ async function readVoiceTranslations(value, transcript = "") {
   const currentTranscript = cleanString(transcript, POST_TEXT_MAX_LENGTH);
   const languages = new Set();
   const supportedLanguages = await listSupportedTranslationLanguages();
-  const supportedByCode = new Map(supportedLanguages.map((language) => [language.code, language]));
 
   return parsed.map((entry) => {
-    const language = normalizeVoiceLanguageCode(entry?.language);
+    const supportedLanguage = resolveSupportedVoiceLanguage(entry?.language, supportedLanguages);
+    const language = supportedLanguage?.code || normalizeVoiceLanguageCode(entry?.language);
     const text = cleanString(entry?.text, POST_TEXT_MAX_LENGTH);
     const sourceText = Object.hasOwn(entry || {}, "sourceText") ? cleanString(entry.sourceText, POST_TEXT_MAX_LENGTH) : currentTranscript;
 
@@ -278,7 +278,6 @@ async function readVoiceTranslations(value, transcript = "") {
       throw new ApiError(400, "Each voice translation requires language and text", "INVALID_TRANSLATIONS");
     }
 
-    const supportedLanguage = supportedByCode.get(language);
     if (!supportedLanguage) {
       throw new ApiError(400, "Unsupported translation language.", "UNSUPPORTED_LANGUAGE");
     }

@@ -3,7 +3,7 @@ import { POST_CONTEXTS, POST_REACTIONS, POST_STATUSES, POST_VISIBILITIES } from 
 
 const postMediaTranslationSchema = new mongoose.Schema(
   {
-    language: { type: String, trim: true, lowercase: true, required: true },
+    language: { type: String, trim: true, required: true },
     languageName: { type: String, trim: true, maxlength: 80, default: "" },
     text: { type: String, trim: true, required: true, maxlength: 2000 },
   },
@@ -23,7 +23,7 @@ const postMediaSchema = new mongoose.Schema(
     mimeType: { type: String, trim: true, default: "" },
     waveform: { type: [Number], default: [] },
     transcript: { type: String, trim: true, maxlength: 2000, default: "" },
-    transcriptLanguage: { type: String, trim: true, lowercase: true, default: "" },
+    transcriptLanguage: { type: String, trim: true, default: "" },
     translations: { type: [postMediaTranslationSchema], default: [] },
     sortOrder: { type: Number, min: 0, default: 0 },
     originalName: { type: String, trim: true, default: "" },
