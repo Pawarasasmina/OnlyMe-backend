@@ -1,15 +1,30 @@
 import mongoose from "mongoose";
 import { POST_CONTEXTS, POST_REACTIONS, POST_STATUSES, POST_VISIBILITIES } from "../constants/postConstants.js";
 
+const postMediaTranslationSchema = new mongoose.Schema(
+  {
+    language: { type: String, trim: true, lowercase: true, required: true },
+    languageName: { type: String, trim: true, maxlength: 80, default: "" },
+    text: { type: String, trim: true, required: true, maxlength: 2000 },
+  },
+  { _id: false }
+);
+
 const postMediaSchema = new mongoose.Schema(
   {
     assetId: { type: String, trim: true, required: true },
     url: { type: String, trim: true, required: true },
-    type: { type: String, enum: ["image"], default: "image" },
+    type: { type: String, enum: ["image", "audio"], default: "image" },
     format: { type: String, trim: true, lowercase: true },
     bytes: { type: Number, min: 0 },
     width: { type: Number, min: 0 },
     height: { type: Number, min: 0 },
+    duration: { type: Number, min: 0 },
+    mimeType: { type: String, trim: true, default: "" },
+    waveform: { type: [Number], default: [] },
+    transcript: { type: String, trim: true, maxlength: 2000, default: "" },
+    transcriptLanguage: { type: String, trim: true, lowercase: true, default: "" },
+    translations: { type: [postMediaTranslationSchema], default: [] },
     sortOrder: { type: Number, min: 0, default: 0 },
     originalName: { type: String, trim: true, default: "" },
   },

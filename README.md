@@ -16,6 +16,33 @@ Express API starter for the OnlyMe platform.
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
 
+## Voice transcript translation
+
+Voice note transcription remains handled by Deepgram. Transcript translation uses a self-hosted LibreTranslate instance through the backend only; React never calls LibreTranslate directly.
+
+For local Windows development with Docker:
+
+```sh
+docker run -ti --rm -p 5000:5000 libretranslate/libretranslate
+```
+
+Or from the repository root:
+
+```sh
+docker compose -f docker-compose.libretranslate.yml up
+```
+
+LibreTranslate should then be available at `http://127.0.0.1:5000`. Configure the backend with:
+
+```env
+LIBRETRANSLATE_URL=http://127.0.0.1:5000
+LIBRETRANSLATE_API_KEY=
+```
+
+`LIBRETRANSLATE_API_KEY` is optional and should be left empty unless your self-hosted instance has API-key mode enabled. Do not add `VITE_LIBRETRANSLATE_*` variables; provider access stays server-side.
+
+The backend uses `GET /api/voice/translation-languages` to proxy LibreTranslate `/languages`, so the UI only shows language models that are actually installed in the running instance. Sinhala, Tamil, and any other language appear only if LibreTranslate reports support for them.
+
 ## Profile API
 
 - `GET /api/profile/me` - fetch the authenticated user's role-based profile.
