@@ -13,8 +13,10 @@ import {
   POST_REACTIONS,
   POST_TEXT_MAX_LENGTH,
 } from "../constants/postConstants.js";
-import { deleteFeedPostImages, uploadFeedPostImage } from "../services/feedPostMediaStorageService.js";
+import { deleteFeedPostMedia, uploadFeedPostImage, uploadFeedPostVoice } from "../services/feedPostMediaStorageService.js";
 import { recordChecklistEvent } from "../services/onboardingService.js";
+import { listSupportedTranslationLanguages } from "../services/translationService.js";
+import { normalizeVoiceLanguageCode } from "../../../shared/voiceTranslationLanguages.js";
 
 function pageOptions(req) {
   return {
@@ -91,16 +93,16 @@ function feedFilterQuery(query = {}) {
 
 export const postControllerTestUtils = { feedFilterQuery };
 
-function ensureCreatable({ files = [], status, text }) {
-  if (files.length > POST_MAX_IMAGES) {
+function ensureCreatable({ hasVoice = false, imageFiles = [], status, text }) {
+  if (imageFiles.length > POST_MAX_IMAGES) {
     throw new ApiError(400, `A post can include up to ${POST_MAX_IMAGES} images`);
   }
 
-  if (status === "published" && !text) {
-    throw new ApiError(400, "Post text is required");
+  if (status === "published" && !text && !hasVoice) {
+    throw new ApiError(400, "Post text or a voice note is required");
   }
 
-  if (status === "draft" && !text && !files.length) {
+  if (status === "draft" && !text && !imageFiles.length && !hasVoice) {
     throw new ApiError(400, "Add text or images before saving a draft");
   }
 }
@@ -181,6 +183,16 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
         height: item.height || null,
         bytes: item.bytes || null,
         format: item.format || "",
+        duration: item.duration || null,
+        mimeType: item.mimeType || "",
+        transcript: item.transcript || "",
+        transcriptLanguage: item.transcriptLanguage || "",
+        translations: (item.translations || []).map((translation) => ({
+          language: translation.language,
+          languageName: translation.languageName || "",
+          text: translation.text,
+        })),
+        waveform: item.waveform || [],
       })),
     visibility: post.visibility,
     status: post.status,
@@ -224,24 +236,99 @@ async function populatePostForResponse(post) {
   return post;
 }
 
-async function uploadPostFiles({ files = [], post, userId }) {
+function readWaveform(value) {
+  if (!value) return [];
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => Number(item))
+      .filter((item) => Number.isFinite(item) && item >= 0)
+      .slice(0, 100);
+  } catch {
+    return [];
+  }
+}
+
+async function readVoiceTranslations(value, transcript = "") {
+  if (!value) return [];
+
+  let parsed;
+  try {
+    parsed = typeof value === "string" ? JSON.parse(value) : value;
+  } catch {
+    throw new ApiError(400, "Voice translations must be valid JSON", "INVALID_TRANSLATIONS");
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new ApiError(400, "Voice translations must be an array", "INVALID_TRANSLATIONS");
+  }
+
+  const currentTranscript = cleanString(transcript, POST_TEXT_MAX_LENGTH);
+  const languages = new Set();
+  const supportedLanguages = await listSupportedTranslationLanguages();
+  const supportedByCode = new Map(supportedLanguages.map((language) => [language.code, language]));
+
+  return parsed.map((entry) => {
+    const language = normalizeVoiceLanguageCode(entry?.language);
+    const text = cleanString(entry?.text, POST_TEXT_MAX_LENGTH);
+    const sourceText = Object.hasOwn(entry || {}, "sourceText") ? cleanString(entry.sourceText, POST_TEXT_MAX_LENGTH) : currentTranscript;
+
+    if (!language || !text) {
+      throw new ApiError(400, "Each voice translation requires language and text", "INVALID_TRANSLATIONS");
+    }
+
+    const supportedLanguage = supportedByCode.get(language);
+    if (!supportedLanguage) {
+      throw new ApiError(400, "Unsupported translation language.", "UNSUPPORTED_LANGUAGE");
+    }
+
+    if (languages.has(language)) {
+      throw new ApiError(400, "Duplicate translation language.", "DUPLICATE_TRANSLATION_LANGUAGE");
+    }
+
+    if (sourceText !== currentTranscript) {
+      throw new ApiError(400, "Voice translations must match the current transcript.", "STALE_TRANSLATION");
+    }
+
+    languages.add(language);
+    return { language, languageName: supportedLanguage.name, text };
+  });
+}
+
+async function uploadPostMedia({ imageFiles = [], post, req, userId, voiceFile = null }) {
   const uploaded = [];
   try {
-    for (const [index, file] of files.entries()) {
+    for (const [index, file] of imageFiles.entries()) {
       uploaded.push(await uploadFeedPostImage({ file, postId: post._id, userId, sortOrder: index }));
+    }
+    if (voiceFile) {
+      const transcript = cleanString(req.body.voiceTranscript, POST_TEXT_MAX_LENGTH);
+      const transcriptLanguage = normalizeVoiceLanguageCode(req.body.voiceTranscriptLanguage);
+
+      uploaded.push(await uploadFeedPostVoice({
+        file: voiceFile,
+        postId: post._id,
+        sortOrder: uploaded.length,
+        transcript,
+        transcriptLanguage,
+        translations: await readVoiceTranslations(req.body.voiceTranslations, transcript),
+        userId,
+        waveform: readWaveform(req.body.voiceWaveform),
+      }));
     }
     return uploaded;
   } catch (error) {
-    await deleteFeedPostImages(uploaded);
+    await deleteFeedPostMedia(uploaded);
     throw error;
   }
 }
 
-async function createPostRecord({ files, req, status }) {
+async function createPostRecord({ imageFiles = [], req, status, voiceFile = null }) {
   const text = cleanString(req.body.text, POST_TEXT_MAX_LENGTH);
   const context = readContext(req.body.context);
   const location = readLocation(req.body.location);
-  ensureCreatable({ files, status, text });
+  ensureCreatable({ hasVoice: Boolean(voiceFile), imageFiles, status, text });
 
   const post = new FeedPost({
     author: req.user._id,
@@ -255,13 +342,13 @@ async function createPostRecord({ files, req, status }) {
   });
 
   await post.validate();
-  const media = files.length ? await uploadPostFiles({ files, post, userId: req.user._id }) : [];
+  const media = imageFiles.length || voiceFile ? await uploadPostMedia({ imageFiles, post, req, userId: req.user._id, voiceFile }) : [];
   post.media = media;
 
   try {
     await post.save();
   } catch (error) {
-    await deleteFeedPostImages(media);
+    await deleteFeedPostMedia(media);
     throw error;
   }
 
@@ -389,13 +476,14 @@ export const listMyPosts = asyncHandler(async (req, res) => {
 });
 
 export const createFeedPost = asyncHandler(async (req, res) => {
-  const post = await createPostRecord({ files: req.files || [], req, status: "published" });
+  const files = req.files || {};
+  const post = await createPostRecord({ imageFiles: files.media || [], req, status: "published", voiceFile: files.voice?.[0] || null });
   await recordChecklistEvent(req.user._id, "createdFirstPost");
   return sendResponse(res, 201, "Post published", { post: serializePost(post, req.user) });
 });
 
 export const createDraftPost = asyncHandler(async (req, res) => {
-  const post = await createPostRecord({ files: req.files || [], req, status: "draft" });
+  const post = await createPostRecord({ imageFiles: req.files || [], req, status: "draft" });
   return sendResponse(res, 201, "Draft saved", { post: serializePost(post, req.user) });
 });
 

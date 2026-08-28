@@ -39,3 +39,5 @@ export const POST_COMMENT_MAX_LENGTH = 500;
 export const POST_LOCATION_MAX_LENGTH = 120;
 export const POST_MAX_IMAGES = 4;
 export const POST_MAX_IMAGE_SIZE = 15 * 1024 * 1024;
+export const POST_MAX_VOICE_NOTES = 1;
+export const POST_ALLOWED_VOICE_TYPES = ["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "audio/x-wav", "audio/m4a", "audio/x-m4a"];
