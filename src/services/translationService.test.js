@@ -4,199 +4,224 @@ import { env } from "../config/env.js";
 import {
   clearTranslationLanguageCache,
   listSupportedTranslationLanguages,
-  normalizeLibreTranslateResponse,
+  normalizeLaraTranslateResponse,
   translateVoiceTranscript,
 } from "./translationService.js";
 
-function jsonResponse(payload, status = 200) {
-  return new Response(JSON.stringify(payload), {
-    headers: { "Content-Type": "application/json" },
-    status,
-  });
-}
+const originalEnv = {
+  laraAccessKeyId: env.laraAccessKeyId,
+  laraAccessKeySecret: env.laraAccessKeySecret,
+  laraTranslationTimeoutMs: env.laraTranslationTimeoutMs,
+};
 
 test.beforeEach(() => {
   clearTranslationLanguageCache();
-  env.libreTranslateUrl = "http://127.0.0.1:5000";
-  env.libreTranslateApiKey = "";
-  env.libreTranslateTimeoutMs = 15000;
+  env.laraAccessKeyId = "test-access-key-id";
+  env.laraAccessKeySecret = "test-access-key-secret";
+  env.laraTranslationTimeoutMs = 15000;
 });
 
-test("normalizes LibreTranslate languages", async () => {
+test.after(() => {
+  env.laraAccessKeyId = originalEnv.laraAccessKeyId;
+  env.laraAccessKeySecret = originalEnv.laraAccessKeySecret;
+  env.laraTranslationTimeoutMs = originalEnv.laraTranslationTimeoutMs;
+});
+
+test("normalizes Lara languages from SDK locale codes", async () => {
   const languages = await listSupportedTranslationLanguages({
-    fetchImpl: async (url) => {
-      assert.equal(url, "http://127.0.0.1:5000/languages");
-      return jsonResponse([
-        { code: "fr", name: "French" },
-        { code: "en", name: "English" },
-        { code: "fr", name: "French" },
-      ]);
+    translator: {
+      getLanguages: async () => ["fr-FR", "en-US", "fr-FR", "si-LK"],
     },
   });
 
   assert.deepEqual(languages, [
-    { code: "en", name: "English" },
-    { code: "fr", name: "French" },
+    { code: "en-US", name: "English" },
+    { code: "fr-FR", name: "French" },
+    { code: "si-LK", name: "Sinhala" },
   ]);
 });
 
-test("normalizes LibreTranslate translation response", () => {
-  const result = normalizeLibreTranslateResponse({ translatedText: " Bonjour " }, "auto");
+test("static Lara languages are available without credentials for the selector", async () => {
+  env.laraAccessKeyId = "";
+  env.laraAccessKeySecret = "";
+
+  const languages = await listSupportedTranslationLanguages();
+  assert.ok(languages.some((language) => language.code === "fr-FR" && language.name === "French"));
+  assert.ok(languages.some((language) => language.code === "ta-IN" && language.name === "Tamil"));
+});
+
+test("normalizes Lara translation response", () => {
+  const result = normalizeLaraTranslateResponse({ sourceLanguage: "en-US", translation: " Bonjour " });
 
   assert.deepEqual(result, {
-    detectedLanguage: "",
-    provider: "libretranslate",
+    detectedLanguage: "en-US",
+    provider: "lara",
     translatedText: "Bonjour",
   });
 });
 
 test("translation rejects missing text before provider translate call", async () => {
   await assert.rejects(
-    () => translateVoiceTranscript({ targetLanguage: "fr" }),
+    () => translateVoiceTranscript({ targetLanguage: "fr-FR", translator: { translate: async () => ({}) } }),
+    (error) => error.code === "TEXT_REQUIRED" && error.statusCode === 400
+  );
+});
+
+test("translation rejects empty text", async () => {
+  await assert.rejects(
+    () => translateVoiceTranscript({ targetLanguage: "fr-FR", text: "  \n  ", translator: { translate: async () => ({}) } }),
     (error) => error.code === "TEXT_REQUIRED" && error.statusCode === 400
   );
 });
 
 test("translation rejects missing target language", async () => {
   await assert.rejects(
-    () => translateVoiceTranscript({ text: "Hello" }),
+    () => translateVoiceTranscript({ text: "Hello", translator: { translate: async () => ({}) } }),
     (error) => error.code === "TARGET_LANGUAGE_REQUIRED" && error.statusCode === 400
   );
 });
 
 test("translation rejects too-long transcript", async () => {
   await assert.rejects(
-    () => translateVoiceTranscript({ targetLanguage: "fr", text: "a".repeat(2001) }),
+    () => translateVoiceTranscript({ targetLanguage: "fr-FR", text: "a".repeat(2001), translator: { translate: async () => ({}) } }),
     (error) => error.code === "TEXT_TOO_LONG" && error.statusCode === 400
   );
 });
 
-test("translation rejects unsupported language from running provider", async () => {
-  const fetchImpl = async () => jsonResponse([{ code: "en", name: "English" }]);
-
+test("translation rejects unsupported target language", async () => {
   await assert.rejects(
-    () => translateVoiceTranscript({ fetchImpl, targetLanguage: "fr", text: "Hello" }),
+    () => translateVoiceTranscript({ targetLanguage: "xx-ZZ", text: "Hello", translator: { translate: async () => ({}) } }),
     (error) => error.code === "UNSUPPORTED_LANGUAGE" && error.statusCode === 400
   );
 });
 
-test("translation calls LibreTranslate with source auto", async () => {
+test("translation rejects unsupported source language", async () => {
+  await assert.rejects(
+    () => translateVoiceTranscript({ sourceLanguage: "xx-ZZ", targetLanguage: "fr-FR", text: "Hello", translator: { translate: async () => ({}) } }),
+    (error) => error.code === "UNSUPPORTED_LANGUAGE" && error.statusCode === 400
+  );
+});
+
+test("translation requires Lara credentials when no mock translator is supplied", async () => {
+  env.laraAccessKeyId = "";
+  env.laraAccessKeySecret = "";
+
+  await assert.rejects(
+    () => translateVoiceTranscript({ targetLanguage: "fr-FR", text: "Hello" }),
+    (error) => error.code === "TRANSLATION_NOT_CONFIGURED" && error.statusCode === 503
+  );
+});
+
+test("translation calls Lara with automatic source detection", async () => {
   const calls = [];
-  const fetchImpl = async (url, options = {}) => {
-    calls.push({ body: options.body ? JSON.parse(options.body) : null, method: options.method, url });
-    if (url.endsWith("/languages")) return jsonResponse([{ code: "en", name: "English" }, { code: "fr", name: "French" }]);
-    assert.equal(url, "http://127.0.0.1:5000/translate");
-    return jsonResponse({ detectedLanguage: { language: "en" }, translatedText: "Bonjour" });
+  const translator = {
+    translate: async (text, source, target, options) => {
+      calls.push({ options, source, target, text });
+      return { sourceLanguage: "en-US", translation: "Bonjour" };
+    },
   };
 
   const result = await translateVoiceTranscript({
-    fetchImpl,
-    targetLanguage: "fr",
+    targetLanguage: "fr-FR",
     text: "Hello",
+    translator,
   });
 
-  assert.deepEqual(calls[1].body, {
-    format: "text",
-    q: "Hello",
-    source: "auto",
-    target: "fr",
-  });
-  assert.equal(result.provider, "libretranslate");
-  assert.equal(result.detectedLanguage, "en");
+  assert.equal(calls[0].text, "Hello");
+  assert.equal(calls[0].source, null);
+  assert.equal(calls[0].target, "fr-FR");
+  assert.equal(calls[0].options.timeoutInMillis, 15000);
+  assert.equal(result.provider, "lara");
+  assert.equal(result.detectedLanguage, "en-US");
   assert.equal(result.translatedText, "Bonjour");
 });
 
-test("translation passes explicit source language", async () => {
-  const fetchImpl = async (url, options = {}) => {
-    if (url.endsWith("/languages")) return jsonResponse([{ code: "en", name: "English" }, { code: "fr", name: "French" }]);
-    assert.equal(JSON.parse(options.body).source, "en");
-    return jsonResponse({ translatedText: "Bonjour" });
+test("translation maps short source and target language codes to Lara locales", async () => {
+  const translator = {
+    translate: async (_text, source, target) => {
+      assert.equal(source, "en-US");
+      assert.equal(target, "fr-FR");
+      return { sourceLanguage: "en-US", translation: "Bonjour" };
+    },
   };
 
   const result = await translateVoiceTranscript({
-    fetchImpl,
     sourceLanguage: "en",
     targetLanguage: "fr",
     text: "Hello",
+    translator,
   });
 
-  assert.equal(result.detectedLanguage, "en");
+  assert.equal(result.detectedLanguage, "en-US");
   assert.equal(result.translatedText, "Bonjour");
-});
-
-test("translation includes optional API key only when configured", async () => {
-  env.libreTranslateApiKey = "test-key";
-  const fetchImpl = async (url, options = {}) => {
-    if (url.endsWith("/languages")) return jsonResponse([{ code: "en", name: "English" }, { code: "fr", name: "French" }]);
-    assert.equal(JSON.parse(options.body).api_key, "test-key");
-    return jsonResponse({ translatedText: "Bonjour" });
-  };
-
-  await translateVoiceTranscript({ fetchImpl, targetLanguage: "fr", text: "Hello" });
 });
 
 test("same explicit source and target skips provider translate call", async () => {
   let translateCalled = false;
-  const fetchImpl = async (url) => {
-    if (url.endsWith("/translate")) translateCalled = true;
-    return jsonResponse([{ code: "en", name: "English" }]);
-  };
-
   const result = await translateVoiceTranscript({
-    fetchImpl,
     sourceLanguage: "en",
-    targetLanguage: "en",
+    targetLanguage: "en-US",
     text: "Hello",
+    translator: {
+      translate: async () => {
+        translateCalled = true;
+        return {};
+      },
+    },
   });
 
   assert.equal(translateCalled, false);
   assert.equal(result.sameLanguage, true);
+  assert.equal(result.provider, "lara");
   assert.equal(result.translatedText, "Hello");
 });
 
-test("provider unavailable returns controlled error", async () => {
-  const fetchImpl = async () => {
-    throw Object.assign(new Error("connect ECONNREFUSED"), { cause: { code: "ECONNREFUSED" } });
+test("provider authentication failures are sanitized", async () => {
+  const translator = {
+    translate: async () => {
+      throw Object.assign(new Error("secret provider detail"), { statusCode: 401, type: "AuthenticationError" });
+    },
   };
 
   await assert.rejects(
-    () => listSupportedTranslationLanguages({ fetchImpl }),
-    (error) => error.code === "TRANSLATION_SERVICE_UNAVAILABLE" && error.statusCode === 503
+    () => translateVoiceTranscript({ targetLanguage: "fr-FR", text: "Hello", translator }),
+    (error) => error.code === "TRANSLATION_FAILED" && error.statusCode === 502
+  );
+});
+
+test("provider quota failures are sanitized", async () => {
+  const translator = {
+    translate: async () => {
+      throw Object.assign(new Error("quota detail"), { statusCode: 429, type: "QuotaExceeded" });
+    },
+  };
+
+  await assert.rejects(
+    () => translateVoiceTranscript({ targetLanguage: "fr-FR", text: "Hello", translator }),
+    (error) => error.code === "TRANSLATION_FAILED" && error.statusCode === 429
   );
 });
 
 test("provider timeout returns controlled error", async () => {
-  env.libreTranslateTimeoutMs = 1;
-  const fetchImpl = async (_url, options = {}) => new Promise((_resolve, reject) => {
-    options.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
-  });
+  const translator = {
+    translate: async () => {
+      throw Object.assign(new Error("timeout"), { name: "TimeoutError" });
+    },
+  };
 
   await assert.rejects(
-    () => listSupportedTranslationLanguages({ fetchImpl }),
+    () => translateVoiceTranscript({ targetLanguage: "fr-FR", text: "Hello", translator }),
     (error) => error.code === "TRANSLATION_TIMEOUT" && error.statusCode === 504
   );
 });
 
-test("provider HTTP errors are sanitized", async () => {
-  const fetchImpl = async (url) => {
-    if (url.endsWith("/languages")) return jsonResponse([{ code: "en", name: "English" }, { code: "fr", name: "French" }]);
-    return jsonResponse({ error: "secret provider detail" }, 500);
-  };
-
-  await assert.rejects(
-    () => translateVoiceTranscript({ fetchImpl, targetLanguage: "fr", text: "Hello" }),
-    (error) => error.code === "TRANSLATION_SERVICE_UNAVAILABLE" && error.statusCode === 502
-  );
-});
-
 test("malformed provider translation response is sanitized", async () => {
-  const fetchImpl = async (url) => {
-    if (url.endsWith("/languages")) return jsonResponse([{ code: "en", name: "English" }, { code: "fr", name: "French" }]);
-    return jsonResponse({});
+  const translator = {
+    translate: async () => ({}),
   };
 
   await assert.rejects(
-    () => translateVoiceTranscript({ fetchImpl, targetLanguage: "fr", text: "Hello" }),
+    () => translateVoiceTranscript({ targetLanguage: "fr-FR", text: "Hello", translator }),
     (error) => error.code === "TRANSLATION_FAILED" && error.statusCode === 502
   );
 });

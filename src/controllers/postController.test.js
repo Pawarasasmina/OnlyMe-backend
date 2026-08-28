@@ -38,6 +38,8 @@ test("feed post media supports serialized voice-note metadata", () => {
   assert.ok(mediaSchema.path("type").enumValues.includes("audio"));
   assert.ok(mediaSchema.path("duration"));
   assert.ok(mediaSchema.path("transcript"));
+  assert.equal(mediaSchema.path("transcriptLanguage").options.lowercase, undefined);
+  assert.equal(mediaSchema.path("translations").schema.path("language").options.lowercase, undefined);
   assert.ok(mediaSchema.path("waveform"));
 
   const post = new FeedPost({
@@ -61,4 +63,29 @@ test("feed post media supports serialized voice-note metadata", () => {
   assert.equal(serialized.media[0].mimeType, "audio/webm");
   assert.equal(serialized.media[0].transcript, "Voice note transcript");
   assert.deepEqual(serialized.media[0].waveform, [0.2, 0.5, 0.3]);
+});
+
+test("feed post voice translations display old short codes and new Lara locales", () => {
+  const post = new FeedPost({
+    author: "000000000000000000000001",
+    text: "Voice note transcript",
+    media: [{
+      assetId: "onlyme/feed-posts/user/post/voice/sample",
+      mimeType: "audio/webm",
+      transcript: "Hello",
+      translations: [
+        { language: "fr", text: "Bonjour" },
+        { language: "fr-FR", text: "Bonjour encore" },
+      ],
+      type: "audio",
+      url: "https://example.com/sample.webm",
+    }],
+    status: "published",
+  });
+
+  const serialized = serializePost(post);
+  assert.deepEqual(serialized.media[0].translations, [
+    { language: "fr", languageName: "French", text: "Bonjour" },
+    { language: "fr-FR", languageName: "French", text: "Bonjour encore" },
+  ]);
 });

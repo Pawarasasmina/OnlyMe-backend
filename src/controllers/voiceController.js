@@ -6,7 +6,7 @@ import { listSupportedTranslationLanguages, translateVoiceTranscript } from "../
 import {
   VOICE_TRANSLATION_MAX_TEXT_LENGTH,
   normalizeVoiceLanguageCode,
-} from "../../../shared/voiceTranslationLanguages.js";
+} from "../constants/voiceTranslationLanguages.js";
 
 export const transcribeWallVoiceNote = asyncHandler(async (req, res) => {
   if (!req.file) {
