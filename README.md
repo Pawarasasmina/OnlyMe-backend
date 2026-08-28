@@ -16,6 +16,21 @@ Express API starter for the OnlyMe platform.
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
 
+## Voice transcript translation
+
+Voice note transcription remains handled by Deepgram. Transcript translation uses Lara Translate API through the backend only; React never calls Lara directly and no provider credentials are exposed to the browser.
+
+Configure the backend with Lara credentials:
+
+```env
+LARA_ACCESS_KEY_ID=
+LARA_ACCESS_KEY_SECRET=
+```
+
+Do not add `VITE_LARA_*` variables. Lara credentials belong only in the backend runtime environment. In Vercel, add `LARA_ACCESS_KEY_ID` and `LARA_ACCESS_KEY_SECRET` to the backend project environment variables.
+
+The backend keeps the existing `GET /api/voice/translation-languages` and `POST /api/voice/translate` endpoints. Languages are Lara locale codes such as `fr-FR`, `es-ES`, `si-LK`, and `ta-IN`; older saved short codes such as `fr`, `es`, and `de` continue to render with friendly labels.
+
 ## Profile API
 
 - `GET /api/profile/me` - fetch the authenticated user's role-based profile.

@@ -2,7 +2,7 @@ import multer from "multer";
 import path from "node:path";
 import ApiError from "../utils/ApiError.js";
 import { env } from "../config/env.js";
-import { POST_MAX_IMAGE_SIZE, POST_MAX_IMAGES } from "../constants/postConstants.js";
+import { POST_ALLOWED_VOICE_TYPES, POST_MAX_IMAGE_SIZE, POST_MAX_IMAGES, POST_MAX_VOICE_NOTES } from "../constants/postConstants.js";
 
 const storage = multer.diskStorage({
   destination: "uploads/",
@@ -20,6 +20,11 @@ const storage = multer.diskStorage({
 });
 
 const allowedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+const allowedVoiceTypes = new Set(POST_ALLOWED_VOICE_TYPES);
+
+function normalizedMimeType(file) {
+  return String(file?.mimetype || "").toLowerCase().split(";")[0].trim();
+}
 
 function imageFileFilter(_req, file, callback) {
   if (!allowedImageTypes.has(file.mimetype)) {
@@ -62,12 +67,37 @@ export const uploadFeedPostImages = multer({
   fileFilter: imageFileFilter,
 });
 
-const allowedVoiceTypes = new Set(["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "audio/x-wav"]);
+export const uploadFeedPostMedia = multer({
+  storage,
+  limits: { files: POST_MAX_IMAGES + POST_MAX_VOICE_NOTES, fileSize: Math.max(POST_MAX_IMAGE_SIZE, env.maxVoiceNoteSizeBytes) },
+  fileFilter: (_req, file, callback) => {
+    const mimeType = normalizedMimeType(file);
+    if (file.fieldname === "media") {
+      if (!allowedImageTypes.has(mimeType)) return callback(new ApiError(400, "Only JPEG, PNG, or WebP images are allowed"));
+      return callback(null, true);
+    }
+    if (file.fieldname === "voice") {
+      if (!allowedVoiceTypes.has(mimeType)) return callback(new ApiError(400, "Unsupported voice recording format"));
+      return callback(null, true);
+    }
+    return callback(new ApiError(400, "Unsupported post media field"));
+  },
+});
+
 export const uploadVoiceMessage = multer({
   storage: multer.memoryStorage(),
   limits: { files: 1, fileSize: 12 * 1024 * 1024 },
   fileFilter: (_req, file, callback) => {
-    if (!allowedVoiceTypes.has(file.mimetype)) return callback(new ApiError(400, "Unsupported voice recording format"));
+    if (!allowedVoiceTypes.has(normalizedMimeType(file))) return callback(new ApiError(400, "Unsupported voice recording format"));
+    callback(null, true);
+  },
+});
+
+export const uploadVoiceTranscription = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fileSize: env.maxVoiceNoteSizeBytes },
+  fileFilter: (_req, file, callback) => {
+    if (!allowedVoiceTypes.has(normalizedMimeType(file))) return callback(new ApiError(400, "Unsupported voice recording format", "INVALID_AUDIO"));
     callback(null, true);
   },
 });

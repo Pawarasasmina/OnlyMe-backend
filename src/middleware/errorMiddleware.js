@@ -1,9 +1,11 @@
-﻿export function errorHandler(err, _req, res, _next) {
+export function errorHandler(err, req, res, _next) {
   if (err.code === "LIMIT_FILE_SIZE") {
+    const isVoiceTranscription = req.originalUrl?.includes("/voice/transcribe");
     return res.status(400).json({
       success: false,
-      message: "Uploaded file is too large",
+      message: isVoiceTranscription ? "Audio file is too large" : "Uploaded file is too large",
       data: {},
+      code: isVoiceTranscription ? "AUDIO_TOO_LARGE" : "UPLOAD_TOO_LARGE",
     });
   }
 
@@ -18,4 +20,3 @@
     ...(err.code ? { code: err.code } : {}),
   });
 }
-
