@@ -22,6 +22,16 @@ export async function verifyPublicationAsset({ assetId, blockId, chapterId, crea
   return { assetId: asset.public_id, resourceType: asset.resource_type, mediaType, secureUrl: asset.secure_url, format, bytes: asset.bytes, width: asset.width, height: asset.height, duration: asset.duration };
 }
 
+export async function deletePublicationFile(media = {}) {
+  if (!media.assetId) return;
+  configured();
+  await cloudinary.uploader.destroy(media.assetId, {
+    invalidate: true,
+    resource_type: media.resourceType || (media.mediaType === "IMAGE" ? "image" : "video"),
+    type: "authenticated",
+  });
+}
+
 export function publicationDeliveryUrl(media) {
   if (!media?.assetId) return "";
   if (/^https?:\/\//i.test(media.secureUrl || "") && !String(media.assetId).startsWith("onlyme/publications/")) return media.secureUrl;

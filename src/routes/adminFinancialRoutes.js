@@ -1,12 +1,12 @@
 import { Router } from "express";
-import { activateFanWallet, creditStars, getPlatformRevenue, listFanWallets, refundPremiumMembership, refundWorldEntitlement } from "../controllers/adminFinancialController.js";
+import { activateFanWallet, creditStars, getPlatformRevenue, listUserWallets, refundPremiumMembership, refundWorldEntitlement } from "../controllers/adminFinancialController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { adminFinancialMutationLimit } from "../middleware/financialRateLimit.js";
 
 const router = Router();
 router.use(protect, authorize("admin"));
-router.get("/wallets", listFanWallets);
+router.get("/wallets", listUserWallets);
 router.get("/platform-revenue", getPlatformRevenue);
 router.use(adminFinancialMutationLimit);
 router.post("/wallets/:userId/activate-ledger", activateFanWallet);
