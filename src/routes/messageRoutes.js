@@ -1,6 +1,6 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { acceptMessageRequest, archiveConversation, blockMessageAccount, declineMessageRequest, deleteConversation, deleteMessage, forwardMessage, listChatGifts, listConversations, listMessages, listShareRecipients, muteConversation, removeMessageReaction, reportConversation, reportMessage, searchMessagePeople, sendChatGift, sendImageMessage, sendMessage, sendSharedContent, sendVideoNote, sendVoiceMessage, setMessageReaction, unblockMessageAccount } from "../controllers/messageController.js";
+import { acceptMessageRequest, archiveConversation, blockMessageAccount, consumeDisappearingMessage, declineMessageRequest, deleteConversation, deleteMessage, forwardMessage, listChatGifts, listConversations, listMessages, listShareRecipients, muteConversation, openDisappearingMessage, removeMessageReaction, reportConversation, reportMessage, searchMessagePeople, sendChatGift, sendImageMessage, sendMessage, sendSharedContent, sendVideoNote, sendVoiceMessage, setMessageReaction, unblockMessageAccount } from "../controllers/messageController.js";
 import { askDirectAccessQuestion, getDirectAccessOffer, listDirectAccessWindows, openWindow, replyToFreeFanFollowup, sendFreeFanFollowup, updateDirectAccessSettings } from "../controllers/directAccessController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
@@ -66,6 +66,8 @@ router.put("/conversations/:userId/mute", muteConversation);
 router.delete("/conversations/:userId", deleteConversation);
 router.put("/blocks/:userId", blockMessageAccount);
 router.delete("/blocks/:userId", unblockMessageAccount);
+router.put("/:messageId/open", openDisappearingMessage);
+router.put("/:messageId/consume", consumeDisappearingMessage);
 router.put("/:messageId/reaction", setMessageReaction);
 router.delete("/:messageId/reaction", removeMessageReaction);
 router.delete("/:messageId", deleteMessage);

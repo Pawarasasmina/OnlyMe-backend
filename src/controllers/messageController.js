@@ -34,6 +34,13 @@ const userFields = "name username avatar role creatorApprovalStatus isVerified s
 const isApprovedCreator = (user) => user?.creatorApprovalStatus === "approved";
 const person = (user, reason = "") => user && ({ id: user._id.toString(), displayName: user.name, name: user.name, username: user.username, avatarUrl: user.avatar || null, role: user.creatorApprovalStatus === "approved" ? "creator" : "fan", isCreator: user.creatorApprovalStatus === "approved", isVerified: Boolean(user.isVerified), lastSeenAt: user.lastSeenAt || null, reason });
 const REACTION_EMOJIS = ["❤️", "😂", "😮", "😢", "😡", "👍"];
+const DISAPPEARING_SECONDS = new Set([0, 3, 10, 30]);
+const disappearingSeconds = (value) => {
+  if (value === null || value === undefined || value === "") return null;
+  const seconds = Number(value);
+  if (!DISAPPEARING_SECONDS.has(seconds)) throw new ApiError(400, "Invalid disappearing message timer");
+  return seconds;
+};
 const serializedReply = (reply) => reply ? {
   id: String(reply._id || reply),
   senderId: reply.sender ? String(reply.sender?._id || reply.sender) : null,
@@ -56,7 +63,8 @@ const serializedSharedContent = (sharedContent, deletedAt = null) => {
     } : null,
   };
 };
-const serializedMessage = (message) => ({ id: message._id.toString(), clientMessageId: message.clientMessageId || null, senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "This message was deleted" : message.body, mediaType: message.mediaType || "text", messageKind: message.messageKind || "USER_MESSAGE", messageChannel: message.messageChannel || "STANDARD", directAccessWindowId: message.directAccessWindow ? String(message.directAccessWindow) : null, forwarded: Boolean(message.forwardedFrom), deletedAt: message.deletedAt || null, gift: !message.deletedAt && message.mediaType === "gift" && message.gift?.giftId ? { id: String(message.gift.giftId), name: message.gift.name, stars: message.gift.stars, imageUrl: message.gift.imageUrl, displayScale: message.gift.displayScale || 100, imagePositionX: message.gift.imagePositionX || 0, imagePositionY: message.gift.imagePositionY || 0 } : null, image: !message.deletedAt && message.mediaType === "image" && message.image?.assetId ? { url: messageImageUrl(message.image), width: message.image.width, height: message.image.height } : null, audio: !message.deletedAt && message.mediaType === "audio" && message.audio?.assetId ? { url: messageVoiceUrl(message.audio), duration: message.audio.duration, waveform: message.audio.waveform || [] } : null, video: !message.deletedAt && message.mediaType === "video" && message.video?.assetId ? { url: messageVideoUrl(message.video), duration: message.video.duration, width: message.video.width, height: message.video.height } : null, readAt: message.readAt || null, createdAt: message.createdAt, replyTo: serializedReply(message.replyTo), reactions: message.deletedAt ? [] : (message.reactions || []).map((reaction) => ({ userId: String(reaction.user?._id || reaction.user), emoji: reaction.emoji })), storyReply: !message.deletedAt && message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, expiresAt: message.storyReply.expiresAt || null } : null, sharedContent: serializedSharedContent(message.sharedContent, message.deletedAt) });
+const serializedMessage = (message) => ({ id: message._id.toString(), clientMessageId: message.clientMessageId || null, senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "This message was deleted" : message.body, mediaType: message.mediaType || "text", messageKind: message.messageKind || "USER_MESSAGE", messageChannel: message.messageChannel || "STANDARD", directAccessWindowId: message.directAccessWindow ? String(message.directAccessWindow) : null, forwarded: Boolean(message.forwardedFrom), deletedAt: message.deletedAt || null, gift: !message.deletedAt && message.mediaType === "gift" && message.gift?.giftId ? { id: String(message.gift.giftId), name: message.gift.name, stars: message.gift.stars, imageUrl: message.gift.imageUrl, displayScale: message.gift.displayScale || 100, imagePositionX: message.gift.imagePositionX || 0, imagePositionY: message.gift.imagePositionY || 0 } : null, image: !message.deletedAt && message.mediaType === "image" && message.image?.assetId ? { url: messageImageUrl(message.image), width: message.image.width, height: message.image.height } : null, audio: !message.deletedAt && message.mediaType === "audio" && message.audio?.assetId ? { url: messageVoiceUrl(message.audio), duration: message.audio.duration, waveform: message.audio.waveform || [] } : null, video: !message.deletedAt && message.mediaType === "video" && message.video?.assetId ? { url: messageVideoUrl(message.video), duration: message.video.duration, width: message.video.width, height: message.video.height } : null, readAt: message.readAt || null, createdAt: message.createdAt, replyTo: serializedReply(message.replyTo), reactions: message.deletedAt ? [] : (message.reactions || []).map((reaction) => ({ userId: String(reaction.user?._id || reaction.user), emoji: reaction.emoji })), storyReply: !message.deletedAt && message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, expiresAt: message.storyReply.expiresAt || null } : null, sharedContent: serializedSharedContent(message.sharedContent, message.deletedAt), disappearAfterSeconds: message.disappearAfterSeconds ?? null, openedAt: message.openedAt || null, expiresAt: message.expiresAt || null });
+const protectedMessage = (payload) => payload.disappearAfterSeconds === null ? payload : { ...payload, body: "Disappearing message", image: null, audio: null, video: null, gift: null, sharedContent: null, storyReply: null, locked: true };
 const validId = (value) => {
   if (!mongoose.isValidObjectId(value)) throw new ApiError(400, "Invalid account id");
 };
@@ -344,7 +352,7 @@ export const listConversations = asyncHandler(async (req, res) => {
     return [{
       id: String(item._id),
       participant: person(participant),
-      lastMessage: serializedMessage(item.lastMessage),
+      lastMessage: item.lastMessage.disappearAfterSeconds !== null && item.lastMessage.disappearAfterSeconds !== undefined ? protectedMessage(serializedMessage(item.lastMessage)) : serializedMessage(item.lastMessage),
       unreadCount: item.unreadCount,
       status: stateByOther.get(String(item._id))?.status || "ACTIVE",
       archived: (stateByOther.get(String(item._id))?.archivedBy || []).some((id) => String(id) === String(me)),
@@ -364,6 +372,10 @@ export const listMessages = asyncHandler(async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
   const cursor = req.query.cursor ? String(req.query.cursor) : null;
   if (cursor && !mongoose.isValidObjectId(cursor)) throw new ApiError(400, "Invalid message cursor");
+  await Message.updateMany(
+    { $or: [{ sender: req.user._id, recipient: other._id }, { sender: other._id, recipient: req.user._id }], expiresAt: { $lte: new Date() }, contentPurgedAt: null },
+    { $set: { body: "Disappearing message", contentPurgedAt: new Date() }, $unset: { image: 1, audio: 1, video: 1, gift: 1, sharedContent: 1, sharedAttachment: 1, storyReply: 1 } },
+  );
   const requestIsForMe = conversation?.status === "REQUEST" && (conversation.requestRecipient
     ? String(conversation.requestRecipient) === String(req.user._id)
     : String(conversation.creator) === String(req.user._id));
@@ -447,7 +459,10 @@ export const listMessages = asyncHandler(async (req, res) => {
   }
   return sendResponse(res, 200, "Messages fetched", {
     participant,
-    messages: page.reverse().map(serializedMessage),
+    messages: page.reverse().map((message) => {
+      const payload = serializedMessage(message);
+      return payload.disappearAfterSeconds !== null ? protectedMessage(payload) : payload;
+    }),
     pageInfo: {
       hasMore,
       nextCursor: hasMore ? String(page[page.length - 1]._id) : null,
@@ -473,6 +488,7 @@ export const sendChatGift = asyncHandler(async (req, res) => {
   assertMessagingAccess(req.user);
   const other = await assertAllowedPair(req.user, req.params.userId);
   const giftId = String(req.body.giftId || "");
+  const disappearAfterSeconds = disappearingSeconds(req.body.disappearAfterSeconds);
   const key = idempotencyKey(req.body.idempotencyKey);
   const gift = mongoose.isValidObjectId(giftId) ? await Gift.findOne({ _id: giftId, isActive: true }).lean() : null;
   if (!gift) throw new ApiError(400, "Choose an available gift");
@@ -484,7 +500,7 @@ export const sendChatGift = asyncHandler(async (req, res) => {
     user: req.user._id,
     commandType: "SEND_CHAT_GIFT",
     idempotencyKey: key,
-    requestFingerprint: fingerprint({ recipientId: String(other._id), giftId: String(gift._id) }),
+    requestFingerprint: fingerprint({ recipientId: String(other._id), giftId: String(gift._id), disappearAfterSeconds }),
   }, async (session, command) => {
     if (!await giftAllowedForRecipient(other._id, gift._id, session)) throw new ApiError(409, "This person is not accepting that gift");
     const [message] = await Message.create([{
@@ -493,6 +509,7 @@ export const sendChatGift = asyncHandler(async (req, res) => {
       clientMessageId: key,
       body: `Sent ${gift.name}`,
       mediaType: "gift",
+      disappearAfterSeconds,
       gift: { giftId: gift._id, name: gift.name, stars: gift.stars, imageUrl: gift.image.url, displayScale: gift.displayScale || 100, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0 },
     }], { session });
     const moved = await transferStars({ fromUser: req.user._id, toUser: other._id, amount: gift.stars, debitType: "CHAT_GIFT_DEBIT", creditType: "CHAT_GIFT_EARNING", referenceType: "CHAT_GIFT", referenceId: message._id, creator: other._id, command, idempotencyKey: key, metadata: { messageId: String(message._id), giftId: String(gift._id), giftName: gift.name } }, session);
@@ -501,7 +518,7 @@ export const sendChatGift = asyncHandler(async (req, res) => {
     return { resultReference: record._id, message: serializedMessage(message), wallet: safeWallet(moved.debit.wallet) };
   });
   const payload = result.message;
-  req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation?.status || "ACTIVE" });
+  req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation?.status || "ACTIVE" });
   return sendResponse(res, 201, "Gift sent", { ...result, conversationStatus: conversation?.status || "ACTIVE" });
 });
 
@@ -512,13 +529,14 @@ export const sendMessage = asyncHandler(async (req, res) => {
   if (!body) throw new ApiError(400, "Message text is required");
   if (body.length > 2000) throw new ApiError(400, "Message must be 2000 characters or fewer");
   const clientMessageId = String(req.body.clientMessageId || "").trim();
+  const disappearAfterSeconds = disappearingSeconds(req.body.disappearAfterSeconds);
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,99}$/.test(clientMessageId)) {
     throw new ApiError(400, "A valid client message id is required");
   }
   let conversation = await conversationFor(req.user, other);
   const existingMessage = await Message.findOne({ sender: req.user._id, clientMessageId }).populate("replyTo", "sender body deletedAt");
   if (existingMessage) {
-    if (!existingMessage.recipient.equals(other._id) || existingMessage.body !== body) {
+    if (!existingMessage.recipient.equals(other._id) || existingMessage.body !== body || (existingMessage.disappearAfterSeconds ?? null) !== disappearAfterSeconds) {
       throw new ApiError(409, "Client message id was already used for another message");
     }
     return sendResponse(res, 200, "Message already sent", {
@@ -534,6 +552,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
     replyTo = await Message.findOne({
       _id: req.body.replyToId,
       deletedAt: null,
+      $nor: [{ expiresAt: { $lte: new Date() } }],
       $or: [
         { sender: req.user._id, recipient: other._id },
         { sender: other._id, recipient: req.user._id },
@@ -548,7 +567,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
       windowId: req.body.directAccessWindowId,
       sender: req.user,
       recipient: other,
-      message: { clientMessageId, body, mediaType: "text", ppm: false, replyTo: replyTo?._id || null },
+      message: { clientMessageId, body, mediaType: "text", ppm: false, replyTo: replyTo?._id || null, disappearAfterSeconds },
     });
     created = committed.message;
     createdNow = !committed.replay;
@@ -557,7 +576,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
     if (replyTo && created.populate) await created.populate("replyTo", "sender body deletedAt");
     const payload = serializedMessage(created);
     const conversationStatus = conversation?.status || "ACTIVE";
-    if (createdNow) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus });
+    if (createdNow) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus });
     return sendResponse(res, createdNow ? 201 : 200, createdNow ? "Direct Access message sent" : "Message already sent", { message: payload, conversationStatus, directAccessWindow: serializeDAWindow(directAccessWindow), idempotentReplay: !createdNow });
   }
   const directAccess = await reserveDirectAccessMessage({
@@ -566,7 +585,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
     recipient: other,
   });
   try {
-    created = await Message.create({ sender: req.user._id, recipient: other._id, clientMessageId, body, mediaType: "text", ppm: false, replyTo: replyTo?._id || null, messageChannel: directAccess ? "DIRECT_ACCESS" : "STANDARD", directAccessWindow: directAccess?.window._id || null });
+    created = await Message.create({ sender: req.user._id, recipient: other._id, clientMessageId, body, mediaType: "text", ppm: false, replyTo: replyTo?._id || null, disappearAfterSeconds, messageChannel: directAccess ? "DIRECT_ACCESS" : "STANDARD", directAccessWindow: directAccess?.window._id || null });
   } catch (error) {
     if (error?.code !== 11000) {
       await releaseDirectAccessMessageReservation(directAccess);
@@ -587,7 +606,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
   const payload = serializedMessage(created);
   const conversationStatus = conversation?.status || "ACTIVE";
   if (createdNow) {
-    req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus });
+    req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus });
   }
   return sendResponse(res, createdNow ? 201 : 200, createdNow ? conversationStatus === "REQUEST" ? "Message request sent" : "Message sent" : "Message already sent", { message: payload, conversationStatus, directAccessWindow: serializeDAWindow(directAccessWindow), idempotentReplay: !createdNow });
 });
@@ -597,6 +616,7 @@ export const sendVoiceMessage = asyncHandler(async (req, res) => {
   const other = await assertAllowedPair(req.user, req.params.userId);
   if (!req.file?.buffer) throw new ApiError(400, "A voice recording is required");
   const clientMessageId = String(req.body.clientMessageId || "").trim();
+  const disappearAfterSeconds = disappearingSeconds(req.body.disappearAfterSeconds);
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,99}$/.test(clientMessageId)) throw new ApiError(400, "A valid client message id is required");
   const existing = await Message.findOne({ sender: req.user._id, clientMessageId });
   if (existing) return sendResponse(res, 200, "Voice message already sent", { message: serializedMessage(existing), idempotentReplay: true });
@@ -607,16 +627,16 @@ export const sendVoiceMessage = asyncHandler(async (req, res) => {
   waveform = Array.isArray(waveform) ? waveform.slice(0, 48).map((value) => Math.min(1, Math.max(0.08, Number(value) || 0.08))) : [];
   const audio = await uploadMessageVoice({ buffer: req.file.buffer, senderId: req.user._id });
   if (req.body.directAccessWindowId) {
-    const committed = await createDirectAccessMessageAtomic({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other, message: { clientMessageId, body: "Voice message", mediaType: "audio", ppm: false, audio: { ...audio, waveform } } });
+    const committed = await createDirectAccessMessageAtomic({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other, message: { clientMessageId, body: "Voice message", mediaType: "audio", ppm: false, audio: { ...audio, waveform }, disappearAfterSeconds } });
     emitDirectAccessUpdate(req, committed.window);
     const payload = serializedMessage(committed.message);
-    if (!committed.replay) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
+    if (!committed.replay) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
     return sendResponse(res, committed.replay ? 200 : 201, committed.replay ? "Voice message already sent" : "Voice message sent", { message: payload, conversationStatus: conversation.status, directAccessWindow: serializeDAWindow(committed.window), idempotentReplay: committed.replay });
   }
   const directAccess = await reserveDirectAccessMessage({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other });
   let created;
   try {
-    created = await Message.create({ sender: req.user._id, recipient: other._id, clientMessageId, body: "Voice message", mediaType: "audio", ppm: false, audio: { ...audio, waveform }, messageChannel: directAccess ? "DIRECT_ACCESS" : "STANDARD", directAccessWindow: directAccess?.window._id || null });
+    created = await Message.create({ sender: req.user._id, recipient: other._id, clientMessageId, body: "Voice message", mediaType: "audio", ppm: false, audio: { ...audio, waveform }, disappearAfterSeconds, messageChannel: directAccess ? "DIRECT_ACCESS" : "STANDARD", directAccessWindow: directAccess?.window._id || null });
   } catch (error) {
     await releaseDirectAccessMessageReservation(directAccess);
     throw error;
@@ -624,7 +644,7 @@ export const sendVoiceMessage = asyncHandler(async (req, res) => {
   const directAccessWindow = await settleDirectAccessReply(directAccess, req.user);
   emitDirectAccessUpdate(req, directAccessWindow);
   const payload = serializedMessage(created);
-  req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
+  req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
   return sendResponse(res, 201, conversation.status === "REQUEST" ? "Voice-message request sent" : "Voice message sent", { message: payload, conversationStatus: conversation.status, directAccessWindow: serializeDAWindow(directAccessWindow) });
 });
 
@@ -633,6 +653,7 @@ export const sendVideoNote = asyncHandler(async (req, res) => {
   const other = await assertAllowedPair(req.user, req.params.userId);
   if (!req.file?.buffer) throw new ApiError(400, "A video note is required");
   const clientMessageId = String(req.body.clientMessageId || "").trim();
+  const disappearAfterSeconds = disappearingSeconds(req.body.disappearAfterSeconds);
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,99}$/.test(clientMessageId)) throw new ApiError(400, "A valid client message id is required");
   const existing = await Message.findOne({ sender: req.user._id, clientMessageId });
   if (existing) return sendResponse(res, 200, "Video note already sent", { message: serializedMessage(existing), idempotentReplay: true });
@@ -640,16 +661,16 @@ export const sendVideoNote = asyncHandler(async (req, res) => {
   conversation = await prepareConversationForSend(req.user, other, conversation);
   const video = await uploadMessageVideo({ buffer: req.file.buffer, senderId: req.user._id });
   if (req.body.directAccessWindowId) {
-    const committed = await createDirectAccessMessageAtomic({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other, message: { clientMessageId, body: "Video note", mediaType: "video", ppm: false, video } });
+    const committed = await createDirectAccessMessageAtomic({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other, message: { clientMessageId, body: "Video note", mediaType: "video", ppm: false, video, disappearAfterSeconds } });
     emitDirectAccessUpdate(req, committed.window);
     const payload = serializedMessage(committed.message);
-    if (!committed.replay) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
+    if (!committed.replay) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
     return sendResponse(res, committed.replay ? 200 : 201, committed.replay ? "Video note already sent" : "Video note sent", { message: payload, conversationStatus: conversation.status, directAccessWindow: serializeDAWindow(committed.window), idempotentReplay: committed.replay });
   }
   const directAccess = await reserveDirectAccessMessage({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other });
   let created;
   try {
-    created = await Message.create({ sender: req.user._id, recipient: other._id, clientMessageId, body: "Video note", mediaType: "video", ppm: false, video, messageChannel: directAccess ? "DIRECT_ACCESS" : "STANDARD", directAccessWindow: directAccess?.window._id || null });
+    created = await Message.create({ sender: req.user._id, recipient: other._id, clientMessageId, body: "Video note", mediaType: "video", ppm: false, video, disappearAfterSeconds, messageChannel: directAccess ? "DIRECT_ACCESS" : "STANDARD", directAccessWindow: directAccess?.window._id || null });
   } catch (error) {
     await releaseDirectAccessMessageReservation(directAccess);
     throw error;
@@ -657,7 +678,7 @@ export const sendVideoNote = asyncHandler(async (req, res) => {
   const directAccessWindow = await settleDirectAccessReply(directAccess, req.user);
   emitDirectAccessUpdate(req, directAccessWindow);
   const payload = serializedMessage(created);
-  req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
+  req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
   return sendResponse(res, 201, conversation.status === "REQUEST" ? "Video-note request sent" : "Video note sent", { message: payload, conversationStatus: conversation.status, directAccessWindow: serializeDAWindow(directAccessWindow) });
 });
 
@@ -666,6 +687,7 @@ export const sendImageMessage = asyncHandler(async (req, res) => {
   const other = await assertAllowedPair(req.user, req.params.userId);
   if (!req.file?.buffer) throw new ApiError(400, "An image is required");
   const clientMessageId = String(req.body.clientMessageId || "").trim();
+  const disappearAfterSeconds = disappearingSeconds(req.body.disappearAfterSeconds);
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,99}$/.test(clientMessageId)) throw new ApiError(400, "A valid client message id is required");
   const caption = String(req.body.caption || "").trim();
   if (caption.length > 2000) throw new ApiError(400, "Image caption must be 2,000 characters or fewer");
@@ -676,16 +698,16 @@ export const sendImageMessage = asyncHandler(async (req, res) => {
   conversation = await prepareConversationForSend(req.user, other, conversation);
   const image = await uploadMessageImage({ buffer: req.file.buffer, senderId: req.user._id });
   if (req.body.directAccessWindowId) {
-    const committed = await createDirectAccessMessageAtomic({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other, message: { clientMessageId, body: caption || "Image", mediaType: "image", image } });
+    const committed = await createDirectAccessMessageAtomic({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other, message: { clientMessageId, body: caption || "Image", mediaType: "image", image, disappearAfterSeconds } });
     emitDirectAccessUpdate(req, committed.window);
     const payload = serializedMessage(committed.message);
-    if (!committed.replay) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
+    if (!committed.replay) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
     return sendResponse(res, committed.replay ? 200 : 201, committed.replay ? "Image already sent" : "Image sent", { message: payload, conversationStatus: conversation.status, directAccessWindow: serializeDAWindow(committed.window), idempotentReplay: committed.replay });
   }
   const directAccess = await reserveDirectAccessMessage({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other });
   let created;
   try {
-    created = await Message.create({ sender: req.user._id, recipient: other._id, clientMessageId, body: caption || "Image", mediaType: "image", image, messageChannel: directAccess ? "DIRECT_ACCESS" : "STANDARD", directAccessWindow: directAccess?.window._id || null });
+    created = await Message.create({ sender: req.user._id, recipient: other._id, clientMessageId, body: caption || "Image", mediaType: "image", image, disappearAfterSeconds, messageChannel: directAccess ? "DIRECT_ACCESS" : "STANDARD", directAccessWindow: directAccess?.window._id || null });
   } catch (error) {
     await releaseDirectAccessMessageReservation(directAccess);
     throw error;
@@ -693,8 +715,38 @@ export const sendImageMessage = asyncHandler(async (req, res) => {
   const directAccessWindow = await settleDirectAccessReply(directAccess, req.user);
   emitDirectAccessUpdate(req, directAccessWindow);
   const payload = serializedMessage(created);
-  req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
+  req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
   return sendResponse(res, 201, conversation.status === "REQUEST" ? "Image-message request sent" : "Image sent", { message: payload, conversationStatus: conversation.status, directAccessWindow: serializeDAWindow(directAccessWindow) });
+});
+
+export const openDisappearingMessage = asyncHandler(async (req, res) => {
+  validId(req.params.messageId);
+  const now = new Date();
+  let message = await Message.findOne({ _id: req.params.messageId, recipient: req.user._id, disappearAfterSeconds: { $in: [0, 3, 10, 30] }, contentPurgedAt: null, $nor: [{ expiresAt: { $lte: now } }] });
+  if (!message) throw new ApiError(404, "This disappearing message is no longer available");
+  if (!message.openedAt) {
+    message.openedAt = now;
+    message.expiresAt = new Date(now.getTime() + (message.disappearAfterSeconds === 0 ? 5 * 60 : message.disappearAfterSeconds) * 1000);
+    await message.save();
+  }
+  req.app.get("io")?.to(`user:${message.sender}`).emit("message:disappearing-opened", { messageId: String(message._id), openedAt: message.openedAt, expiresAt: message.expiresAt });
+  return sendResponse(res, 200, "Disappearing message opened", { message: serializedMessage(message) });
+});
+
+export const consumeDisappearingMessage = asyncHandler(async (req, res) => {
+  validId(req.params.messageId);
+  const message = await Message.findOne({ _id: req.params.messageId, recipient: req.user._id, disappearAfterSeconds: 0 });
+  if (!message) throw new ApiError(404, "Disappearing message not found");
+  message.expiresAt = new Date();
+  message.contentPurgedAt = new Date();
+  message.body = "Disappearing message";
+  message.image = undefined;
+  message.audio = undefined;
+  message.video = undefined;
+  message.gift = undefined;
+  message.sharedContent = undefined;
+  await message.save();
+  return sendResponse(res, 200, "Disappearing message consumed", { messageId: String(message._id) });
 });
 
 export const deleteMessage = asyncHandler(async (req, res) => {
@@ -771,7 +823,7 @@ export const muteConversation = asyncHandler(async (req, res) => {
 
 export const forwardMessage = asyncHandler(async (req, res) => {
   validId(req.params.messageId);
-  const source = await Message.findOne({ _id: req.params.messageId, deletedAt: null, $or: [{ sender: req.user._id }, { recipient: req.user._id }] }).lean();
+  const source = await Message.findOne({ _id: req.params.messageId, deletedAt: null, $nor: [{ expiresAt: { $lte: new Date() } }], $or: [{ sender: req.user._id }, { recipient: req.user._id }] }).lean();
   if (!source) throw new ApiError(404, "Message not found");
   if (source.mediaType === "gift") throw new ApiError(409, "Financial gift messages cannot be forwarded");
   const targets = Array.isArray(req.body.targets) ? req.body.targets.slice(0, 20) : [];
@@ -794,7 +846,7 @@ export const forwardMessage = asyncHandler(async (req, res) => {
     conversation = await prepareConversationForSend(req.user, other, conversation);
     const forwarded = await Message.create({ sender: req.user._id, recipient: other._id, body: source.body, mediaType: source.mediaType, image: source.image, audio: source.audio, video: source.video, sharedAttachment: source.sharedAttachment, forwardedFrom: source._id });
     const payload = serializedMessage(forwarded);
-    req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
+    req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
     results.push({ type: "direct", id: String(other._id), message: payload });
   }
   return sendResponse(res, 201, "Message forwarded", { results });
@@ -813,6 +865,7 @@ export const reportMessage = asyncHandler(async (req, res) => {
   validId(req.params.messageId);
   const message = await Message.findOne({
     _id: req.params.messageId,
+    $nor: [{ expiresAt: { $lte: new Date() } }],
     $or: [{ sender: req.user._id }, { recipient: req.user._id }],
   }).lean();
   if (!message) throw new ApiError(404, "Message not found");
@@ -898,6 +951,7 @@ async function reactionMessage(req) {
   const message = await Message.findOne({
     _id: req.params.messageId,
     deletedAt: null,
+    $nor: [{ expiresAt: { $lte: new Date() } }],
     $or: [{ sender: req.user._id }, { recipient: req.user._id }],
   });
   if (!message) throw new ApiError(404, "Message not found");
@@ -1052,7 +1106,7 @@ export const sendSharedContent = asyncHandler(async (req, res) => {
       });
       const payload = serializedMessage(created);
       const conversationStatus = conversation?.status || "ACTIVE";
-      io?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus });
+      io?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus });
       sent.push({ recipientId: String(other._id), conversationId: conversation ? String(conversation._id) : null, threadId: String(other._id), message: payload, conversationStatus });
     } catch (error) {
       failed.push({ recipientId, message: error.message || "Could not send" });

@@ -25,3 +25,8 @@ test("message history has indexes for both sides of a conversation", () => {
   assert.ok(indexes.some((fields) => fields.sender === 1 && fields.recipient === 1 && fields.createdAt === -1));
   assert.ok(indexes.some((fields) => fields.recipient === 1 && fields.readAt === 1 && fields.createdAt === -1));
 });
+
+test("disappearing messages accept only supported timers and retain a purged receipt", () => {
+  assert.deepEqual(Message.schema.path("disappearAfterSeconds").options.enum, [0, 3, 10, 30]);
+  assert.equal(Message.schema.path("contentPurgedAt").instance, "Date");
+});

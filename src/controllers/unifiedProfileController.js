@@ -11,6 +11,7 @@ import WallPost from "../models/WallPost.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import GroupConversation from "../models/GroupConversation.js";
 import MessageReport from "../models/MessageReport.js";
+import PremiumMembership from "../models/PremiumMembership.js";
 import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -74,6 +75,12 @@ async function loadProfile(owner, viewer) {
       sharedBy: { id: owner._id, name: owner.name, username: owner.username, avatar: owner.avatar || "", verified: Boolean(owner.isVerified) },
     })));
   const pinnedMessageGroup = owner.pinnedMessageGroup ? await GroupConversation.findOne({ _id: owner.pinnedMessageGroup, members: owner._id, deletedAt: null }).select("name avatar members").lean() : null;
+  const activePremiumMembership = viewer?._id && !profileOwner ? await PremiumMembership.findOne({
+    user: viewer._id,
+    creator: owner._id,
+    status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] },
+    currentPeriodEnd: { $gt: new Date() },
+  }).select("premiumPublication").lean() : null;
   const ownWallPosts = ownFeedPosts.map((post) => serializePost(post, viewer));
   const publicationPhotos = [...seens, ...planets].flatMap((publication) => [
     publication.coverMedia ? { ...publication.coverMedia, title: publication.title, publishedAt: publication.publishedAt } : null,
@@ -86,7 +93,7 @@ async function loadProfile(owner, viewer) {
     ...publicationPhotos,
     ...feedPhotos,
   ].filter(Boolean);
-  return serializeUnifiedProfile({ owner, roleProfile, content, photos: profilePhotos, pinnedMessageGroup, planets, publishedContentCount, seens, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships });
+  return serializeUnifiedProfile({ owner, roleProfile, content, photos: profilePhotos, pinnedMessageGroup, planets, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships });
 }
 
 async function relationshipTarget(username) {

@@ -53,7 +53,7 @@ function uniquePhotos(items = []) {
   });
 }
 
-export function serializeUnifiedProfile({ content = [], followerCount = 0, followingCount = 0, owner,  ownWallPosts = [], photos = [], pinnedMessageGroup = null, planets = [], publishedContentCount = content.length, roleProfile, seens = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [] }) {
+export function serializeUnifiedProfile({ content = [], followerCount = 0, followingCount = 0, owner,  ownWallPosts = [], photos = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, publishedContentCount = content.length, roleProfile, seens = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [] }) {
   const capabilities = profileViewerCapabilities(owner, viewer, roleProfile);
   const creatorEnabled = owner.creatorApprovalStatus === "approved";
   const contentViewer = capabilities.isOwner ? viewer : null;
@@ -113,7 +113,7 @@ export function serializeUnifiedProfile({ content = [], followerCount = 0, follo
       .map((item) => item.author ? item : ({ id: `share-${item.shareId}`, originalPostId: item._id, shareId: item.shareId, text: item.text, shareCaption: item.shareCaption || "", context: item.context, location: item.location, media: item.media || [], createdAt: item.createdAt, feedCreatedAt: item.feedCreatedAt, sharedBy: { id: owner._id, name: owner.name, username: owner.username, avatar: owner.avatar || "", verified: Boolean(owner.isVerified) }, reactionCount: item.engagement?.reactionCount || 0, reactionBreakdown: item.engagement?.reactionBreakdown || {}, topReactions: item.engagement?.topReactions || [], viewerReaction: item.engagement?.viewerReaction || null, commentCount: item.engagement?.commentCount || 0, shareCount: item.engagement?.shareCount || 0, saveCount: item.engagement?.saveCount || 0, viewerShared: Boolean(item.engagement?.viewerShared), viewerSaved: Boolean(item.engagement?.viewerSaved), creator: { name: item.creator?.name, username: item.creator?.username, avatar: item.creator?.avatar || "", verified: Boolean(item.creator?.isVerified) } }))
       .sort((left, right) => new Date(right.feedCreatedAt || right.createdAt) - new Date(left.feedCreatedAt || left.createdAt)),
     wallPosts: ownWallPosts,
-    planets: planets.map((item) => serializePublication(item, contentViewer)).filter(Boolean).slice(0, 3),
+    planets: planets.map((item) => serializePublication(item, contentViewer, { entitlement: premiumMembershipPublicationId && String(item._id) === String(premiumMembershipPublicationId) ? "ACTIVE_PREMIUM_MEMBER" : null })).filter(Boolean).slice(0, 3),
     viewerCapabilities: capabilities,
     viewerRelationship: { following: viewerRelationships.some((item) => item.type === "FOLLOW"), seeSignalSent: viewerRelationships.some((item) => item.type === "SEE_SIGNAL") },
     ...(capabilities.isOwner ? { profileCompletion: completion(owner, roleProfile) } : {}),
