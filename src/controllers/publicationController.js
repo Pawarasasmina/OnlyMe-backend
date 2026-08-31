@@ -8,7 +8,7 @@ import SeenEngagement from "../models/SeenEngagement.js";
 import UserBlock from "../models/UserBlock.js";
 import { serializePublication } from "../services/publicationAccessService.js";
 import { addChapter, archivePublication, cancelPublishedRevision, createPublicationDraft, deletePlanet, ownerPublication, removeChapter, reorderChapters, resubmitPublication, startPublishedRevision, submitPublication, updateChapter, updatePublicationDraft } from "../services/publicationService.js";
-import { uploadPublicationFile, verifyPublicationAsset } from "../services/publicationMediaStorageService.js";
+import { deletePublicationFile, uploadPublicationFile, verifyPublicationAsset } from "../services/publicationMediaStorageService.js";
 import { publicationEntitlement } from "../services/publicationEntitlementService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -31,6 +31,20 @@ export const cancelRevision = asyncHandler(async (req, res) => sendResponse(res,
 export const archive = asyncHandler(async (req, res) => sendResponse(res, 200, "Publication archived", { publication: serializePublication(await archivePublication(req.user._id, req.params.id, req.body), req.user) }));
 export const removePlanet = asyncHandler(async (req, res) => { await deletePlanet(req.user._id, req.params.id, req.body); return sendResponse(res, 200, "Planet deleted", { id: req.params.id }); });
 export const uploadMedia = asyncHandler(async (req, res) => { if (!req.file) throw new ApiError(400, "Media file is required"); const publication = await Publication.findOne({ _id: req.params.id, creator: req.user._id, status: { $in: ["DRAFT", "CHANGES_REQUESTED"] } }); if (!publication) throw new ApiError(404, "Editable publication not found"); const purpose = String(req.body.purpose || "BLOCK").toUpperCase(); const mediaType = purpose === "COVER" ? (String(req.file.mimetype || "").startsWith("video/") ? "VIDEO" : "IMAGE") : req.body.mediaType; const chapterId = purpose === "BLOCK" ? req.body.chapterId : "root"; const blockId = purpose === "BLOCK" ? req.body.blockId : purpose.toLowerCase(); if (!chapterId || !blockId) throw new ApiError(400, "chapterId and blockId are required for block media"); const uploaded = await uploadPublicationFile({ file: req.file, creatorId: req.user._id, publicationId: publication._id, chapterId, blockId, mediaType }); const duration = Number(uploaded.duration); if (purpose === "COVER" && mediaType === "VIDEO" && publication.kind === "SEEN" && duration > 30) throw new ApiError(400, "Seen videos must be 30 seconds or shorter"); if (purpose === "COVER" && mediaType === "VIDEO" && publication.kind !== "SEEN" && (duration < 15 || duration > 30)) throw new ApiError(400, "Planet preview video must be 15 to 30 seconds"); if (!["COVER", "INTRO"].includes(purpose)) return sendResponse(res, 201, "Publication media uploaded", uploaded); const statusVersion = Number(req.body.statusVersion); if (!Number.isSafeInteger(statusVersion)) throw new ApiError(400, "statusVersion is required"); const trusted = await verifyPublicationAsset({ assetId: uploaded.assetId, creatorId: req.user._id, publicationId: publication._id, chapterId, blockId, mediaType }); const field = purpose === "COVER" ? "coverMedia" : "introMedia"; const updated = await Publication.findOneAndUpdate({ _id: publication._id, creator: req.user._id, status: publication.status, statusVersion }, { $set: { [field]: trusted }, $inc: { statusVersion: 1, draftVersion: 1 } }, { new: true }); if (!updated) throw new ApiError(409, "Publication changed while attaching media"); return sendResponse(res, 201, `${purpose.toLowerCase()} media attached`, { assetId: uploaded.assetId, publication: { id: updated._id, statusVersion: updated.statusVersion, draftVersion: updated.draftVersion } }); });
+export const removeMedia = asyncHandler(async (req, res) => {
+  const purpose = String(req.params.purpose || "").toUpperCase();
+  if (!["COVER", "INTRO"].includes(purpose)) throw new ApiError(400, "Unsupported publication media purpose");
+  const field = purpose === "COVER" ? "coverMedia" : "introMedia";
+  const statusVersion = Number(req.body.statusVersion);
+  if (!Number.isSafeInteger(statusVersion)) throw new ApiError(400, "statusVersion is required");
+  const publication = await Publication.findOne({ _id: req.params.id, creator: req.user._id, status: { $in: ["DRAFT", "CHANGES_REQUESTED"] } });
+  if (!publication) throw new ApiError(404, "Editable publication not found");
+  const media = publication[field];
+  const updated = await Publication.findOneAndUpdate({ _id: publication._id, creator: req.user._id, status: publication.status, statusVersion }, { $unset: { [field]: 1 }, $inc: { statusVersion: 1, draftVersion: 1 } }, { new: true });
+  if (!updated) throw new ApiError(409, "Publication changed while removing media");
+  await deletePublicationFile(media).catch(() => {});
+  return sendResponse(res, 200, `${purpose.toLowerCase()} media removed`, { publication: { id: updated._id, statusVersion: updated.statusVersion, draftVersion: updated.draftVersion } });
+});
 export const listPublishedSeens = asyncHandler(async (req, res) => {
   const paging = page(req);
   const filter = { kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } };

@@ -23,8 +23,8 @@ export const creditStars = asyncHandler(async (req, res) => {
   if (!env.enableAdminStarCredits) throw new ApiError(403, "Admin Stars credits are disabled", "ADMIN_CREDITS_DISABLED");
   const target = await User.findById(objectId(req.params.userId)).select("_id role status");
   if (!target) throw new ApiError(404, "User not found", "USER_NOT_FOUND");
-  if (target.role !== "fan") throw new ApiError(400, "Stars can only be added to fan Wallets", "FAN_WALLET_REQUIRED");
-  if (target.status !== "active") throw new ApiError(409, "The selected fan account is not active", "FAN_ACCOUNT_INACTIVE");
+  if (!["fan", "creator"].includes(target.role)) throw new ApiError(400, "Stars can only be added to fan or creator Wallets", "WALLET_ACCOUNT_REQUIRED");
+  if (target.status !== "active") throw new ApiError(409, "The selected account is not active", "WALLET_ACCOUNT_INACTIVE");
   const amount = positiveStars(req.body.starsAmount);
   const reason = requiredReason(req.body.reason);
   const key = idempotencyKey(req.body.idempotencyKey);
@@ -41,11 +41,11 @@ export const creditStars = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Stars credited", result);
 });
 
-export const listFanWallets = asyncHandler(async (req, res) => {
+export const listUserWallets = asyncHandler(async (req, res) => {
   const search = String(req.query.search || "").trim();
-  const filter = { role: "fan", ...(search ? { $or: ["name", "username", "email"].map((field) => ({ [field]: { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" } })) } : {}) };
-  const fans = await User.find(filter).select("name username email avatar status").sort({ createdAt: -1 }).limit(200).lean();
-  const userIds = fans.map((fan) => fan._id);
+  const filter = { role: { $in: ["fan", "creator"] }, ...(search ? { $or: ["name", "username", "email"].map((field) => ({ [field]: { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" } })) } : {}) };
+  const users = await User.find(filter).select("name username email avatar status role").sort({ createdAt: -1 }).limit(200).lean();
+  const userIds = users.map((user) => user._id);
   const [wallets, ledgerTotals] = await Promise.all([
     Wallet.find({ user: { $in: userIds } }).lean(),
     StarsLedgerEntry.aggregate([{ $match: { accountUser: { $in: userIds } } }, { $group: { _id: "$accountUser", balance: { $sum: "$signedAmount" }, entries: { $sum: 1 } } }]),
@@ -55,17 +55,17 @@ export const listFanWallets = asyncHandler(async (req, res) => {
   const ledgerByUser = new Map(ledgerTotals.map((row) => [String(row._id), row]));
   const legacyByWallet = new Map();
   for (const transaction of legacyTransactions) legacyByWallet.set(String(transaction.wallet), [...(legacyByWallet.get(String(transaction.wallet)) || []), transaction]);
-  const items = fans.map((fan) => {
-    const wallet = walletByUser.get(String(fan._id));
-    const ledger = ledgerByUser.get(String(fan._id));
+  const items = users.map((user) => {
+    const wallet = walletByUser.get(String(user._id));
+    const ledger = ledgerByUser.get(String(user._id));
     const walletBalance = Number(wallet?.balance || 0);
     const ledgerBalance = Number(ledger?.balance || 0);
     const legacy = legacyByWallet.get(String(wallet?._id)) || [];
     const legacyProjection = legacy.filter((item) => item.status === "completed").reduce((total, item) => total + (item.type === "debit" ? -1 : 1) * Math.abs(Number(item.amount) || 0), 0);
     const reconciliationStatus = !wallet ? "NOT_CREATED" : wallet.currency !== "STARS" || !wallet.ledgerActivatedAt ? "NOT_ACTIVATED" : walletBalance !== ledgerBalance ? "DRIFT" : wallet.reconciliationStatus === "MATCHED" ? "MATCHED" : wallet.reconciliationStatus || "BLOCKED";
-    return { id: fan._id, name: fan.name, username: fan.username, email: fan.email, avatar: fan.avatar || "", status: fan.status, wallet: { exists: Boolean(wallet), balance: walletBalance, currency: wallet?.currency || "STARS", version: wallet?.version || 0, ledgerActivated: Boolean(wallet?.ledgerActivatedAt), ledgerActivatedAt: wallet?.ledgerActivatedAt || null, reconciliationStatus, ledgerBalance, ledgerEntries: ledger?.entries || 0, legacyProjection, legacyDifference: walletBalance - legacyProjection, legacyTransactions: legacy.slice(0, 20).map((item) => ({ id: item._id, amount: item.amount, type: item.type, status: item.status, description: item.description, createdAt: item.createdAt })) } };
+    return { id: user._id, name: user.name, username: user.username, email: user.email, avatar: user.avatar || "", status: user.status, role: user.role, wallet: { exists: Boolean(wallet), balance: walletBalance, currency: wallet?.currency || "STARS", version: wallet?.version || 0, ledgerActivated: Boolean(wallet?.ledgerActivatedAt), ledgerActivatedAt: wallet?.ledgerActivatedAt || null, reconciliationStatus, ledgerBalance, ledgerEntries: ledger?.entries || 0, legacyProjection, legacyDifference: walletBalance - legacyProjection, legacyTransactions: legacy.slice(0, 20).map((item) => ({ id: item._id, amount: item.amount, type: item.type, status: item.status, description: item.description, createdAt: item.createdAt })) } };
   });
-  return sendResponse(res, 200, "Fan Wallets fetched", { items });
+  return sendResponse(res, 200, "User Wallets fetched", { items });
 });
 
 export const getPlatformRevenue = asyncHandler(async (_req, res) => {
@@ -99,7 +99,7 @@ export const getPlatformRevenue = asyncHandler(async (_req, res) => {
 export const activateFanWallet = asyncHandler(async (req, res) => {
   if (!env.enableAdminStarCredits) throw new ApiError(403, "Admin Stars credits are disabled", "ADMIN_CREDITS_DISABLED");
   const target = await User.findById(objectId(req.params.userId)).select("_id role status");
-  if (!target || target.role !== "fan") throw new ApiError(404, "Fan not found", "USER_NOT_FOUND");
+  if (!target || !["fan", "creator"].includes(target.role)) throw new ApiError(404, "Fan or creator not found", "USER_NOT_FOUND");
   const openingBalance = Number(req.body.openingBalance);
   if (!Number.isSafeInteger(openingBalance) || openingBalance < 0) throw new ApiError(400, "Opening balance must be a non-negative integer", "INVALID_OPENING_BALANCE");
   const reason = requiredReason(req.body.reason);
