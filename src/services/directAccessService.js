@@ -60,7 +60,7 @@ export function serializeDAWindow(window) {
   };
 }
 
-async function assertOpenPair(fan, creatorId) {
+async function assertOpenPair(fan, creatorId, membershipIncluded = false) {
   if (!["fan", "creator"].includes(fan.role)) throw new ApiError(403, "This account cannot open Direct Access windows");
   const creator = await User.findOne({ _id: creatorId, role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved", status: "active" }).select("_id name username avatar role creatorApprovalStatus");
   if (!creator) throw new ApiError(404, "Creator not found");
@@ -70,14 +70,14 @@ async function assertOpenPair(fan, creatorId) {
     UserBlock.exists({ $or: [{ blocker: fan._id, blocked: creator._id }, { blocker: creator._id, blocked: fan._id }] }),
   ]);
   if (blocked) throw new ApiError(403, "Direct Access is unavailable for this account");
-  if (!profile?.directAccessEnabled) throw new ApiError(403, "This creator is not accepting Direct Access");
+  if (!membershipIncluded && !profile?.directAccessEnabled) throw new ApiError(403, "This creator is not accepting Direct Access");
   return { creator, priceStars: profile.directAccessPriceStars || 100 };
 }
 
 export async function openDirectAccessWindow({ fan, creatorId, key, source = "PAID", creatorQuestionMessageId = null, fanFollowupMessageId = null, previousWindowId = null }) {
   key = idempotencyKey(key);
   if (!["PAID", "PREMIUM_INCLUDED", "CREATOR_REOPEN", "FAN_FOLLOWUP"].includes(source)) throw new ApiError(400, "This Direct Access source is not available");
-  const { creator, priceStars } = await assertOpenPair(fan, creatorId);
+  const { creator, priceStars } = await assertOpenPair(fan, creatorId, source === "PREMIUM_INCLUDED");
   let creatorQuestion = null;
   let questionedWindow = null;
   if (source === "CREATOR_REOPEN") {
