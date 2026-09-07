@@ -62,6 +62,14 @@ test("profile contract separates published Seens, planets, and legacy content", 
   assert.equal(result.seens.length, 1); assert.equal(result.planets.length, 1); assert.equal(result.publicContent.length, 0);
 });
 
+test("profile planets expose active premium membership access to the subscribed viewer", () => {
+  const snapshot = { metadata: { title: "Inner Room", summary: "", description: "", category: "", tags: [], pricing: { mode: "MONTHLY", starsAmount: 190 }, planet: { emoji: "🪐" } }, chapters: [{ stableChapterId: "free", order: 0, title: "Free", isPreview: true, blocks: [] }, { stableChapterId: "private", order: 1, title: "Private", isPreview: false, blocks: [] }], version: 1, frozenAt: new Date() };
+  const planet = { _id: "premium-world", creator: owner._id, kind: "PREMIUM_WORLD", status: "PUBLISHED", publishedSnapshot: snapshot };
+  const result = serializeUnifiedProfile({ owner, roleProfile, viewer: { _id: "fan", role: "fan" }, planets: [planet], premiumMembershipPublicationId: "premium-world" });
+  assert.equal(result.planets[0].access, "ACTIVE_PREMIUM_MEMBER");
+  assert.equal(result.planets[0].locked, false);
+});
+
 test("profile contract exposes reposted Seen metadata", () => {
   const snapshot = { metadata: { title: "Shared Seen", summary: "", description: "", category: "", tags: [], pricing: {}, planet: {} }, chapters: [{ stableChapterId: "c", order: 0, title: "C", isPreview: true, blocks: [] }], version: 1, frozenAt: new Date() };
   const sharedAt = new Date();

@@ -104,7 +104,7 @@ export const blockSeenCreator = asyncHandler(async (req, res) => {
 
 export const reportSeen = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid Seen ID");
-  const publication = await Publication.findOne({ _id: req.params.id, kind: "SEEN", status: "PUBLISHED" }).select("_id creator kind title summary publishedAt").lean();
+  const publication = await Publication.findOne({ _id: req.params.id, kind: "SEEN", status: "PUBLISHED" }).select("_id creator kind title summary coverMedia publishedAt").lean();
   if (!publication) throw new ApiError(404, "Published Seen not found");
 
   if (String(publication.creator) === String(req.user._id)) throw new ApiError(400, "You cannot report your own Seen");
@@ -123,6 +123,7 @@ export const reportSeen = asyncHandler(async (req, res) => {
       publicationId: String(publication._id),
       title: publication.title || "",
       summary: publication.summary || "",
+      coverMedia: publication.coverMedia || null,
       creatorId: String(publication.creator || ""),
       publishedAt: publication.publishedAt || null,
     },

@@ -31,7 +31,7 @@ test("Mongo integration: publication limits, snapshot freeze, and immediate Seen
     await assert.rejects(() => updatePublicationDraft(creator, seen._id, { statusVersion: submitted.statusVersion, title: "Changed" }), (error) => error.statusCode === 409);
     await assert.rejects(
       () => moderatePublication({ id: seen._id, adminId: admin, decision: "APPROVED", review: { manualReviewConfirmed: true } }),
-      (error) => error.statusCode === 409,
+      (error) => error.statusCode === 404,
     );
   } finally {
     const ids = await Publication.find({ creator }).distinct("_id"); await Promise.all([Chapter.deleteMany({ publication: { $in: ids } }), PublicationReviewHistory.deleteMany({ publication: { $in: ids } }), Publication.deleteMany({ _id: { $in: ids } }), Notification.deleteMany({ user: creator })]); await mongoose.disconnect();

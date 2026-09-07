@@ -32,6 +32,17 @@ export function normalizeBlocks(blocks = []) {
     const item = { id, type: block.type, order };
     if (TEXT_BLOCK_TYPES.includes(block.type)) { item.text = text(block.text, PUBLICATION_LIMITS.chapterText, "Block text", true); textualCharacters += item.text.length; if (block.type === "HIGHLIGHT") { const color = String(block.metadata?.color || "ICE_BLUE").toUpperCase(); if (!PLANET_MARKER_COLORS.includes(color)) throw new ApiError(400, "Marker color must use one of the six brand colors"); item.metadata = { color }; } else if (block.type === "KEY_POINT" && block.metadata?.location) { item.metadata = { location: { label: text(block.metadata.location.label, PUBLICATION_LIMITS.blockLabel, "Location", true) } }; } }
     if (block.type === "LINK") { item.url = safeUrl(block.url); item.label = text(block.label, PUBLICATION_LIMITS.blockLabel, "Link label", true); textualCharacters += item.label.length; }
+    if (block.type === "POLL") {
+      const question = text(block.metadata?.question, 180, "Poll question", true);
+      if (!Array.isArray(block.metadata?.options)) throw new ApiError(400, "Poll options must be an array");
+      const options = block.metadata.options.map((option) => text(option, 80, "Poll option", true));
+      if (options.length < 2 || options.length > 4) throw new ApiError(400, "Polls require 2 to 4 options");
+      if (new Set(options.map((option) => option.toLowerCase())).size !== options.length) throw new ApiError(400, "Poll options must be unique");
+      const resultsVisibility = String(block.metadata?.resultsVisibility || "SUBSCRIBERS").toUpperCase();
+      if (!["SUBSCRIBERS", "CREATOR"].includes(resultsVisibility)) throw new ApiError(400, "Poll result visibility must be subscribers or creator only");
+      item.metadata = { question, options, resultsVisibility };
+      textualCharacters += question.length + options.join("").length;
+    }
     if (["IMAGE", "VIDEO", "AUDIO", "VOICE"].includes(block.type)) { if (!block.media?.assetId) throw new ApiError(400, "Verified media is required"); item.media = block.media; if (block.metadata?.storyPreview) item.metadata = { label: text(block.metadata.label, PUBLICATION_LIMITS.blockLabel, "Story preview label"), storyPreview: true }; }
     return item;
   });

@@ -134,11 +134,12 @@ export const listReportedMessageUsers = asyncHandler(async (req, res) => {
     const categoryCounts = group.categories.reduce((counts, category) => ({ ...counts, [category]: (counts[category] || 0) + 1 }), {});
     return [{ ...group, categoryCounts, categories: undefined, user }];
   });
+  const managesAccountRestrictions = req.reportScopes?.some((scope) => ["FEED_POST", "PROFILE", "SEEN"].includes(scope));
   const summary = items.reduce((totals, item) => ({
     users: totals.users + 1,
     reports: totals.reports + item.totalReports,
     open: totals.open + item.received + item.reviewing,
-    restricted: totals.restricted + ((req.reportScopes?.includes("FEED_POST") ? item.user.loginRestrictedUntil : item.user.messagingRestrictedUntil) && new Date(req.reportScopes?.includes("FEED_POST") ? item.user.loginRestrictedUntil : item.user.messagingRestrictedUntil) > new Date() ? 1 : 0),
+    restricted: totals.restricted + ((managesAccountRestrictions ? item.user.loginRestrictedUntil : item.user.messagingRestrictedUntil) && new Date(managesAccountRestrictions ? item.user.loginRestrictedUntil : item.user.messagingRestrictedUntil) > new Date() ? 1 : 0),
   }), { users: 0, reports: 0, open: 0, restricted: 0 });
   return sendResponse(res, 200, "Reported message users fetched", { items, summary });
 });
@@ -147,7 +148,7 @@ export const getReportedMessageUser = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.userId)) throw new ApiError(400, "Invalid user ID");
   const [user, reports] = await Promise.all([
     User.findById(req.params.userId).select(reportUserFields).lean(),
-    MessageReport.find({ reportedUser: req.params.userId, ...(req.reportScopes?.length ? { scope: { $in: req.reportScopes } } : {}) }).select("+snapshot").populate("reporter", reportUserFields).populate("reviewedBy", "name username email").sort({ createdAt: -1 }).lean(),
+    MessageReport.find({ reportedUser: req.params.userId, ...(req.reportScopes?.length ? { scope: { $in: req.reportScopes } } : {}) }).select("+snapshot").populate("reporter", reportUserFields).populate("reportedUser", reportUserFields).populate("publication", "title summary coverMedia publishedAt").populate("reviewedBy", "name username email").sort({ createdAt: -1 }).lean(),
   ]);
   if (!user) throw new ApiError(404, "Reported user not found");
   const history = reports.filter((report) => report.resolution?.action).map((report) => ({
@@ -161,6 +162,19 @@ export const getReportedMessageUser = asyncHandler(async (req, res) => {
     reviewedBy: report.reviewedBy,
   }));
   return sendResponse(res, 200, "Reported message user fetched", { user, reports, history });
+});
+
+export const getReportForModeration = asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.reportId)) throw new ApiError(400, "Invalid report ID");
+  const report = await MessageReport.findOne({ _id: req.params.reportId, ...(req.reportScopes?.length ? { scope: { $in: req.reportScopes } } : {}) })
+    .select("+snapshot")
+    .populate("reporter", reportUserFields)
+    .populate("reportedUser", reportUserFields)
+    .populate("publication", "title summary coverMedia publishedAt")
+    .populate("reviewedBy", "name username email")
+    .lean();
+  if (!report) throw new ApiError(404, "Report not found");
+  return sendResponse(res, 200, "Report fetched", { report });
 });
 
 export const startMessageReportReview = asyncHandler(async (req, res) => {

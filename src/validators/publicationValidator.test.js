@@ -11,4 +11,18 @@ test("Premium World enforces presets, previews, and a locked chapter", () => { a
 test("chapter blocks reject excessive text, unsafe links, and invalid types", () => { assert.throws(() => normalizeChapter(chapter(true, "x".repeat(2001)))); assert.throws(() => normalizeChapter({ title: "C", blocks: [{ id: "b", type: "LINK", label: "Bad", url: "javascript:alert(1)" }] })); assert.throws(() => normalizeChapter({ title: "C", blocks: [{ id: "b", type: "HTML", text: "bad" }] })); });
 test("marker blocks accept exactly the six brand colors", () => { assert.equal(normalizeChapter({ title: "C", blocks: [{ id: "b", type: "HIGHLIGHT", text: "Marked", metadata: { color: "MINT" } }] }).blocks[0].metadata.color, "MINT"); assert.throws(() => normalizeChapter({ title: "C", blocks: [{ id: "b", type: "HIGHLIGHT", text: "Marked", metadata: { color: "PURPLE" } }] })); });
 test("media blocks preserve story preview metadata", () => { const normalized = normalizeChapter({ title: "C", blocks: [{ id: "story-photo", type: "IMAGE", media: { assetId: "asset-1", mediaType: "IMAGE", resourceType: "image", secureUrl: "https://example.test/story.jpg" }, metadata: { label: "9:15 AM", storyPreview: true } }] }); assert.deepEqual(normalized.blocks[0].metadata, { label: "9:15 AM", storyPreview: true }); });
+
+test("poll blocks preserve a validated question and unique choices", () => {
+  const normalized = normalizeChapter({ title: "C", blocks: [{ id: "poll-1", type: "POLL", metadata: { question: "What next?", options: ["Ocean", "Forest"] } }] });
+  assert.deepEqual(normalized.blocks[0].metadata, { question: "What next?", options: ["Ocean", "Forest"], resultsVisibility: "SUBSCRIBERS" });
+});
+
+test("poll blocks preserve creator-only result visibility", () => {
+  const normalized = normalizeChapter({ title: "C", blocks: [{ id: "poll-1", type: "POLL", metadata: { question: "What next?", options: ["Ocean", "Forest"], resultsVisibility: "CREATOR" } }] });
+  assert.equal(normalized.blocks[0].metadata.resultsVisibility, "CREATOR");
+});
+
+test("poll blocks reject duplicate or incomplete choices", () => {
+  assert.throws(() => normalizeChapter({ title: "C", blocks: [{ id: "poll-1", type: "POLL", metadata: { question: "What next?", options: ["Ocean", "ocean"] } }] }), /unique/);
+});
 test("location key points preserve a safe location label", () => { const normalized = normalizeChapter({ title: "C", blocks: [{ id: "place", type: "KEY_POINT", text: "Sri Lanka", metadata: { location: { label: "Sri Lanka" } } }] }); assert.deepEqual(normalized.blocks[0].metadata, { location: { label: "Sri Lanka" } }); });
