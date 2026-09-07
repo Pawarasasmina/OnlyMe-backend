@@ -9,6 +9,7 @@ import { sendResponse } from "../utils/response.js";
 import { validateLoginPayload, validateRegisterPayload } from "../validators/authValidator.js";
 import { issueAuthTokens } from "../services/tokenService.js";
 import { sendWelcomeEmail } from "../services/emailService.js";
+import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyticsEventService.js";
 import { env } from "../config/env.js";
 import jwt from "jsonwebtoken";
 
@@ -60,6 +61,13 @@ async function createRoleProfile(user) {
   }
 }
 
+async function recordAuthAnalytics(req, user, eventType) {
+  const sessionId = readAnalyticsSessionId(req);
+  if (!sessionId) return;
+  await recordAnalyticsEvent({ eventType: "SESSION_STARTED", req, sessionId, source: "unknown", userId: user._id });
+  await recordAnalyticsEvent({ eventType, req, sessionId, source: "unknown", userId: user._id });
+}
+
 export const register = asyncHandler(async (req, res) => {
   const { name, username, email, password } = validateRegisterPayload(req.body);
 
@@ -84,6 +92,7 @@ export const register = asyncHandler(async (req, res) => {
 
   const tokens = issueAuthTokens(user);
   res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
+  await recordAuthAnalytics(req, user, "LOGIN");
   return sendResponse(res, 201, "Registration successful", {
     user: sanitizeUser(user),
     accessToken: tokens.accessToken,
@@ -118,6 +127,7 @@ export const login = asyncHandler(async (req, res) => {
   const tokens = issueAuthTokens(user);
 
   res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
+  await recordAuthAnalytics(req, user, "LOGIN");
 
   return sendResponse(res, 200, "Login successful", {
     user: sanitizeUser(user),

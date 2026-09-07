@@ -9,9 +9,14 @@ import SeenEngagement from "../models/SeenEngagement.js";
 import WallEngagement from "../models/WallEngagement.js";
 import WallPost from "../models/WallPost.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
+import OrbitSignal from "../models/OrbitSignal.js";
 import GroupConversation from "../models/GroupConversation.js";
 import MessageReport from "../models/MessageReport.js";
 import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
+import { toggleFollowRelationship } from "../services/profileRelationshipService.js";
+import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyticsEventService.js";
+import { seenVisibilityFilter } from "../services/publicationAccessService.js";
+import { sendSeeYouSignal } from "../services/orbitRecommendationService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -26,13 +31,14 @@ async function loadProfile(owner, viewer) {
   const publishedFilter = { creator: owner._id, status: { $in: ["PUBLISHED", "published"] } };
   const profileOwner = Boolean(viewer?._id && String(viewer._id) === String(owner._id));
   const seenStatus = { $in: ["PUBLISHED", "CHANGES_REQUESTED"] };
+  const seenAudienceFilter = await seenVisibilityFilter(viewer || null, [owner._id]);
   const planetStatus = profileOwner ? { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } : { $in: ["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED"] };
-  const [roleProfile, content, publishedContentCount, seens, planets, ownFeedPosts, shares, wallShares, feedSharePosts, followerCount, followingCount, supporterRows, viewerRelationships] = await Promise.all([
+  const [roleProfile, content, publishedContentCount, seens, planets, ownFeedPosts, shares, wallShares, feedSharePosts, followerCount, followingCount, supporterRows, viewerRelationships, viewerSeeSignal] = await Promise.all([
     Model.findOne({ user: owner._id }).lean(),
     Content.find(publishedFilter)
       .sort({ publishedAt: -1, _id: -1 }).limit(30).populate("creator", "name username avatar").lean(),
     Content.countDocuments(publishedFilter),
-    Publication.find({ creator: owner._id, kind: "SEEN", status: seenStatus, publishedSnapshot: { $exists: true } }).select("+submittedSnapshot").sort({ publishedAt: -1, updatedAt: -1 }).populate("creator", "name username avatar").lean(),
+    Publication.find({ creator: owner._id, kind: "SEEN", status: seenStatus, publishedSnapshot: { $exists: true }, ...seenAudienceFilter }).select("+submittedSnapshot").sort({ publishedAt: -1, updatedAt: -1 }).populate("creator", "name username avatar").populate("series", "name").lean(),
     Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
     FeedPost.find({ author: owner._id, status: "published", visibility: "public", deletedAt: null }).sort({ publishedAt: -1, createdAt: -1 }).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }]).lean(),
     SeenEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("publication text createdAt").lean(),
@@ -42,9 +48,10 @@ async function loadProfile(owner, viewer) {
     ProfileRelationship.countDocuments({ actor: owner._id, type: "FOLLOW" }),
     owner.role === "creator" ? DreamGift.distinct("supporter", { creator: owner._id }) : [],
     viewer?._id && String(viewer._id) !== String(owner._id) ? ProfileRelationship.find({ actor: viewer._id, target: owner._id }).select("type").lean() : [],
+    viewer?._id && String(viewer._id) !== String(owner._id) ? OrbitSignal.findOne({ sender: viewer._id, targetUser: owner._id, type: "SEE_YOU", status: "active" }).select("_id").lean() : null,
   ]);
   if (!roleProfile) throw new ApiError(404, "Profile not found");
-  const sharedSeens = shares.length ? await Publication.find({ _id: { $in: shares.map((item) => item.publication) }, kind: "SEEN", status: "PUBLISHED" }).populate("creator", "name username avatar").lean() : [];
+  const sharedSeens = shares.length ? await Publication.find({ _id: { $in: shares.map((item) => item.publication) }, kind: "SEEN", status: "PUBLISHED", ...seenAudienceFilter }).populate("creator", "name username avatar").populate("series", "name").lean() : [];
   const shareOrder = new Map(shares.map((item, index) => [String(item.publication), index]));
   const seenShareByPublication = new Map(shares.map((item) => [String(item.publication), item]));
   for (const seen of sharedSeens) {
@@ -86,28 +93,45 @@ async function loadProfile(owner, viewer) {
     ...publicationPhotos,
     ...feedPhotos,
   ].filter(Boolean);
-  return serializeUnifiedProfile({ owner, roleProfile, content, photos: profilePhotos, pinnedMessageGroup, planets, publishedContentCount, seens, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships });
+  return serializeUnifiedProfile({ owner, roleProfile, content, photos: profilePhotos, pinnedMessageGroup, planets, publishedContentCount, seens, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal) });
 }
 
 async function relationshipTarget(username) {
-  const target = await User.findOne({ username: normalizeUsername(username), role: { $in: ["fan", "creator"] }, status: "active" }).select("_id");
+  const target = await User.findOne({ username: normalizeUsername(username), role: { $in: ["fan", "creator"] }, status: "active" }).select("_id username");
   if (!target) throw new ApiError(404, "Profile not found");
   return target;
 }
 
-async function toggleRelationship(req, type) {
+export const toggleProfileFollow = asyncHandler(async (req, res) => {
+  const relationship = await toggleFollowRelationship({ actor: req.user, targetUsername: req.params.username });
+  const sessionId = readAnalyticsSessionId(req);
+  if (relationship.active && sessionId) {
+    await recordAnalyticsEvent({
+      entityId: relationship.targetUserId,
+      entityType: "profile",
+      eventType: "FOLLOW",
+      metadata: { targetUserId: relationship.targetUserId },
+      req,
+      sessionId,
+      source: req.body.source || "profile",
+      userId: req.user._id,
+    });
+  }
+  return sendResponse(res, 200, "Follow relationship updated", { relationship });
+});
+export const toggleProfileSeeSignal = asyncHandler(async (req, res) => {
   if (!["fan", "creator"].includes(req.user.role)) throw new ApiError(403, "This action is available to fan and creator accounts");
   const target = await relationshipTarget(req.params.username);
-  if (String(target._id) === String(req.user._id)) throw new ApiError(400, "You cannot use this action on your own profile");
-  const filter = { actor: req.user._id, target: target._id, type };
-  const existing = await ProfileRelationship.findOne(filter);
-  if (existing) await existing.deleteOne();
-  else await ProfileRelationship.create(filter);
-  return { active: !existing, followerCount: await ProfileRelationship.countDocuments({ target: target._id, type: "FOLLOW" }) };
-}
-
-export const toggleProfileFollow = asyncHandler(async (req, res) => sendResponse(res, 200, "Follow relationship updated", { relationship: await toggleRelationship(req, "FOLLOW") }));
-export const toggleProfileSeeSignal = asyncHandler(async (req, res) => sendResponse(res, 200, "See signal updated", { relationship: await toggleRelationship(req, "SEE_SIGNAL") }));
+  const signal = await sendSeeYouSignal({ sender: req.user, targetUserId: target._id });
+  return sendResponse(res, 200, "See signal updated", {
+    relationship: {
+      active: true,
+      targetUserId: signal.targetUserId,
+      username: target.username,
+      signalId: signal.signalId,
+    },
+  });
+});
 
 const PROFILE_REPORT_REASONS = new Set(["SPAM", "FALSE_INFORMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "OTHER"]);
 
@@ -145,37 +169,50 @@ export const getOwnProfileViewers = asyncHandler(async (req, res) => {
   const limit = Math.min(30, Math.max(1, Number.parseInt(req.query.limit, 10) || 10));
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
+  const endOfToday = new Date(startOfToday);
+  endOfToday.setDate(endOfToday.getDate() + 1);
+  const now = new Date();
   const [recentSignals, todaySignals] = await Promise.all([
-    ProfileRelationship.find({ target: req.user._id, type: "SEE_SIGNAL" })
-      .sort({ createdAt: -1, _id: -1 })
-      .limit(limit)
-      .populate({ path: "actor", match: { status: "active" }, select: "name username avatar isVerified role status" })
-      .lean(),
-    ProfileRelationship.find({ target: req.user._id, type: "SEE_SIGNAL", createdAt: { $gte: startOfToday } })
-      .select("actor")
-      .limit(500)
-      .populate({ path: "actor", match: { status: "active" }, select: "_id" })
-      .lean(),
+    OrbitSignal.aggregate([
+      { $match: { targetUser: req.user._id, type: "SEE_YOU", status: "active" } },
+      { $addFields: { signalOccurredAt: { $ifNull: ["$signaledAt", "$createdAt"] } } },
+      { $sort: { signalOccurredAt: -1, _id: -1 } },
+      { $limit: limit },
+      { $lookup: { from: User.collection.name, localField: "sender", foreignField: "_id", as: "sender" } },
+      { $unwind: "$sender" },
+      { $match: { "sender.status": "active", "sender.role": { $in: ["fan", "creator"] } } },
+      { $project: { _id: 1, signalOccurredAt: 1, sender: { _id: 1, name: 1, username: 1, avatar: 1, isVerified: 1, role: 1 } } },
+    ]),
+    OrbitSignal.aggregate([
+      { $match: { targetUser: req.user._id, type: "SEE_YOU", status: "active" } },
+      { $addFields: { signalOccurredAt: { $ifNull: ["$signaledAt", "$createdAt"] } } },
+      { $match: { signalOccurredAt: { $gte: startOfToday, $lt: endOfToday, $lte: now } } },
+      { $group: { _id: "$sender" } },
+      { $lookup: { from: User.collection.name, localField: "_id", foreignField: "_id", as: "sender" } },
+      { $unwind: "$sender" },
+      { $match: { "sender.status": "active", "sender.role": { $in: ["fan", "creator"] } } },
+      { $count: "count" },
+    ]),
   ]);
   const signals = recentSignals.flatMap((signal) => {
-    if (!signal.actor) return [];
+    if (!signal.sender) return [];
     return [{
       id: signal._id,
-      type: "SEE_SIGNAL",
+      type: "SEE_YOU",
       description: "said \"I see you\"",
-      createdAt: signal.createdAt,
+      createdAt: signal.signalOccurredAt,
       actor: {
-        id: signal.actor._id,
-        displayName: signal.actor.name,
-        username: signal.actor.username,
-        avatarUrl: signal.actor.avatar || "",
-        verified: Boolean(signal.actor.isVerified),
-        role: signal.actor.role,
+        id: signal.sender._id,
+        displayName: signal.sender.name,
+        username: signal.sender.username,
+        avatarUrl: signal.sender.avatar || "",
+        verified: Boolean(signal.sender.isVerified),
+        role: signal.sender.role,
       },
     }];
   });
   return sendResponse(res, 200, "Profile activity fetched", {
-    seenTodayCount: todaySignals.filter((signal) => signal.actor).length,
+    seenTodayCount: Number(todaySignals[0]?.count || 0),
     signals,
     worldVisitorCount: 0,
   });
@@ -243,7 +280,21 @@ export const getUnifiedProfileByUsername = asyncHandler(async (req, res) => {
   const Model = profileModelFor(owner);
   const visibility = await Model.findOne({ user: owner._id }).select("profileVisibility").lean();
   if (!visibility) throw new ApiError(404, "Profile not found");
-  return sendResponse(res, 200, "Profile fetched", await loadProfile(owner, req.user || null));
+  const data = await loadProfile(owner, req.user || null);
+  const sessionId = readAnalyticsSessionId(req);
+  if (req.user?._id && String(req.user._id) !== String(owner._id) && sessionId) {
+    await recordAnalyticsEvent({
+      entityId: String(owner._id),
+      entityType: "profile",
+      eventType: "PROFILE_VIEW",
+      metadata: { profileUserId: String(owner._id) },
+      req,
+      sessionId,
+      source: req.query.source || "profile",
+      userId: req.user._id,
+    });
+  }
+  return sendResponse(res, 200, "Profile fetched", data);
 });
 
 export const getOrbitCreators = asyncHandler(async (req, res) => {

@@ -450,9 +450,13 @@ export async function sendSeeYouSignal({ sender, targetUserId }) {
     if (!profile) throw new ApiError(403, "This Orbit signal is not available");
   }
 
+  const now = new Date();
   const signal = await OrbitSignal.findOneAndUpdate(
     { sender: sender._id, targetUser: target._id, type: "SEE_YOU", status: "active" },
-    { $setOnInsert: { sender: sender._id, targetUser: target._id, type: "SEE_YOU", status: "active" } },
+    {
+      $set: { acknowledgedAt: null, signaledAt: now },
+      $setOnInsert: { sender: sender._id, targetUser: target._id, type: "SEE_YOU", status: "active" },
+    },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
 
@@ -473,7 +477,7 @@ export async function sendSeeYouSignal({ sender, targetUserId }) {
     signalId: String(signal._id),
     targetUserId: String(target._id),
     status: "sent",
-    createdAt: signal.createdAt,
+    createdAt: signal.signaledAt || signal.updatedAt || signal.createdAt,
   };
 }
 

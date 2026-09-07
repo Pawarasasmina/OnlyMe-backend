@@ -1,21 +1,26 @@
 import crypto from "node:crypto";
 import ApiError from "../utils/ApiError.js";
-import { BLOCK_TYPES, KIND_RULES, PLANET_MARKER_COLORS, PREMIUM_PRICE_PRESETS, PUBLICATION_KINDS, PUBLICATION_LIMITS, TEXT_BLOCK_TYPES } from "../constants/publicationConstants.js";
+import { BLOCK_TYPES, KIND_RULES, PLANET_MARKER_COLORS, PREMIUM_PRICE_PRESETS, PUBLICATION_KINDS, PUBLICATION_LIMITS, PUBLICATION_VISIBILITIES, SEEN_CATEGORIES, TEXT_BLOCK_TYPES } from "../constants/publicationConstants.js";
 
 const text = (value, max, name, required = false) => { const result = typeof value === "string" ? value.trim() : ""; if (required && !result) throw new ApiError(400, `${name} is required`); if (result.length > max) throw new ApiError(400, `${name} cannot exceed ${max} characters`); return result; };
 const safeUrl = (value) => { try { const url = new URL(String(value)); if (!["http:", "https:"].includes(url.protocol)) throw new Error(); return url.toString(); } catch { throw new ApiError(400, "Links must use http or https"); } };
 const objectId = (value, name) => { const result = String(value || "").trim(); if (!result) return null; if (!/^[a-f\d]{24}$/i.test(result)) throw new ApiError(400, `${name} must be a valid ID`); return result; };
+const seenCategory = (value) => { const result = text(value, PUBLICATION_LIMITS.category, "Category"); if (!result) return result; if (!SEEN_CATEGORIES.includes(result)) throw new ApiError(400, "Choose a valid Seen category"); return result; };
+const visibility = (value) => { const result = String(value || "PUBLIC").trim().toUpperCase(); if (!PUBLICATION_VISIBILITIES.includes(result)) throw new ApiError(400, "Unsupported visibility"); return result; };
 
 export function derivedPublicationPolicy(kind) {
   if (!PUBLICATION_KINDS.includes(kind)) throw new ApiError(400, "Unsupported publication kind");
   return kind === "SEEN" ? { pricing: { mode: "FREE", starsAmount: null, presetId: null }, previewPolicy: "ALL_FREE", placement: "SEEN" } : kind === "WORLD" ? { pricing: { mode: "FREE", starsAmount: null, presetId: null }, previewPolicy: "ALL_FREE", placement: "PROFILE_ORBIT" } : { previewPolicy: "ONE_CHAPTER", placement: "PROFILE_ORBIT" };
 }
 
-export function normalizePublicationDraft(payload = {}, { partial = false } = {}) {
-  for (const field of ["status", "creator", "submittedSnapshot", "publishedSnapshot", "submittedVersion", "publishedVersion", "reviewedBy", "internalModerationNote", "placement"]) if (Object.hasOwn(payload, field)) throw new ApiError(400, `${field} cannot be changed`);
+export function normalizePublicationDraft(payload = {}, { partial = false, kind = "" } = {}) {
+  for (const field of ["status", "creator", "submittedSnapshot", "publishedSnapshot", "submittedVersion", "publishedVersion", "reviewedBy", "internalModerationNote", "placement", "shareToken"]) if (Object.hasOwn(payload, field)) throw new ApiError(400, `${field} cannot be changed`);
   const result = {};
   if (!partial || Object.hasOwn(payload, "kind")) { if (!PUBLICATION_KINDS.includes(payload.kind)) throw new ApiError(400, "Unsupported publication kind"); result.kind = payload.kind; }
-  for (const [field, max] of [["title", PUBLICATION_LIMITS.title], ["summary", PUBLICATION_LIMITS.summary], ["description", PUBLICATION_LIMITS.description], ["category", PUBLICATION_LIMITS.category]]) if (!partial || Object.hasOwn(payload, field)) result[field] = text(payload[field], max, field);
+  for (const [field, max] of [["title", PUBLICATION_LIMITS.title], ["summary", PUBLICATION_LIMITS.summary], ["description", PUBLICATION_LIMITS.description]]) if (!partial || Object.hasOwn(payload, field)) result[field] = text(payload[field], max, field);
+  if (!partial || Object.hasOwn(payload, "category")) result.category = (payload.kind || result.kind || kind) === "SEEN" ? seenCategory(payload.category) : text(payload.category, PUBLICATION_LIMITS.category, "Category");
+  if (!partial || Object.hasOwn(payload, "visibility")) result.visibility = visibility(payload.visibility);
+  if (Object.hasOwn(payload, "seriesId") || Object.hasOwn(payload, "series")) result.series = objectId(payload.seriesId || payload.series, "seriesId");
   if (!partial || Object.hasOwn(payload, "tags")) { if (!Array.isArray(payload.tags || [])) throw new ApiError(400, "Tags must be an array"); result.tags = [...new Set((payload.tags || []).map((tag) => text(tag, PUBLICATION_LIMITS.tag, "tag").toLowerCase()).filter(Boolean))]; if (result.tags.length > PUBLICATION_LIMITS.tags) throw new ApiError(400, "Too many tags"); }
   if (Object.hasOwn(payload, "pricing")) result.pricing = payload.pricing;
   if (Object.hasOwn(payload, "planet")) result.planet = { emoji: text(payload.planet?.emoji, 16, "planet emoji"), accent: text(payload.planet?.accent, 40, "planet accent") };
@@ -44,6 +49,7 @@ export function normalizeChapter(payload = {}) { return { title: text(payload.ti
 export function assertCompletePublication(publication, chapters) {
   const policy = derivedPublicationPolicy(publication.kind); const rules = KIND_RULES[publication.kind];
   text(publication.title, PUBLICATION_LIMITS.title, "Title", true); text(publication.summary, PUBLICATION_LIMITS.summary, "Summary", true); text(publication.category, PUBLICATION_LIMITS.category, "Category", true);
+  if (publication.kind === "SEEN") { seenCategory(publication.category); visibility(publication.visibility); }
   if (!publication.coverMedia?.assetId) throw new ApiError(400, "A verified cover image is required");
   if (chapters.length < rules.minChapters || chapters.length > rules.maxChapters) throw new ApiError(400, `${publication.kind} requires ${rules.minChapters}-${rules.maxChapters} chapters`);
   chapters.forEach((chapter) => normalizeChapter(chapter));

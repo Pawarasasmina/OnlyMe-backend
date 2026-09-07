@@ -24,7 +24,7 @@ import { messageVideoUrl, uploadMessageVideo } from "../services/messageVideoSto
 import { messageImageUrl, uploadMessageImage } from "../services/messageImageStorageService.js";
 import { assertMessagingAccess } from "../services/messagingAccessService.js";
 import { createDirectAccessMessageAtomic, creatorTypicalReplyHours, releaseDirectAccessMessageReservation, reserveDirectAccessMessage, serializeDAWindow, settleDirectAccessReply } from "../services/directAccessService.js";
-import { serializePublication } from "../services/publicationAccessService.js";
+import { canAccessPublicationAudience, serializePublication } from "../services/publicationAccessService.js";
 import { executeFinancialCommand } from "../services/financialCommandService.js";
 import { safeWallet, transferStars } from "../services/walletLedgerService.js";
 import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
@@ -237,9 +237,11 @@ async function sharedContentSnapshot(input, viewer) {
   if (["seen", "world", "experience"].includes(contentType)) {
     const kind = contentType === "seen" ? "SEEN" : "WORLD";
     const publication = await Publication.findOne({ _id: contentId, kind, status: "PUBLISHED" })
+      .select("+shareToken")
       .populate("creator", "name username avatar role status")
       .lean();
-    const serialized = publication ? serializePublication(publication, viewer) : null;
+    const audienceAllowed = publication?.kind === "SEEN" ? await canAccessPublicationAudience(publication, viewer) : true;
+    const serialized = publication ? serializePublication(publication, viewer, { audienceAllowed }) : null;
     if (!publication || !serialized || publication.creator?.status !== "active") throw new ApiError(404, "This content is no longer available");
     const blocked = await UserBlock.exists({ $or: [{ blocker: viewer._id, blocked: publication.creator._id }, { blocker: publication.creator._id, blocked: viewer._id }] });
     if (blocked) throw new ApiError(403, "This content cannot be shared");

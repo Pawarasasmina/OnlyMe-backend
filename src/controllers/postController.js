@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import FeedPost from "../models/FeedPost.js";
 import MessageReport from "../models/MessageReport.js";
+import SavedItem from "../models/SavedItem.js";
 import UserBlock from "../models/UserBlock.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -14,7 +15,9 @@ import {
   POST_TEXT_MAX_LENGTH,
 } from "../constants/postConstants.js";
 import { deleteFeedPostMedia, uploadFeedPostImage, uploadFeedPostVoice } from "../services/feedPostMediaStorageService.js";
+import { attachEntityMetadata, validateEntityRefs } from "../services/contentEntityService.js";
 import { recordChecklistEvent } from "../services/onboardingService.js";
+import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyticsEventService.js";
 import { listSupportedTranslationLanguages } from "../services/translationService.js";
 import { getVoiceLanguageName, normalizeVoiceLanguageCode, resolveSupportedVoiceLanguage } from "../constants/voiceTranslationLanguages.js";
 
@@ -93,6 +96,21 @@ function feedFilterQuery(query = {}) {
 
 export const postControllerTestUtils = { feedFilterQuery };
 
+async function trackPostEvent(req, eventType, postId, extra = {}) {
+  const sessionId = readAnalyticsSessionId(req);
+  if (!sessionId) return null;
+  return recordAnalyticsEvent({
+    entityId: String(postId),
+    entityType: "feed_post",
+    eventType,
+    metadata: extra.metadata || {},
+    req,
+    sessionId,
+    source: extra.source || req.body.source || req.query.source || "home",
+    userId: req.user._id,
+  });
+}
+
 function ensureCreatable({ hasVoice = false, imageFiles = [], status, text }) {
   if (imageFiles.length > POST_MAX_IMAGES) {
     throw new ApiError(400, `A post can include up to ${POST_MAX_IMAGES} images`);
@@ -117,13 +135,14 @@ function authorPayload(author) {
   };
 }
 
-function serializeComment(comment) {
+function serializeComment(comment, savedCommentIds = new Set()) {
   const user = comment.user || {};
   return {
     id: String(comment._id),
     text: comment.text || "",
     createdAt: comment.createdAt,
     author: authorPayload(user),
+    viewerSaved: savedCommentIds.has(String(comment._id)),
   };
 }
 
@@ -160,6 +179,7 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
   const viewerShared = Boolean(viewerId && shares.some((item) => String(item.user?._id || item.user) === viewerId));
   const viewerHidden = Boolean(viewerId && hiddenBy.some((item) => String(item.user?._id || item.user) === viewerId));
 
+  const savedCommentIds = post.savedCommentIds instanceof Set ? post.savedCommentIds : new Set(post.savedCommentIds || []);
   return {
     id: activity.feedId || String(post._id),
     originalPostId: String(post._id),
@@ -171,6 +191,11 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
     text: post.text || "",
     context: post.context || "",
     location: post.location || "",
+    attachedEntities: post.attachedEntities || [],
+    entityRefs: (post.entityRefs || []).map((ref) => ({
+      entityId: String(ref.entityId),
+      entityType: ref.entityType,
+    })),
     media: (post.media || [])
       .slice()
       .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0))
@@ -202,7 +227,7 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
     viewerViewed,
     viewerShared,
     viewerHidden,
-    comments: comments.map(serializeComment),
+    comments: comments.map((comment) => serializeComment(comment, savedCommentIds)),
     supportCount: reactions.length || post.supportCount || 0,
     commentCount: comments.length || post.commentCount || 0,
     saveCount: saves.length || post.saveCount || 0,
@@ -234,6 +259,17 @@ async function populatePostForResponse(post) {
     { path: "comments.user", select: "name username avatar isVerified" },
   ]);
   return post;
+}
+
+async function attachSavedCommentState(posts, userId) {
+  if (!userId) return posts;
+  const list = Array.isArray(posts) ? posts : [posts];
+  const commentIds = list.flatMap((post) => (post.comments || []).filter((comment) => !comment.deletedAt).map((comment) => comment._id));
+  if (!commentIds.length) return posts;
+  const rows = await SavedItem.find({ user: userId, targetType: "comment", targetModel: "FeedPostComment", targetId: { $in: commentIds } }).select("targetId").lean();
+  const savedIds = new Set(rows.map((row) => String(row.targetId)));
+  for (const post of list) post.savedCommentIds = savedIds;
+  return posts;
 }
 
 function readWaveform(value) {
@@ -326,6 +362,7 @@ async function uploadPostMedia({ imageFiles = [], post, req, userId, voiceFile =
 async function createPostRecord({ imageFiles = [], req, status, voiceFile = null }) {
   const text = cleanString(req.body.text, POST_TEXT_MAX_LENGTH);
   const context = readContext(req.body.context);
+  const entityRefs = await validateEntityRefs(req.body.entityRefs);
   const location = readLocation(req.body.location);
   ensureCreatable({ hasVoice: Boolean(voiceFile), imageFiles, status, text });
 
@@ -334,6 +371,7 @@ async function createPostRecord({ imageFiles = [], req, status, voiceFile = null
     text,
     context,
     location,
+    entityRefs,
     media: [],
     status,
     visibility: status === "draft" ? "private" : "public",
@@ -389,6 +427,9 @@ export const listFeedPosts = asyncHandler(async (req, res) => {
     FeedPost.countDocuments(filter),
   ]);
 
+  await attachSavedCommentState([...items, ...sharedSourcePosts], req.user?._id);
+  await attachEntityMetadata([...items, ...sharedSourcePosts], req.user || null);
+
   const sharedItems = sharedSourcePosts.flatMap((post) => (post.shares || [])
     .filter((share) => share.user && String(share.user.status || "active") === "active" && !blockedIdSet.has(String(share.user._id || share.user)))
     .map((share) => serializePostFeedItem(post, req.user, {
@@ -417,6 +458,8 @@ export const getFeedPost = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Post not found");
   }
   await populatePostForResponse(post);
+  await attachSavedCommentState(post, req.user?._id);
+  await attachEntityMetadata(post, req.user || null);
   return sendResponse(res, 200, "Feed post fetched", { post: serializePost(post, req.user) });
 });
 
@@ -444,6 +487,7 @@ export const markFeedPostViewed = asyncHandler(async (req, res) => {
     { $push: { views: { user: viewerId, viewedAt: new Date() } }, $inc: { viewCount: 1 } },
     { new: true, runValidators: true, select: "viewCount views" }
   ).lean();
+  if (updated) await trackPostEvent(req, "CONTENT_VIEW", post._id, { source: req.body.source || "home" });
 
   return sendResponse(res, 200, updated ? "Post view recorded" : "Post view already recorded", {
     postId: String(post._id),
@@ -468,6 +512,8 @@ export const listMyPosts = asyncHandler(async (req, res) => {
     FeedPost.countDocuments({ author: req.user._id, status, deletedAt: null }),
   ]);
 
+  await attachSavedCommentState(items, req.user?._id);
+  await attachEntityMetadata(items, req.user || null);
   return sendResponse(res, 200, status === "draft" ? "Draft posts fetched" : "Creator posts fetched", {
     items: items.map((item) => serializePost(item, req.user)),
     pagination: { page, limit, total, pages: Math.ceil(total / limit) },
@@ -478,11 +524,13 @@ export const createFeedPost = asyncHandler(async (req, res) => {
   const files = req.files || {};
   const post = await createPostRecord({ imageFiles: files.media || [], req, status: "published", voiceFile: files.voice?.[0] || null });
   await recordChecklistEvent(req.user._id, "createdFirstPost");
+  await attachEntityMetadata(post, req.user || null);
   return sendResponse(res, 201, "Post published", { post: serializePost(post, req.user) });
 });
 
 export const createDraftPost = asyncHandler(async (req, res) => {
   const post = await createPostRecord({ imageFiles: req.files || [], req, status: "draft" });
+  await attachEntityMetadata(post, req.user || null);
   return sendResponse(res, 201, "Draft saved", { post: serializePost(post, req.user) });
 });
 
@@ -498,6 +546,7 @@ export const updateFeedPost = asyncHandler(async (req, res) => {
 
   const text = cleanString(req.body.text, POST_TEXT_MAX_LENGTH);
   const context = readContext(req.body.context);
+  const entityRefs = await validateEntityRefs(req.body.entityRefs);
   const location = readLocation(req.body.location);
 
   if (post.status === "published" && !text) {
@@ -506,6 +555,7 @@ export const updateFeedPost = asyncHandler(async (req, res) => {
 
   post.text = text;
   post.context = context;
+  post.entityRefs = entityRefs;
   post.location = location;
 
   if (post.status === "draft" && req.body.publish === "true") {
@@ -518,6 +568,7 @@ export const updateFeedPost = asyncHandler(async (req, res) => {
   await post.save();
   if (post.status === "published") await recordChecklistEvent(req.user._id, "createdFirstPost");
   await populatePostForResponse(post);
+  await attachEntityMetadata(post, req.user || null);
   return sendResponse(res, 200, post.status === "published" ? "Post updated" : "Draft updated", { post: serializePost(post, req.user) });
 });
 
@@ -537,7 +588,10 @@ export const updatePostReaction = asyncHandler(async (req, res) => {
 
   post.supportCount = post.reactions.length;
   await post.save();
+  if (reaction) await trackPostEvent(req, "REACTION", post._id, { metadata: { reaction } });
   await populatePostForResponse(post);
+  await attachSavedCommentState(post, req.user?._id);
+  await attachEntityMetadata(post, req.user || null);
   return sendResponse(res, 200, reaction ? "Reaction saved" : "Reaction removed", { post: serializePost(post, req.user) });
 });
 
@@ -554,7 +608,10 @@ export const togglePostSave = asyncHandler(async (req, res) => {
 
   post.saveCount = post.saves.length;
   await post.save();
+  if (!existing) await trackPostEvent(req, "SAVE", post._id);
   await populatePostForResponse(post);
+  await attachSavedCommentState(post, req.user?._id);
+  await attachEntityMetadata(post, req.user || null);
   return sendResponse(res, 200, existing ? "Post removed from Saved" : "Post saved", { post: serializePost(post, req.user) });
 });
 
@@ -571,8 +628,11 @@ export const togglePostShare = asyncHandler(async (req, res) => {
 
   post.shareCount = post.shares.length;
   await post.save();
+  if (!existing) await trackPostEvent(req, "SHARE", post._id);
   await populatePostForResponse(post);
+  await attachSavedCommentState(post, req.user?._id);
   await post.populate({ path: "shares.user", select: "name username avatar isVerified role status" });
+  await attachEntityMetadata(post, req.user || null);
   return sendResponse(res, 200, existing ? "Post removed from your profile" : "Post shared to your profile", { post: serializePost(post, req.user) });
 });
 
@@ -635,7 +695,10 @@ export const createPostComment = asyncHandler(async (req, res) => {
   post.comments.push({ user: req.user._id, text: readCommentText(req.body.text) });
   post.commentCount = post.comments.filter((comment) => !comment.deletedAt).length;
   await post.save();
+  await trackPostEvent(req, "COMMENT", post._id);
   await populatePostForResponse(post);
+  await attachSavedCommentState(post, req.user?._id);
+  await attachEntityMetadata(post, req.user || null);
   return sendResponse(res, 201, "Comment saved", { post: serializePost(post, req.user) });
 });
 

@@ -6,6 +6,8 @@ const orbitSignalSchema = new mongoose.Schema(
     targetUser: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     type: { type: String, enum: ["SEE_YOU"], default: "SEE_YOU" },
     status: { type: String, enum: ["active", "revoked", "expired"], default: "active", index: true },
+    signaledAt: { type: Date, default: null, index: true },
+    acknowledgedAt: { type: Date, default: null, index: true },
   },
   { timestamps: true }
 );
@@ -15,5 +17,7 @@ orbitSignalSchema.index(
   { unique: true, partialFilterExpression: { status: "active" } }
 );
 orbitSignalSchema.index({ createdAt: -1 });
+orbitSignalSchema.index({ targetUser: 1, type: 1, status: 1, acknowledgedAt: 1, createdAt: -1 });
+orbitSignalSchema.index({ targetUser: 1, type: 1, status: 1, acknowledgedAt: 1, signaledAt: -1 });
 
 export default mongoose.model("OrbitSignal", orbitSignalSchema);

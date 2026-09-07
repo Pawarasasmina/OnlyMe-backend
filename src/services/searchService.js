@@ -5,9 +5,12 @@ import FanProfile from "../models/FanProfile.js";
 import FeedPost from "../models/FeedPost.js";
 import OrbitCityProgress from "../models/OrbitCityProgress.js";
 import OrbitDream from "../models/OrbitDream.js";
+import ProfileRelationship from "../models/ProfileRelationship.js";
+import SavedItem from "../models/SavedItem.js";
 import SearchHistory from "../models/SearchHistory.js";
 import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
+import { isBookContent } from "./savedService.js";
 import ApiError from "../utils/ApiError.js";
 
 export const SEARCH_TYPES = ["all", "people", "worlds", "seens", "posts", "places", "journeys", "saved"];
@@ -156,7 +159,7 @@ function scoreText(query, values = []) {
   return score;
 }
 
-function serializePerson({ profile, user, query }) {
+function serializePerson({ following = false, profile, user, query }) {
   const creatorEnabled = user.creatorApprovalStatus === "approved";
   const categories = creatorEnabled
     ? [...new Set([...(profile.categories || []), profile.category].filter(Boolean))]
@@ -176,11 +179,14 @@ function serializePerson({ profile, user, query }) {
     image: user.avatar || "",
     route: `/profile/${encodeURIComponent(user.username)}`,
     verified: Boolean(user.isVerified),
+    following: Boolean(following),
+    isFollowing: Boolean(following),
     category: profile.category || categories[0] || "",
     location,
     metadata: {
       role: creatorEnabled ? "creator" : "fan",
       username: user.username,
+      following: Boolean(following),
       profileCategory: profile.category || categories[0] || "",
       orbitStatus: cleanText(profile.orbitStatus, 80),
       matchReason: query ? "Matched public profile fields" : "",
@@ -220,10 +226,16 @@ async function searchPeople({ blockedIds, category, cursor = 0, limit, location,
     FanProfile.find(profileQuery).populate({ path: "user", match: { ...userMatch, creatorApprovalStatus: { $ne: "approved" } }, select: "name username avatar isVerified role status creatorApprovalStatus createdAt" }).limit(300).lean(),
   ]);
 
-  const scored = [...creatorProfiles, ...fanProfiles]
-    .filter((profile) => profile.user)
+  const visibleProfiles = [...creatorProfiles, ...fanProfiles].filter((profile) => profile.user);
+  const targetIds = visibleProfiles.map((profile) => profile.user._id);
+  const followingRows = targetIds.length
+    ? await ProfileRelationship.find({ actor: user._id, target: { $in: targetIds }, type: "FOLLOW" }).select("target").lean()
+    : [];
+  const followingSet = new Set(followingRows.map((row) => String(row.target)));
+
+  const scored = visibleProfiles
     .map((profile) => ({
-      item: serializePerson({ profile, query, user: profile.user }),
+      item: serializePerson({ following: followingSet.has(String(profile.user._id)), profile, query, user: profile.user }),
       score: scoreText(query, [profile.user.username, profile.user.name, profile.category, ...(profile.categories || []), ...(profile.interests || []), profile.city, profile.country, profile.bio]),
     }))
     .sort((left, right) => sort === "newest"
@@ -233,12 +245,14 @@ async function searchPeople({ blockedIds, category, cursor = 0, limit, location,
   return resultPage(scored.slice(cursor, cursor + limit).map((entry) => entry.item), cursor, limit, scored.length);
 }
 
-function serializeContentResult(content, type, query) {
+function serializeContentResult(content, type, query, savedBookIds = new Set()) {
   const creator = contentCreator(content);
   const publicSnippet = content.accessLevel === "PUBLIC" ? cleanText(content.description || content.body, 220) : cleanText(content.description, 180);
+  const book = isBookContent(content);
+  const id = String(content._id);
   return {
-    id: String(content._id),
-    type,
+    id,
+    type: book ? "book" : type,
     title: content.title,
     subtitle: [creator.name, content.category].filter(Boolean).join(" - "),
     description: publicSnippet,
@@ -254,7 +268,8 @@ function serializeContentResult(content, type, query) {
       price: content.accessLevel === "PAY_PER_VIEW" ? content.coinPrice : null,
       matchReason: query ? "Matched public content fields" : "",
     },
-    saved: false,
+    saved: book ? savedBookIds.has(id) : false,
+    saveTarget: book ? { type: "book", id } : null,
     createdAt: content.publishedAt || content.createdAt,
   };
 }
@@ -270,7 +285,7 @@ async function eligibleCreatorIds(blockedIds) {
   return users.map((item) => item._id);
 }
 
-async function searchContent({ blockedIds, category, cursor = 0, limit, location, query, sort, type }) {
+async function searchContent({ blockedIds, category, cursor = 0, limit, location, query, sort, type, user }) {
   const creatorIds = await eligibleCreatorIds(blockedIds);
   const filter = {
     creator: { $in: creatorIds },
@@ -295,7 +310,12 @@ async function searchContent({ blockedIds, category, cursor = 0, limit, location
     Content.countDocuments(filter),
   ]);
 
-  return resultPage(records.map((item) => serializeContentResult(item, type === "seen" ? "seen" : "world", query)), cursor, limit, total);
+  const bookIds = records.filter(isBookContent).map((item) => item._id);
+  const savedBooks = user?._id && bookIds.length
+    ? await SavedItem.find({ user: user._id, targetType: "book", targetModel: "Content", targetId: { $in: bookIds } }).select("targetId").lean()
+    : [];
+  const savedBookIds = new Set(savedBooks.map((item) => String(item.targetId)));
+  return resultPage(records.map((item) => serializeContentResult(item, type === "seen" ? "seen" : "world", query, savedBookIds)), cursor, limit, total);
 }
 
 function serializePost(post, query) {
@@ -347,10 +367,10 @@ function placeKey(city, country = "") {
   return `${normalizedKey(city)}|${normalizedKey(country)}`;
 }
 
-function serializePlace({ category = "Place", city, count, country, image = "", topCreator = "" }) {
+function serializePlace({ category = "Place", city, count, country, id = "", image = "", saved = false, topCreator = "" }) {
   const slug = encodeURIComponent([city, country].filter(Boolean).join("-").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""));
   return {
-    id: placeKey(city, country),
+    id: id || placeKey(city, country),
     type: "place",
     title: city,
     subtitle: [country, category].filter(Boolean).join(" - "),
@@ -361,12 +381,13 @@ function serializePlace({ category = "Place", city, count, country, image = "", 
     category,
     location: publicLocation(city, country),
     metadata: { slug, relatedCount: count || 0, topCreator },
-    saved: false,
+    saved,
+    saveTarget: null,
     createdAt: null,
   };
 }
 
-async function searchPlaces({ blockedIds, category, cursor = 0, limit, location, query }) {
+async function searchPlaces({ blockedIds, category, cursor = 0, limit, location, query, user }) {
   const matcher = normalizedKey(query || location || category);
   const blockedObjectIds = objectIdList(blockedIds);
   const [cities, creatorProfiles, posts] = await Promise.all([
@@ -380,10 +401,14 @@ async function searchPlaces({ blockedIds, category, cursor = 0, limit, location,
     FeedPost.find({ status: "published", visibility: "public", deletedAt: null, location: { $ne: "" } }).select("location").limit(200).lean(),
   ]);
 
+  const savedRows = user?._id && cities.length
+    ? await SavedItem.find({ user: user._id, targetType: "place", targetModel: "OrbitCityProgress", targetId: { $in: cities.map((item) => item._id) } }).select("targetId").lean()
+    : [];
+  const savedIds = new Set(savedRows.map((item) => String(item.targetId)));
   const places = new Map();
   for (const city of cities) {
     const key = placeKey(city.city, city.country);
-    places.set(key, serializePlace({ category: "Places", city: city.city, count: city.currentCount, country: city.country, topCreator: "@seen" }));
+    places.set(key, serializePlace({ category: "Places", city: city.city, count: city.currentCount, country: city.country, id: String(city._id), saved: savedIds.has(String(city._id)), topCreator: "@seen" }));
   }
   for (const profile of creatorProfiles) {
     if (!profile.user || !profile.city) continue;
@@ -405,10 +430,11 @@ async function searchPlaces({ blockedIds, category, cursor = 0, limit, location,
   return resultPage(items.slice(cursor, cursor + limit), cursor, limit, items.length);
 }
 
-function serializeJourney(dream) {
+function serializeJourney(dream, savedJourneyIds = new Set()) {
   const user = dream.user || {};
+  const id = String(dream._id);
   return {
-    id: String(dream._id),
+    id,
     type: "journey",
     title: dream.title,
     subtitle: [user.name, dream.status].filter(Boolean).join(" - "),
@@ -424,12 +450,13 @@ function serializeJourney(dream) {
       supporterCount: dream.supporterCount || 0,
       source: "OrbitDream",
     },
-    saved: false,
+    saved: savedJourneyIds.has(id),
+    saveTarget: { type: "journey", id },
     createdAt: dream.updatedAt || dream.createdAt,
   };
 }
 
-async function searchJourneys({ blockedIds, cursor = 0, limit, query, sort }) {
+async function searchJourneys({ blockedIds, cursor = 0, limit, query, sort, user }) {
   const blockedObjectIds = objectIdList(blockedIds);
   const filter = {
     visibility: "public",
@@ -445,7 +472,12 @@ async function searchJourneys({ blockedIds, cursor = 0, limit, query, sort }) {
       .lean(),
     OrbitDream.countDocuments(filter),
   ]);
-  const items = records.filter((item) => item.user).map(serializeJourney);
+  const visible = records.filter((item) => item.user);
+  const savedRows = user?._id && visible.length
+    ? await SavedItem.find({ user: user._id, targetType: "journey", targetModel: "OrbitDream", targetId: { $in: visible.map((item) => item._id) } }).select("targetId").lean()
+    : [];
+  const savedJourneyIds = new Set(savedRows.map((item) => String(item.targetId)));
+  const items = visible.map((item) => serializeJourney(item, savedJourneyIds));
   return resultPage(items, cursor, limit, total);
 }
 

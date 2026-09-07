@@ -2,7 +2,7 @@ import Content from "../models/Content.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
 import FeedPost from "../models/FeedPost.js";
-import OrbitSignal from "../models/OrbitSignal.js";
+import ProfileRelationship from "../models/ProfileRelationship.js";
 import User from "../models/User.js";
 import ApiError from "../utils/ApiError.js";
 import {
@@ -10,7 +10,8 @@ import {
   ONBOARDING_CATEGORIES,
   requireConsumerRole,
 } from "../validators/onboardingValidator.js";
-import { buildOrbitForUser, sendSeeYouSignal } from "./orbitRecommendationService.js";
+import { buildOrbitForUser } from "./orbitRecommendationService.js";
+import { createFollowRelationship } from "./profileRelationshipService.js";
 
 const profileModels = { fan: FanProfile, creator: CreatorProfile };
 const defaultPreferences = {
@@ -270,7 +271,7 @@ export async function saveSuggestedPeople(user, targetUserIds) {
 
   const results = [];
   for (const targetUserId of targetUserIds) {
-    results.push(await sendSeeYouSignal({ sender: user, targetUserId }));
+    results.push(await createFollowRelationship({ actor: user, targetUserId }));
   }
 
   const updated = await patchOnboarding(user._id, {
@@ -367,7 +368,7 @@ export async function getChecklist(user) {
 
   const completedProfile = await profileCompletion(user, profile);
   const interests = profileInterests(user, profile);
-  const hasFirstPeople = Boolean(await OrbitSignal.exists({ sender: user._id, type: "SEE_YOU", status: "active" }));
+  const hasFirstPeople = Boolean(await ProfileRelationship.exists({ actor: user._id, type: "FOLLOW" }));
   const stored = user.onboardingChecklist || {};
   const derived = {
     interestsSelected: interests.length >= 3,

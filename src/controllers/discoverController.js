@@ -20,6 +20,8 @@ import {
   serializeDiscoverStory,
   sortDiscoverFriends,
 } from "../services/discoverFriendsService.js";
+import { canAccessPublicationAudience, seenVisibilityFilter } from "../services/publicationAccessService.js";
+import { getWallSawYouToday } from "../services/wallSeenTodayService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -768,6 +770,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
 
   const visibleProfiles = profiles.filter((profile) => profile.user);
   const creatorIds = visibleProfiles.map((profile) => profile.user._id);
+  const seenAudienceFilter = await seenVisibilityFilter(req.user, creatorIds);
   const [followerCounts, subscriberCounts, worldCounts, following, publications, seens, posts, stories, signalTargetIds, dreamByCreator] = await Promise.all([
     countsBy(ProfileRelationship, { target: { $in: creatorIds }, type: "FOLLOW" }, "target"),
     countsBy(Subscription, { creator: { $in: creatorIds }, status: { $in: ["active", "ACTIVE", "cancel_at_period_end", "CANCEL_AT_PERIOD_END"] } }, "creator"),
@@ -778,10 +781,11 @@ export const getDiscover = asyncHandler(async (req, res) => {
       .limit(36)
       .populate("creator", "name username avatar isVerified")
       .lean(),
-    Publication.find({ creator: { $in: creatorIds }, kind: "SEEN", status: "PUBLISHED", publishedSnapshot: { $exists: true } })
+    Publication.find({ creator: { $in: creatorIds }, kind: "SEEN", status: "PUBLISHED", publishedSnapshot: { $exists: true }, ...seenAudienceFilter })
       .sort({ publishedAt: -1, updatedAt: -1 })
       .limit(12)
       .populate({ path: "creator", match: { role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified role status creatorApprovalStatus" })
+      .populate("series", "name")
       .lean(),
     FeedPost.find({ author: { $in: creatorIds }, status: "published", visibility: "public", deletedAt: null })
       .sort({ publishedAt: -1, createdAt: -1 })
@@ -880,6 +884,8 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const pageSlides = filteredSlides.slice(cursor, cursor + limit).map(publicSlide);
   const nextCursor = cursor + limit < filteredSlides.length ? String(cursor + limit) : null;
 
+  const seenToday = await getWallSawYouToday(req.user, { limit: 1 });
+
   return sendResponse(res, 200, "Discover fetched", {
     recommendations: pageSlides,
     pagination: {
@@ -896,6 +902,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
     following: connections.following,
     suggestedUsers: searchedCreators.filter((creator) => !creator.following).slice(0, 4),
     activity: serializeDiscoverActivity(visibleProfiles),
+    seenTodayCount: seenToday.count,
     trendingSeen,
     freshSeens,
     nearbyCreators: nearbyCreators.slice(0, 16),
@@ -944,8 +951,8 @@ export const toggleDiscoverOfferSave = asyncHandler(async (req, res) => {
     kind: { $in: ["WORLD", "PREMIUM_WORLD", "SEEN"] },
     status: "PUBLISHED",
     publishedSnapshot: { $exists: true },
-  }).select("_id kind status creator publishedSnapshot").lean();
-  if (!publication) throw new ApiError(404, "Publication is not available");
+  }).select("_id kind status creator publishedSnapshot visibility +shareToken").lean();
+  if (!publication || (publication.kind === "SEEN" && !await canAccessPublicationAudience(publication, req.user, { shareToken: req.body.accessToken || req.query.access || req.query.token }))) throw new ApiError(404, "Publication is not available");
   const filter = { publication: publication._id, user: req.user._id, type: "SAVE" };
   const existing = await SeenEngagement.findOne(filter);
   if (existing) await existing.deleteOne();

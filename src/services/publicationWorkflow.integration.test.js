@@ -11,7 +11,7 @@ import { addChapter, createPublicationDraft, submitPublication, updatePublicatio
 const testMongoUri = process.env.TEST_MONGODB_URI;
 const creator = new mongoose.Types.ObjectId();
 const admin = new mongoose.Types.ObjectId();
-const base = (kind, pricing) => ({ kind, title: "Publication", summary: "Summary", category: "Category", pricing });
+const base = (kind, pricing) => ({ kind, title: "Publication", summary: "Summary", category: kind === "SEEN" ? "Lifestyle" : "Category", pricing });
 const chapter = (isPreview) => ({ title: "Chapter", isPreview, blocks: [{ id: new mongoose.Types.ObjectId().toString(), type: "TEXT", text: "Chapter body" }] });
 
 test("Mongo integration: publication limits, snapshot freeze, and immediate Seen publishing", { skip: !testMongoUri }, async () => {
