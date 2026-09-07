@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import SeenEngagement, { SEEN_REACTIONS } from "./SeenEngagement.js";
+import SavedItem from "./SavedItem.js";
+import FeedPost from "./FeedPost.js";
+import Publication from "./Publication.js";
+import WallPost from "./WallPost.js";
 import WallEngagement, { WALL_REACTIONS } from "./WallEngagement.js";
 import WallShareEngagement from "./WallShareEngagement.js";
 
@@ -9,6 +13,21 @@ test("Seen and Wall engagements support uniquely indexed private saves", () => {
   assert.ok(WallEngagement.schema.path("type").enumValues.includes("SAVE"));
   assert.ok(SeenEngagement.schema.indexes().some(([, options]) => options.name === "unique_seen_save_per_user" && options.unique));
   assert.ok(WallEngagement.schema.indexes().some(([, options]) => options.name === "unique_wall_save" && options.unique));
+});
+
+test("generic SavedItem supports non-post saved library targets", () => {
+  assert.deepEqual(SavedItem.schema.path("targetType").enumValues, ["place", "journey", "book", "comment"]);
+  assert.ok(SavedItem.schema.indexes().some(([, options]) => options.name === "unique_saved_item_target_per_user" && options.unique));
+  assert.ok(SavedItem.schema.indexes().some(([, options]) => options.name === "list_saved_items_by_user_type"));
+});
+
+test("posts and publications can carry structured attached entity refs", () => {
+  assert.deepEqual(FeedPost.schema.path("entityRefs").schema.path("entityType").enumValues, ["place", "book", "journey", "experience"]);
+  assert.deepEqual(WallPost.schema.path("entityRefs").schema.path("entityType").enumValues, ["place", "book", "journey", "experience"]);
+  assert.deepEqual(Publication.schema.path("entityRefs").schema.path("entityType").enumValues, ["place", "book", "journey", "experience"]);
+  assert.ok(FeedPost.schema.indexes().some(([fields]) => fields["entityRefs.entityId"] === 1));
+  assert.ok(WallPost.schema.indexes().some(([fields]) => fields["entityRefs.entityId"] === 1));
+  assert.ok(Publication.schema.indexes().some(([fields]) => fields["entityRefs.entityId"] === 1));
 });
 
 test("Wall reactions support the complete picker while preserving one reaction per user", () => {

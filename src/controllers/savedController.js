@@ -1,6 +1,5 @@
 import mongoose from "mongoose";
 import FeedPost from "../models/FeedPost.js";
-import PremiumMembership from "../models/PremiumMembership.js";
 import Publication from "../models/Publication.js";
 import PublicationPreference from "../models/PublicationPreference.js";
 import SeenEngagement from "../models/SeenEngagement.js";
@@ -8,8 +7,11 @@ import UserBlock from "../models/UserBlock.js";
 import WallEngagement from "../models/WallEngagement.js";
 import WallPost from "../models/WallPost.js";
 import WallShareEngagement from "../models/WallShareEngagement.js";
-import WorldEntitlement from "../models/WorldEntitlement.js";
+import { countFollowedCreators, listFollowedCreators } from "../services/profileRelationshipService.js";
+import { attachEntityMetadata } from "../services/contentEntityService.js";
+import { mutualFriendCreatorIds } from "../services/publicationAccessService.js";
 import { serializePublication } from "../services/publicationAccessService.js";
+import { savedService } from "../services/savedService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -18,8 +20,6 @@ import { engagementForWallPost, engagementForWallShare, serializeWallPost } from
 
 const SAVED_CATEGORIES = ["places", "journeys", "experiences", "people", "posts", "books", "comments"];
 const ZERO_COUNTS = Object.freeze({ places: 0, journeys: 0, experiences: 0, people: 0, posts: 0, books: 0, comments: 0 });
-const WORLD_KINDS = ["WORLD", "PREMIUM_WORLD"];
-const ACTIVE_MEMBERSHIP_STATUSES = ["ACTIVE", "CANCEL_AT_PERIOD_END"];
 const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 20;
 
@@ -37,9 +37,10 @@ function emptyPage(paging) {
 }
 
 async function visibilityContext(userId) {
-  const [blocks, preferences] = await Promise.all([
+  const [blocks, preferences, mutualCreatorIds] = await Promise.all([
     UserBlock.find({ $or: [{ blocker: userId }, { blocked: userId }] }).select("blocker blocked").lean(),
     PublicationPreference.find({ user: userId, type: { $in: ["HIDDEN_SEEN", "MUTED_CREATOR"] } }).select("publication creator type").lean(),
+    mutualFriendCreatorIds(userId),
   ]);
   const blockedCreatorIds = blocks.map((block) => String(block.blocker) === String(userId) ? block.blocked : block.blocker);
   const mutedCreatorIds = preferences.filter((item) => item.type === "MUTED_CREATOR" && item.creator).map((item) => item.creator);
@@ -48,7 +49,20 @@ async function visibilityContext(userId) {
     blockedCreatorIds,
     hiddenPublicationIds,
     publicationCreatorExclusions: [...blockedCreatorIds, ...mutedCreatorIds],
+    mutualCreatorIds,
+    userId,
   };
+}
+
+function seenVisibilityConditions(context, prefix = "") {
+  const field = (name) => prefix ? `${prefix}.${name}` : name;
+  return [
+    { [field("visibility")]: "PUBLIC" },
+    { [field("visibility")]: { $exists: false } },
+    { [field("visibility")]: null },
+    { [field("visibility")]: "" },
+    ...(context.mutualCreatorIds?.size ? [{ [field("visibility")]: "FRIENDS", [field("creator")]: { $in: [...context.mutualCreatorIds] } }] : []),
+  ];
 }
 
 function visiblePublicationFilter(context, kinds = []) {
@@ -58,6 +72,7 @@ function visiblePublicationFilter(context, kinds = []) {
     ...(kinds.length ? { kind: { $in: kinds } } : {}),
     ...(context.publicationCreatorExclusions.length ? { creator: { $nin: context.publicationCreatorExclusions } } : {}),
     ...(context.hiddenPublicationIds.length ? { _id: { $nin: context.hiddenPublicationIds } } : {}),
+    ...(kinds.includes("SEEN") ? { $or: seenVisibilityConditions(context) } : {}),
   };
 }
 
@@ -71,6 +86,7 @@ async function countVisibleSavedPublications(userId, context) {
     "publication.publishedSnapshot": { $exists: true },
     ...(context.publicationCreatorExclusions.length ? { "publication.creator": { $nin: context.publicationCreatorExclusions } } : {}),
     ...(context.hiddenPublicationIds.length ? { "publication._id": { $nin: context.hiddenPublicationIds } } : {}),
+    $or: seenVisibilityConditions(context, "publication"),
   };
   const rows = await SeenEngagement.aggregate([
     { $match: match },
@@ -110,28 +126,9 @@ async function countVisibleWallSaves(userId, context) {
   return (postRows[0]?.count || 0) + (shareRows[0]?.count || 0);
 }
 
-async function visibleUnlockedPublicationIds(userId, context) {
-  const now = new Date();
-  const [worlds, memberships] = await Promise.all([
-    WorldEntitlement.find({ user: userId, status: "ACTIVE" }).select("publication grantedAt").lean(),
-    PremiumMembership.find({ user: userId, status: { $in: ACTIVE_MEMBERSHIP_STATUSES }, currentPeriodEnd: { $gt: now } }).select("premiumPublication currentPeriodStart").lean(),
-  ]);
-  const unlockedAtByPublication = new Map();
-  for (const row of worlds) unlockedAtByPublication.set(String(row.publication), row.grantedAt || row.createdAt);
-  for (const row of memberships) unlockedAtByPublication.set(String(row.premiumPublication), row.currentPeriodStart || row.createdAt);
-  const ids = [...unlockedAtByPublication.keys()].filter(mongoose.isValidObjectId);
-  if (!ids.length) return { ids: new Set(), unlockedAtByPublication: new Map() };
-  const visible = await Publication.find({
-    _id: { $in: ids },
-    ...visiblePublicationFilter(context, WORLD_KINDS),
-  }).select("_id").lean();
-  const visibleIds = new Set(visible.map((item) => String(item._id)));
-  return { ids: visibleIds, unlockedAtByPublication };
-}
-
 async function savedOverview(userId) {
   const context = await visibilityContext(userId);
-  const [publicationCounts, feedPostCount, wallPostCount, unlocked] = await Promise.all([
+  const [publicationCounts, feedPostCount, wallPostCount, unlocked, peopleCount, placesCount, journeysCount, booksCount, commentsCount] = await Promise.all([
     countVisibleSavedPublications(userId, context),
     FeedPost.countDocuments({
       status: "published",
@@ -141,28 +138,37 @@ async function savedOverview(userId) {
       ...(context.blockedCreatorIds.length ? { author: { $nin: context.blockedCreatorIds } } : {}),
     }),
     countVisibleWallSaves(userId, context),
-    visibleUnlockedPublicationIds(userId, context),
+    savedService.unlockedExperienceRows(userId),
+    countFollowedCreators(userId, context.blockedCreatorIds),
+    savedService.countSavedItems(userId, "place", "Place"),
+    savedService.countSavedItems(userId, "journey", "OrbitDream"),
+    savedService.countSavedItems(userId, "book", "Content"),
+    savedService.countSavedItems(userId, "comment"),
   ]);
   const savedSeenCount = publicationCounts.get("SEEN") || 0;
-  const savedExperienceCount = WORLD_KINDS.reduce((sum, kind) => sum + (publicationCounts.get(kind) || 0), 0);
 
   return {
     counts: {
       ...ZERO_COUNTS,
-      experiences: savedExperienceCount,
+      places: placesCount,
+      journeys: journeysCount,
+      experiences: unlocked.length,
+      people: peopleCount,
       posts: savedSeenCount + feedPostCount + wallPostCount,
+      books: booksCount,
+      comments: commentsCount,
     },
     metadata: {
-      experiences: { unlockedCount: unlocked.ids.size },
+      experiences: { unlockedCount: unlocked.length },
     },
     support: {
-      places: false,
-      journeys: false,
+      places: true,
+      journeys: true,
       experiences: true,
-      people: false,
+      people: true,
       posts: true,
-      books: false,
-      comments: false,
+      books: true,
+      comments: true,
     },
   };
 }
@@ -171,54 +177,32 @@ function savedAtForFeedPost(post, userId) {
   return (post.saves || []).find((item) => String(item.user?._id || item.user) === String(userId))?.createdAt || post.updatedAt || post.createdAt;
 }
 
-async function loadSavedPublications({ context, kinds, limit, user, withUnlocked = false }) {
+async function loadSavedPublications({ context, kinds, limit, user }) {
   const saveRows = await SeenEngagement.find({ user: user._id, type: "SAVE" })
     .sort({ createdAt: -1, _id: -1 })
     .limit(limit)
     .select("publication createdAt")
     .lean();
   const savedAtByPublication = new Map(saveRows.map((row) => [String(row.publication), row.createdAt]));
-  const unlocked = withUnlocked ? await visibleUnlockedPublicationIds(user._id, context) : { ids: new Set(), unlockedAtByPublication: new Map() };
-  const ids = [...new Set([...savedAtByPublication.keys(), ...unlocked.ids])].filter(mongoose.isValidObjectId);
+  const ids = [...savedAtByPublication.keys()].filter(mongoose.isValidObjectId);
   if (!ids.length) return [];
   const records = await Publication.find({
     _id: { $in: ids },
     ...visiblePublicationFilter(context, kinds),
-  }).populate("creator", "name username avatar isVerified").lean();
+  }).populate("creator", "name username avatar isVerified").populate("series", "name").lean();
+  await attachEntityMetadata(records, user);
   return records
     .map((publication) => {
       const id = String(publication._id);
-      const unlockedAt = unlocked.unlockedAtByPublication.get(id) || null;
-      const serialized = serializePublication(publication, user, { entitlement: unlocked.ids.has(id) ? "ACTIVE_PREMIUM_MEMBER" : null });
+      const serialized = serializePublication(publication, user, { audienceAllowed: true });
       return serialized ? {
         ...serialized,
         savedAt: savedAtByPublication.get(id) || null,
-        unlockedAt,
         viewerSaved: savedAtByPublication.has(id),
-        viewerUnlocked: unlocked.ids.has(id),
       } : null;
     })
     .filter(Boolean)
-    .sort((left, right) => new Date(right.savedAt || right.unlockedAt || 0) - new Date(left.savedAt || left.unlockedAt || 0));
-}
-
-async function listSavedExperiences(user, paging) {
-  const context = await visibilityContext(user._id);
-  const pageEnd = paging.offset + paging.limit;
-  const rows = await loadSavedPublications({ context, kinds: WORLD_KINDS, limit: Math.max(pageEnd + 1, paging.limit + 1), user, withUnlocked: true });
-  const items = rows.slice(paging.offset, paging.offset + paging.limit);
-  const hasMore = rows.length > pageEnd;
-  const total = hasMore ? pageEnd + 1 : rows.length;
-  return {
-    items,
-    pagination: {
-      page: paging.page,
-      limit: paging.limit,
-      total,
-      pages: Math.ceil(total / paging.limit),
-      hasMore,
-    },
-  };
+    .sort((left, right) => new Date(right.savedAt || 0) - new Date(left.savedAt || 0));
 }
 
 async function listSavedPostsPage(user, paging) {
@@ -253,6 +237,11 @@ async function listSavedPostsPage(user, paging) {
       .lean(),
     savedOverview(user._id),
   ]);
+  await attachEntityMetadata([
+    ...feedPosts,
+    ...wallSaves.map((save) => save.post).filter(Boolean),
+    ...wallShareSaves.map((save) => save.share?.post).filter(Boolean),
+  ], user);
 
   const feedEntries = feedPosts.map((post) => ({
     id: `feed-post:${post._id}`,
@@ -303,6 +292,11 @@ async function listSavedPostsPage(user, paging) {
   };
 }
 
+async function listSavedPeople(user, paging) {
+  const context = await visibilityContext(user._id);
+  return listFollowedCreators(user._id, { ...paging, blockedIds: context.blockedCreatorIds });
+}
+
 export const getSavedOverview = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Saved overview fetched", await savedOverview(req.user._id));
 });
@@ -311,9 +305,46 @@ export const listSavedCategory = asyncHandler(async (req, res) => {
   const category = String(req.params.category || "").toLowerCase();
   if (!SAVED_CATEGORIES.includes(category)) throw new ApiError(400, "Unsupported Saved category");
   const paging = readPage(req.query);
+  if (category === "places") return sendResponse(res, 200, "Saved places fetched", await savedService.listSavedPlaces(req.user._id, paging));
+  if (category === "journeys") return sendResponse(res, 200, "Saved journeys fetched", await savedService.listSavedJourneys(req.user._id, paging));
+  if (category === "books") return sendResponse(res, 200, "Saved books fetched", await savedService.listSavedBooks(req.user._id, paging));
+  if (category === "comments") return sendResponse(res, 200, "Saved comments fetched", await savedService.listSavedComments(req.user._id, paging));
   if (category === "posts") return sendResponse(res, 200, "Saved posts fetched", await listSavedPostsPage(req.user, paging));
-  if (category === "experiences") return sendResponse(res, 200, "Saved experiences fetched", await listSavedExperiences(req.user, paging));
+  if (category === "experiences") return sendResponse(res, 200, "Saved experiences fetched", await savedService.listSavedExperiences(req.user._id, paging));
+  if (category === "people") return sendResponse(res, 200, "Favorite creators fetched", await listSavedPeople(req.user, paging));
   return sendResponse(res, 200, `Saved ${category} fetched`, emptyPage(paging));
+});
+
+export const savePlace = asyncHandler(async (req, res) => {
+  return sendResponse(res, 200, "Place saved", await savedService.savePlace(req.user._id, req.params.placeId));
+});
+
+export const unsavePlace = asyncHandler(async (req, res) => {
+  return sendResponse(res, 200, "Place removed from Saved", await savedService.unsavePlace(req.user._id, req.params.placeId));
+});
+
+export const saveJourney = asyncHandler(async (req, res) => {
+  return sendResponse(res, 200, "Journey saved", await savedService.saveJourney(req.user._id, req.params.journeyId));
+});
+
+export const unsaveJourney = asyncHandler(async (req, res) => {
+  return sendResponse(res, 200, "Journey removed from Saved", await savedService.unsaveJourney(req.user._id, req.params.journeyId));
+});
+
+export const saveBook = asyncHandler(async (req, res) => {
+  return sendResponse(res, 200, "Book recommendation saved", await savedService.saveBook(req.user._id, req.params.bookId));
+});
+
+export const unsaveBook = asyncHandler(async (req, res) => {
+  return sendResponse(res, 200, "Book recommendation removed from Saved", await savedService.unsaveBook(req.user._id, req.params.bookId));
+});
+
+export const saveComment = asyncHandler(async (req, res) => {
+  return sendResponse(res, 200, "Comment saved", await savedService.saveComment(req.user._id, req.params.commentId));
+});
+
+export const unsaveComment = asyncHandler(async (req, res) => {
+  return sendResponse(res, 200, "Comment removed from Saved", await savedService.unsaveComment(req.user._id, req.params.commentId));
 });
 
 export const listSavedContent = asyncHandler(async (req, res) => {

@@ -9,6 +9,7 @@ import {
   runSearch,
   searchSuggestions,
 } from "../services/searchService.js";
+import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyticsEventService.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 
@@ -24,7 +25,28 @@ export const searchRateLimit = rateLimit({
 });
 
 export const search = asyncHandler(async (req, res) => {
-  const data = await runSearch(req.user, readSearchParams(req.query));
+  const params = readSearchParams(req.query);
+  const data = await runSearch(req.user, params);
+  const resultsCount = data.sections
+    ? Object.values(data.sections).reduce((sum, section) => sum + Number(section?.total || 0), 0)
+    : Number(data.total || 0);
+  const sessionId = readAnalyticsSessionId(req);
+  if (sessionId) {
+    await recordAnalyticsEvent({
+      eventType: "SEARCH_PERFORMED",
+      metadata: {
+        queryLength: params.q.length,
+        resultsCount,
+        searchCategory: params.type,
+        hasResults: resultsCount > 0,
+        normalizedQuery: params.q,
+      },
+      req,
+      sessionId,
+      source: "search",
+      userId: req.user._id,
+    });
+  }
   return sendResponse(res, 200, "Search completed", data);
 });
 
