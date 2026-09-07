@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { CONTENT_ENTITY_TYPES } from "../constants/contentEntityConstants.js";
 import { POST_CONTEXTS, POST_REACTIONS, POST_STATUSES, POST_VISIBILITIES } from "../constants/postConstants.js";
 
 const postMediaTranslationSchema = new mongoose.Schema(
@@ -79,6 +80,14 @@ const postHiddenSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const entityRefSchema = new mongoose.Schema(
+  {
+    entityType: { type: String, enum: CONTENT_ENTITY_TYPES, required: true },
+    entityId: { type: mongoose.Schema.Types.ObjectId, required: true },
+  },
+  { _id: false }
+);
+
 const postReportSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
@@ -95,6 +104,7 @@ const feedPostSchema = new mongoose.Schema(
     text: { type: String, trim: true, default: "", maxlength: 2000 },
     context: { type: String, enum: ["", ...POST_CONTEXTS], default: "" },
     location: { type: String, trim: true, default: "", maxlength: 120 },
+    entityRefs: { type: [entityRefSchema], default: [] },
     media: { type: [postMediaSchema], default: [] },
     visibility: { type: String, enum: POST_VISIBILITIES, default: "public" },
     status: { type: String, enum: POST_STATUSES, default: "published", index: true },
@@ -123,6 +133,7 @@ feedPostSchema.index({ author: 1, status: 1, updatedAt: -1 });
 feedPostSchema.index({ context: 1 });
 feedPostSchema.index({ status: 1, visibility: 1, deletedAt: 1, publishedAt: -1 });
 feedPostSchema.index({ context: 1, location: 1 });
+feedPostSchema.index({ "entityRefs.entityType": 1, "entityRefs.entityId": 1, status: 1 });
 feedPostSchema.index({ "saves.user": 1, status: 1, publishedAt: -1 });
 feedPostSchema.index({ "views.user": 1, status: 1, publishedAt: -1 });
 feedPostSchema.index({ "shares.user": 1, status: 1, publishedAt: -1 });

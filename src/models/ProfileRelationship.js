@@ -5,6 +5,7 @@ const profileRelationshipSchema = new mongoose.Schema(
     actor: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     target: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     type: { type: String, enum: ["FOLLOW", "SEE_SIGNAL"], required: true },
+    seenTodayViewedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
