@@ -12,7 +12,7 @@ import { sendResponse } from "../utils/response.js";
 
 const publishedSeen = async (id, viewer, shareToken = "") => {
   if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid Seen ID");
-  const publication = await Publication.findOne({ _id: id, kind: "SEEN", status: "PUBLISHED" }).select("_id creator title visibility +shareToken").lean();
+  const publication = await Publication.findOne({ _id: id, kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("_id creator title visibility +shareToken").lean();
   if (!publication || !await canAccessPublicationAudience(publication, viewer, { shareToken })) throw new ApiError(404, "Published Seen not found");
   return publication;
 };
@@ -26,17 +26,18 @@ const publishedPlanet = async (id) => {
 
 const publishedCommentable = async (id, viewer, shareToken = "") => {
   if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid publication ID");
-  const publication = await Publication.findOne({ _id: id, kind: { $in: ["SEEN", "WORLD", "PREMIUM_WORLD"] }, status: "PUBLISHED" }).select("_id creator kind visibility +shareToken").lean();
+  const publication = await Publication.findOne({ _id: id, kind: { $in: ["SEEN", "WORLD", "PREMIUM_WORLD"] }, status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("_id creator kind visibility +shareToken").lean();
   if (!publication || (publication.kind === "SEEN" && !await canAccessPublicationAudience(publication, viewer, { shareToken }))) throw new ApiError(404, "Published content not found");
   return publication;
 };
 
 const summary = async (publication, viewerId) => {
-  const [counts, reactionCounts, viewer, comments] = await Promise.all([
+  const [counts, reactionCounts, viewer, comments, reactions] = await Promise.all([
     SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication) } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
     SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), type: "REACTION" } }, { $group: { _id: { $ifNull: ["$reaction", "LIKE"] }, count: { $sum: 1 } } }, { $sort: { count: -1, _id: 1 } }]),
     viewerId ? SeenEngagement.find({ publication, user: viewerId, type: { $in: ["REACTION", "SHARE", "SAVE"] } }).lean() : [],
     SeenEngagement.find({ publication, type: "COMMENT" }).sort({ createdAt: -1 }).limit(50).populate("user", "name username avatar").lean(),
+    SeenEngagement.find({ publication, type: "REACTION" }).sort({ updatedAt: -1 }).limit(200).populate("user", "name username avatar").lean(),
   ]);
   const savedCommentRows = viewerId && comments.length
     ? await SavedItem.find({ user: viewerId, targetType: "comment", targetModel: "SeenEngagement", targetId: { $in: comments.map((item) => item._id) } }).select("targetId").lean()
@@ -44,7 +45,7 @@ const summary = async (publication, viewerId) => {
   const savedCommentIds = new Set(savedCommentRows.map((item) => String(item.targetId)));
   const count = Object.fromEntries(counts.map((item) => [item._id, item.count]));
   const reactionBreakdown = Object.fromEntries(reactionCounts.map((item) => [item._id, item.count]));
-  return { reactionCount: count.REACTION || 0, reactionBreakdown, topReactions: reactionCounts.slice(0, 3).map((item) => item._id), commentCount: count.COMMENT || 0, shareCount: count.SHARE || 0, saveCount: count.SAVE || 0, viewCount: (count.WALKED || 0) + (count.REACTION || 0) + (count.COMMENT || 0) + (count.SHARE || 0) + (count.SAVE || 0), viewerReaction: viewer.find((item) => item.type === "REACTION")?.reaction || null, viewerShared: Boolean(viewer.find((item) => item.type === "SHARE")), viewerSaved: Boolean(viewer.find((item) => item.type === "SAVE")), comments: comments.reverse().map((item) => ({ id: item._id, text: item.text, createdAt: item.createdAt, author: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" }, viewerSaved: savedCommentIds.has(String(item._id)) })) };
+  return { reactionCount: count.REACTION || 0, reactionBreakdown, topReactions: reactionCounts.slice(0, 3).map((item) => item._id), reactors: reactions.map((item) => ({ id: item._id, reaction: item.reaction || "LIKE", user: { id: item.user?._id, name: item.user?.name || item.user?.username || "User", username: item.user?.username || "", avatar: item.user?.avatar || "" } })), commentCount: count.COMMENT || 0, shareCount: count.SHARE || 0, saveCount: count.SAVE || 0, viewCount: (count.WALKED || 0) + (count.REACTION || 0) + (count.COMMENT || 0) + (count.SHARE || 0) + (count.SAVE || 0), viewerReaction: viewer.find((item) => item.type === "REACTION")?.reaction || null, viewerShared: Boolean(viewer.find((item) => item.type === "SHARE")), viewerSaved: Boolean(viewer.find((item) => item.type === "SAVE")), comments: comments.reverse().map((item) => ({ id: item._id, text: item.text, createdAt: item.createdAt, author: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" }, viewerSaved: savedCommentIds.has(String(item._id)) })) };
 };
 
 const cleanString = (value, maxLength) => {
@@ -118,7 +119,7 @@ export const blockSeenCreator = asyncHandler(async (req, res) => {
 
 export const reportSeen = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid Seen ID");
-  const publication = await Publication.findOne({ _id: req.params.id, kind: "SEEN", status: "PUBLISHED" }).select("_id creator kind title summary coverMedia publishedAt visibility +shareToken").lean();
+  const publication = await Publication.findOne({ _id: req.params.id, kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("_id creator kind title summary coverMedia publishedAt visibility +shareToken").lean();
   if (!publication || !await canAccessPublicationAudience(publication, req.user, { shareToken: req.body.accessToken || req.query.access || req.query.token })) throw new ApiError(404, "Published Seen not found");
 
   if (String(publication.creator) === String(req.user._id)) throw new ApiError(400, "You cannot report your own Seen");

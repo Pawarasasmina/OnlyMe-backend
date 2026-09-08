@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "seed:seen-flow": "node src/scripts/seedSeenFlowSamples.js",
     "dev": "nodemon --watch src --watch .env --watch src/controllers/.env --ext js,mjs,cjs,json,env src/server.js",
     "start": "node src/server.js",
     "lint": "eslint .",

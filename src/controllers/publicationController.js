@@ -59,7 +59,10 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
   const paging = page(req);
   const filter = { kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } };
   let candidateCreatorIds = [];
-  if (req.query.tab === "friends" && req.user?._id) {
+  if (req.query.creator) {
+    candidateCreatorIds = [req.query.creator];
+    filter.creator = req.query.creator;
+  } else if (req.query.tab === "friends" && req.user?._id) {
     const following = await ProfileRelationship.find({ actor: req.user._id, type: "FOLLOW" }).select("target").lean();
     candidateCreatorIds = following.map((item) => item.target);
     filter.creator = { $in: candidateCreatorIds };
@@ -162,4 +165,33 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
   }).filter(Boolean);
   return sendResponse(res, 200, "Published Seens fetched", { items: itemsWithEngagement, pagination: { ...paging, hasMore: items.length === paging.limit } });
 });
-export const getPublishedPublication = asyncHandler(async (req, res) => { const publication = await Publication.findById(req.params.id).select("+shareToken").populate("creator", "name username avatar isVerified").populate("series", "name").lean(); if (publication) await attachEntityMetadata(publication, req.user || null); const entitlement = publication ? await publicationEntitlement(publication, req.user || null) : null; const audienceAllowed = publication ? await canAccessPublicationAudience(publication, req.user || null, { shareToken: req.query.access || req.query.token }) : false; const serialized = publication && serializePublication(publication, req.user || null, { audienceAllowed, entitlement }); if (!serialized) throw new ApiError(404, "Publication not found"); return sendResponse(res, 200, "Publication fetched", { publication: serialized }); });
+export const getPublishedPublication = asyncHandler(async (req, res) => {
+  const publication = await Publication.findById(req.params.id).select("+shareToken").populate("creator", "name username avatar isVerified").populate("series", "name").lean();
+  if (publication) await attachEntityMetadata(publication, req.user || null);
+  const entitlement = publication ? await publicationEntitlement(publication, req.user || null) : null;
+  const audienceAllowed = publication ? await canAccessPublicationAudience(publication, req.user || null, { shareToken: req.query.access || req.query.token }) : false;
+  const serialized = publication && serializePublication(publication, req.user || null, { audienceAllowed, entitlement });
+  if (!serialized) throw new ApiError(404, "Publication not found");
+
+  if (publication.kind === "SEEN") {
+    const creatorId = publication.creator?._id || publication.creator;
+    const sequenceFilter = {
+      _id: { $ne: publication._id },
+      creator: creatorId,
+      kind: "SEEN",
+      status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] },
+      publishedSnapshot: { $exists: true },
+      $or: [{ visibility: "PUBLIC" }, { visibility: { $exists: false } }, { visibility: null }, { visibility: "" }],
+    };
+    let nextPublication = await Publication.findOne({
+      ...sequenceFilter,
+      publishedAt: { $lt: publication.publishedAt || publication.createdAt },
+    }).sort({ publishedAt: -1 }).populate("creator", "name username avatar isVerified").lean();
+    nextPublication ||= await Publication.findOne(sequenceFilter).sort({ publishedAt: -1 }).populate("creator", "name username avatar isVerified").lean();
+    serialized.nextSeen = nextPublication
+      ? serializePublication(nextPublication, req.user || null, { audienceAllowed: true })
+      : null;
+  }
+
+  return sendResponse(res, 200, "Publication fetched", { publication: serialized });
+});
