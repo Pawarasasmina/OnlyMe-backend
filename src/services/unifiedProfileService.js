@@ -53,7 +53,7 @@ function uniquePhotos(items = []) {
   });
 }
 
-export function serializeUnifiedProfile({ content = [], followerCount = 0, followingCount = 0, owner,  ownWallPosts = [], photos = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, publishedContentCount = content.length, roleProfile, seens = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [], viewerSeeSignalSent = false }) {
+export function serializeUnifiedProfile({ content = [], experiences = [], followerCount = 0, followingCount = 0, owner,  ownWallPosts = [], photos = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, publishedContentCount = content.length, roleProfile, seens = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [], viewerSeeSignalSent = false }) {
   const capabilities = profileViewerCapabilities(owner, viewer, roleProfile);
   const creatorEnabled = owner.creatorApprovalStatus === "approved";
   const contentViewer = capabilities.isOwner ? viewer : null;
@@ -114,6 +114,7 @@ export function serializeUnifiedProfile({ content = [], followerCount = 0, follo
       .sort((left, right) => new Date(right.feedCreatedAt || right.createdAt) - new Date(left.feedCreatedAt || left.createdAt)),
     wallPosts: ownWallPosts,
     planets: planets.map((item) => serializePublication(item, contentViewer, { entitlement: premiumMembershipPublicationId && String(item._id) === String(premiumMembershipPublicationId) ? "ACTIVE_PREMIUM_MEMBER" : null })).filter(Boolean).slice(0, 3),
+    experiences: experiences.map((item) => serializePublication(item, contentViewer, { entitlement: premiumMembershipPublicationId && item.includedInWorld ? "ACTIVE_PREMIUM_MEMBER" : null })).filter(Boolean).slice(0, 3),
     viewerCapabilities: capabilities,
     viewerRelationship: { following: viewerRelationships.some((item) => item.type === "FOLLOW"), seeSignalSent: viewerSeeSignalSent || viewerRelationships.some((item) => item.type === "SEE_SIGNAL") },
     ...(capabilities.isOwner ? { profileCompletion: completion(owner, roleProfile) } : {}),

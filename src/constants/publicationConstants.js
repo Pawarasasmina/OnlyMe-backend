@@ -1,4 +1,4 @@
-export const PUBLICATION_KINDS = ["SEEN", "WORLD", "PREMIUM_WORLD"];
+export const PUBLICATION_KINDS = ["SEEN", "WORLD", "PREMIUM_WORLD", "EXPERIENCE"];
 export const PUBLICATION_STATUSES = ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED", "REJECTED", "ARCHIVED", "REMOVED"];
 export const PUBLICATION_VISIBILITIES = ["PUBLIC", "FRIENDS", "LINK_ONLY"];
 export const SEEN_CATEGORIES = ["Places", "Moving", "Business", "Growth", "Lifestyle"];
@@ -8,6 +8,7 @@ export const PUBLICATION_ACTIONS = ["DRAFT_CREATED", "DRAFT_UPDATED", "REVISION_
 export const BLOCK_TYPES = ["TEXT", "IMAGE", "VIDEO", "AUDIO", "VOICE", "LINK", "KEY_POINT", "HIGHLIGHT", "POLL"];
 export const TEXT_BLOCK_TYPES = ["TEXT", "KEY_POINT", "HIGHLIGHT"];
 export const PREMIUM_PRICE_PRESETS = [90, 190, 290];
+export const EXPERIENCE_PRICE_PRESETS = [90, 190, 290];
 export const PREMIUM_RESIDENCY_DEFAULT_STARS = 190;
 export const PLANET_MARKER_COLORS = ["ICE_BLUE", "AMBER", "CORAL", "MINT", "LILAC", "WHITE"];
 export const PUBLICATION_LIMITS = { title: 120, summary: 300, description: 2000, category: 40, tags: 15, tag: 40, chapterTitle: 120, chapterText: 2000, blockLabel: 120, seriesName: 24 };
@@ -15,4 +16,5 @@ export const KIND_RULES = {
   SEEN: { minChapters: 1, maxChapters: 3, pricingMode: "FREE", previewMin: 1, previewMax: 3, placement: "SEEN" },
   WORLD: { minChapters: 1, maxChapters: 7, pricingMode: "FREE", previewMin: 1, previewMax: 7, placement: "PROFILE_ORBIT" },
   PREMIUM_WORLD: { minChapters: 2, maxChapters: 5, pricingMode: "MONTHLY", previewMin: 1, previewMax: 1, placement: "PROFILE_ORBIT" },
+  EXPERIENCE: { minChapters: 2, maxChapters: null, pricingMode: "ONE_TIME", previewMin: 0, previewMax: 0, placement: "PROFILE_EXPERIENCES" },
 };
