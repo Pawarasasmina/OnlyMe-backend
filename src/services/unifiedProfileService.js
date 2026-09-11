@@ -1,5 +1,6 @@
 import { serializeContent } from "./contentAccessService.js";
 import { serializePublication } from "./publicationAccessService.js";
+import { serializeProfileStatus } from "./statusService.js";
 
 const safeHttpUrl = (value) => {
   try {
@@ -37,23 +38,7 @@ function completion(owner, roleProfile) {
   return { completed, total: checks.length, percentage: Math.round((completed / checks.length) * 100) };
 }
 
-function uniquePhotos(items = []) {
-  const seen = new Set();
-  return items.flatMap((item) => {
-    const url = item?.url || item?.secureUrl || item?.mediaUrl || "";
-    if (!url || seen.has(url)) return [];
-    seen.add(url);
-    return [{
-      id: item.id || item._id || url,
-      mediaUrl: url,
-      mediaType: item.mediaType || item.resourceType || item.type || "image",
-      caption: item.caption || item.title || "",
-      createdAt: item.createdAt || item.publishedAt || null,
-    }];
-  });
-}
-
-export function serializeUnifiedProfile({ content = [], followerCount = 0, followingCount = 0, owner,  ownWallPosts = [], photos = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, publishedContentCount = content.length, roleProfile, seens = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [], viewerSeeSignalSent = false }) {
+export function serializeUnifiedProfile({ content = [], followerCount = 0, followingCount = 0, media = [], owner,  ownWallPosts = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, publishedContentCount = content.length, roleProfile, seens = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [], viewerSeeSignalSent = false }) {
   const capabilities = profileViewerCapabilities(owner, viewer, roleProfile);
   const creatorEnabled = owner.creatorApprovalStatus === "approved";
   const contentViewer = capabilities.isOwner ? viewer : null;
@@ -75,14 +60,7 @@ export function serializeUnifiedProfile({ content = [], followerCount = 0, follo
     socialLinks,
     joinedAt: owner.createdAt,
     verified: Boolean(owner.isVerified),
-    activeStatus: owner.activeStatus?.isActive ? {
-      emoji: owner.activeStatus.emoji || "",
-      label: owner.activeStatus.label || "",
-      color: owner.activeStatus.color || "",
-      presetKey: owner.activeStatus.presetKey || "",
-      startedAt: owner.activeStatus.startedAt || null,
-      expiresAt: owner.activeStatus.expiresAt || null,
-    } : null,
+    activeStatus: serializeProfileStatus(owner.activeStatus),
     ...(creatorEnabled ? {
       directAccess: {
         enabled: Boolean(roleProfile?.directAccessEnabled),
@@ -106,7 +84,7 @@ export function serializeUnifiedProfile({ content = [], followerCount = 0, follo
     profile,
     publicMetrics: { publishedContentCount, followerCount, followingCount, supporterCount },
     publicContent: content.map((item) => serializeContent(item, contentViewer)),
-    photos: uniquePhotos(photos).slice(0, 12),
+    media: media.slice(0, 12),
     seens: seens.map((item) => serializePublication(item, contentViewer, { audienceAllowed: true })).filter(Boolean),
     sharedSeens: sharedSeens.map((item) => { const publication = serializePublication(item, contentViewer, { audienceAllowed: true }); return publication ? { ...publication, shareId: item.shareId || null, shareCaption: item.shareCaption || "", feedCreatedAt: item.feedCreatedAt || item.createdAt, sharedBy: item.sharedBy || null } : null; }).filter(Boolean),
     sharedWallPosts: sharedWallPosts

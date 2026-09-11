@@ -65,7 +65,7 @@ const userSchema = new mongoose.Schema(
     pinnedMessageGroup: { type: mongoose.Schema.Types.ObjectId, ref: "GroupConversation", default: null },
     activeStatus: {
       emoji: { type: String, trim: true, maxlength: 8, default: "" },
-      label: { type: String, trim: true, maxlength: 32, default: "" },
+      label: { type: String, trim: true, maxlength: 120, default: "" },
       presetKey: { type: String, trim: true, maxlength: 40, default: "" },
       isCustom: { type: Boolean, default: false },
       color: { type: String, trim: true, maxlength: 20, default: "" },

@@ -14,10 +14,12 @@ import GroupConversation from "../models/GroupConversation.js";
 import MessageReport from "../models/MessageReport.js";
 import PremiumMembership from "../models/PremiumMembership.js";
 import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
+import { listProfileMediaForUser } from "../services/profileMediaService.js";
 import { toggleFollowRelationship } from "../services/profileRelationshipService.js";
 import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyticsEventService.js";
 import { seenVisibilityFilter } from "../services/publicationAccessService.js";
 import { sendSeeYouSignal } from "../services/orbitRecommendationService.js";
+import { buildProfileStatusFromPayload, serializeProfileStatus } from "../services/statusService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -34,7 +36,7 @@ async function loadProfile(owner, viewer) {
   const seenStatus = { $in: ["PUBLISHED", "CHANGES_REQUESTED"] };
   const seenAudienceFilter = await seenVisibilityFilter(viewer || null, [owner._id]);
   const planetStatus = profileOwner ? { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } : { $in: ["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED"] };
-  const [roleProfile, content, publishedContentCount, seens, planets, ownFeedPosts, shares, wallShares, feedSharePosts, followerCount, followingCount, supporterRows, viewerRelationships, viewerSeeSignal] = await Promise.all([
+  const [roleProfile, content, publishedContentCount, seens, planets, ownFeedPosts, shares, wallShares, feedSharePosts, followerCount, followingCount, supporterRows, viewerRelationships, viewerSeeSignal, profileMedia] = await Promise.all([
     Model.findOne({ user: owner._id }).lean(),
     Content.find(publishedFilter)
       .sort({ publishedAt: -1, _id: -1 }).limit(30).populate("creator", "name username avatar").lean(),
@@ -50,6 +52,7 @@ async function loadProfile(owner, viewer) {
     owner.role === "creator" ? DreamGift.distinct("supporter", { creator: owner._id }) : [],
     viewer?._id && String(viewer._id) !== String(owner._id) ? ProfileRelationship.find({ actor: viewer._id, target: owner._id }).select("type").lean() : [],
     viewer?._id && String(viewer._id) !== String(owner._id) ? OrbitSignal.findOne({ sender: viewer._id, targetUser: owner._id, type: "SEE_YOU", status: "active" }).select("_id").lean() : null,
+    listProfileMediaForUser(owner._id, { limit: 12 }),
   ]);
   if (!roleProfile) throw new ApiError(404, "Profile not found");
   const sharedSeens = shares.length ? await Publication.find({ _id: { $in: shares.map((item) => item.publication) }, kind: "SEEN", status: "PUBLISHED", ...seenAudienceFilter }).populate("creator", "name username avatar").populate("series", "name").lean() : [];
@@ -89,18 +92,7 @@ async function loadProfile(owner, viewer) {
     currentPeriodEnd: { $gt: new Date() },
   }).select("premiumPublication").lean() : null;
   const ownWallPosts = ownFeedPosts.map((post) => serializePost(post, viewer));
-  const publicationPhotos = [...seens, ...planets].flatMap((publication) => [
-    publication.coverMedia ? { ...publication.coverMedia, title: publication.title, publishedAt: publication.publishedAt } : null,
-    publication.introMedia ? { ...publication.introMedia, title: publication.title, publishedAt: publication.publishedAt } : null,
-  ]).filter(Boolean);
-  const feedPhotos = ownFeedPosts.flatMap((post) => (post.media || []).map((media) => ({ ...media, url: media.url, caption: post.text, createdAt: post.createdAt })));
-  const profilePhotos = [
-    owner.avatar ? { url: owner.avatar, caption: "Profile photo", createdAt: owner.updatedAt } : null,
-    roleProfile.coverPhoto ? { url: roleProfile.coverPhoto, caption: "Cover photo", createdAt: roleProfile.updatedAt } : null,
-    ...publicationPhotos,
-    ...feedPhotos,
-  ].filter(Boolean);
-  return serializeUnifiedProfile({ owner, roleProfile, content, photos: profilePhotos, pinnedMessageGroup, planets, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal) });
+  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal) });
 }
 
 async function relationshipTarget(username) {
@@ -169,6 +161,16 @@ export const reportUnifiedProfile = asyncHandler(async (req, res) => {
 export const getOwnUnifiedProfile = asyncHandler(async (req, res) => {
   if (!["fan", "creator"].includes(req.user.role)) throw new ApiError(404, "Profile not found");
   return sendResponse(res, 200, "Profile fetched", await loadProfile(req.user, req.user));
+});
+
+export const updateOwnProfileStatus = asyncHandler(async (req, res) => {
+  if (!["fan", "creator"].includes(req.user.role)) throw new ApiError(403, "Profile status is available to fan and creator accounts");
+  const { activeStatus, cleared } = buildProfileStatusFromPayload(req.body);
+  req.user.activeStatus = activeStatus;
+  await req.user.save();
+  return sendResponse(res, 200, cleared ? "Status cleared" : "Status updated", {
+    activeStatus: serializeProfileStatus(req.user.activeStatus),
+  });
 });
 
 export const getOwnProfileViewers = asyncHandler(async (req, res) => {

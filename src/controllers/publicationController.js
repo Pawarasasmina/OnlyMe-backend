@@ -5,7 +5,7 @@ import Publication from "../models/Publication.js";
 import PublicationPreference from "../models/PublicationPreference.js";
 import PublicationSeries from "../models/PublicationSeries.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
-import SeenEngagement from "../models/SeenEngagement.js";
+import SeenEngagement, { SEEN_REACTIONS } from "../models/SeenEngagement.js";
 import UserBlock from "../models/UserBlock.js";
 import { attachEntityMetadata } from "../services/contentEntityService.js";
 import { canAccessPublicationAudience, seenVisibilityFilter, serializePublication } from "../services/publicationAccessService.js";
@@ -22,6 +22,8 @@ const page = (req) => ({ page: Math.max(1, Number(req.query.page) || 1), limit: 
 const shareUrlFor = (item) => item.visibility === "LINK_ONLY" && item.shareToken ? `${String(env.clientUrl || "").replace(/\/+$/u, "")}/seen/${item._id}?access=${encodeURIComponent(item.shareToken)}` : null;
 const normalizeSeriesName = (value) => String(value || "").trim().replace(/\s+/g, " ").slice(0, PUBLICATION_LIMITS.seriesName);
 const normalizeSeriesKey = (value) => normalizeSeriesName(value).toLowerCase();
+const seenReactionOrder = new Map(SEEN_REACTIONS.map((reaction, index) => [reaction, index]));
+const sortSeenReactionRows = (rows = []) => rows.sort((first, second) => second.count - first.count || (seenReactionOrder.get(first._id.reaction) ?? 100) - (seenReactionOrder.get(second._id.reaction) ?? 100) || String(first._id.reaction).localeCompare(String(second._id.reaction)));
 const ownerView = (publication, chapters, user) => { const item = publication.toObject ? publication.toObject() : publication; if (!item.submittedSnapshot || ["DRAFT", "CHANGES_REQUESTED"].includes(item.status)) item.submittedSnapshot = { metadata: item, chapters, version: item.draftVersion, frozenAt: new Date() }; return serializePublication(item, user); };
 export const listMine = asyncHandler(async (req, res) => { const paging = page(req); const filter = { creator: req.user._id }; if (req.query.kind) filter.kind = req.query.kind.includes(",") ? { $in: req.query.kind.split(",") } : req.query.kind; if (req.query.status) filter.status = req.query.status; const [items, total] = await Promise.all([Publication.find(filter).select("+shareToken").populate("series", "name").sort({ updatedAt: -1 }).skip((paging.page - 1) * paging.limit).limit(paging.limit).lean(), Publication.countDocuments(filter)]); const publicationIds = items.map((item) => item._id); const [counts, residentRows] = await Promise.all([Chapter.aggregate([{ $match: { publication: { $in: publicationIds } } }, { $group: { _id: "$publication", count: { $sum: 1 }, previewCount: { $sum: { $cond: ["$isPreview", 1, 0] } } } }]), PremiumMembership.aggregate([{ $match: { creator: req.user._id, premiumPublication: { $in: publicationIds }, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } } }, { $group: { _id: "$premiumPublication", residentCount: { $sum: 1 }, monthlyStars: { $sum: "$starsPerPeriod" } } }])]); const chapterCounts = new Map(counts.map((entry) => [String(entry._id), entry])); const residentCounts = new Map(residentRows.map((entry) => [String(entry._id), entry])); return sendResponse(res, 200, "Publications fetched", { items: items.map((item) => { const residents = residentCounts.get(String(item._id)); return { id: item._id, kind: item.kind, title: item.title, summary: item.summary, category: item.category, series: item.series ? { id: String(item.series._id), name: item.series.name } : null, seriesId: item.series?._id ? String(item.series._id) : null, visibility: item.visibility || "PUBLIC", shareUrl: shareUrlFor(item), coverMedia: item.coverMedia ? { mediaType: item.coverMedia.mediaType, format: item.coverMedia.format, width: item.coverMedia.width, height: item.coverMedia.height, secureUrl: item.coverMedia.secureUrl } : null, chapterCount: chapterCounts.get(String(item._id))?.count || 0, previewCount: chapterCounts.get(String(item._id))?.previewCount || 0, residentCount: residents?.residentCount || 0, monthlyStars: residents?.monthlyStars || 0, pricing: item.pricing, planet: item.planet, status: item.status, statusVersion: item.statusVersion, draftVersion: item.draftVersion, submittedAt: item.submittedAt, publishedAt: item.publishedAt, archivedAt: item.archivedAt, createdAt: item.createdAt, updatedAt: item.updatedAt }; }), pagination: { ...paging, total, pages: Math.max(1, Math.ceil(total / paging.limit)) } }); });
 export const getMine = asyncHandler(async (req, res) => { const { publication, chapters } = await ownerPublication(req.user._id, req.params.id); await attachEntityMetadata(publication, req.user); return sendResponse(res, 200, "Publication fetched", { publication: ownerView(publication, chapters, req.user) }); });
@@ -89,7 +91,7 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
   const creatorIds = [...new Set(items.map((item) => String(item.creator?._id || item.creator)).filter(Boolean))];
   const [engagementRows, reactionRows, viewerRows, profileRows, commentRows] = await Promise.all([
     publicationIds.length ? SeenEngagement.aggregate([{ $match: { publication: { $in: publicationIds } } }, { $group: { _id: { publication: "$publication", type: "$type" }, count: { $sum: 1 } } }]) : [],
-    publicationIds.length ? SeenEngagement.aggregate([{ $match: { publication: { $in: publicationIds }, type: "REACTION" } }, { $group: { _id: { publication: "$publication", reaction: { $ifNull: ["$reaction", "LIKE"] } }, count: { $sum: 1 } } }, { $sort: { count: -1, "_id.reaction": 1 } }]) : [],
+    publicationIds.length ? SeenEngagement.aggregate([{ $match: { publication: { $in: publicationIds }, type: "REACTION" } }, { $group: { _id: { publication: "$publication", reaction: { $ifNull: ["$reaction", "LIKE"] } }, count: { $sum: 1 } } }]) : [],
     req.user?._id && publicationIds.length ? SeenEngagement.find({ publication: { $in: publicationIds }, user: req.user._id, type: { $in: ["REACTION", "SHARE", "SAVE"] } }).lean() : [],
     creatorIds.length ? CreatorProfile.find({ user: { $in: creatorIds } }).select("user city country orbitStatus").lean() : [],
     publicationIds.length ? SeenEngagement.find({ publication: { $in: publicationIds }, type: "COMMENT" }).sort({ createdAt: -1 }).limit(100).populate("user", "name username avatar").lean() : [],
@@ -103,7 +105,7 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
     engagementByPublication.set(key, current);
   }
   const reactionsByPublication = new Map();
-  for (const row of reactionRows) {
+  for (const row of sortSeenReactionRows(reactionRows)) {
     const key = String(row._id.publication);
     const current = reactionsByPublication.get(key) || { reactionBreakdown: {}, topReactions: [] };
     current.reactionBreakdown[row._id.reaction] = row.count;

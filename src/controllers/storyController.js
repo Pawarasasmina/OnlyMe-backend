@@ -7,6 +7,7 @@ import Message from "../models/Message.js";
 import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
 import { storeFile, deleteAsset } from "../services/storageService.js";
+import { profileMediaReferencesAsset, profileMediaSourceKeysFor } from "../services/profileMediaService.js";
 import { parseStoryEditorMetadata, parseStoryOptions } from "../services/storyMetadataService.js";
 import { buildStatusFromPayload, serializeStatus } from "../services/statusService.js";
 import ApiError from "../utils/ApiError.js";
@@ -118,12 +119,16 @@ const serialize = (story, viewer, engagement, insights = null) => {
     isOwn: Boolean(viewer && String(creatorId) === String(viewer)),
     viewed: Boolean(engagement?.viewedAt),
     viewerReaction: engagement?.reaction || null,
+    isInProfileMedia: Boolean(story.isInProfileMedia),
     ...(insights ? { insights } : {}),
   };
 };
 
 export const getStory = asyncHandler(async (req, res) => {
   const story = await followedStory(req.params.id, req.user._id);
+  if (String(story.creator) === String(req.user._id)) {
+    story.isInProfileMedia = Boolean(await profileMediaSourceKeysFor({ sourceIds: [story._id], sourceType: "story", userId: req.user._id }).then((keys) => keys.has(`${String(story._id)}:media`)));
+  }
   await story.populate("creator", "name username avatar isVerified");
   return sendResponse(res, 200, "Story fetched", { story: serialize(story, req.user._id) });
 });
@@ -211,7 +216,10 @@ export const listStories = asyncHandler(async (req, res) => {
   const engagements = await StoryEngagement.find({ fan: req.user._id, story: { $in: storyIds } }).lean();
   const byStory = new Map(engagements.map((item) => [String(item.story), item]));
   const ownStoryIds = stories.filter((story) => String(story.creator?._id) === String(req.user._id)).map((story) => story._id);
-  const creatorEngagements = await StoryEngagement.find({ story: { $in: ownStoryIds } }).populate("fan", "name username avatar").sort({ updatedAt: -1 }).lean();
+  const [creatorEngagements, ownProfileMediaStoryKeys] = await Promise.all([
+    StoryEngagement.find({ story: { $in: ownStoryIds } }).populate("fan", "name username avatar").sort({ updatedAt: -1 }).lean(),
+    profileMediaSourceKeysFor({ sourceIds: ownStoryIds, sourceType: "story", userId: req.user._id }),
+  ]);
   const insightsByStory = new Map();
   for (const item of creatorEngagements) {
     const key = String(item.story);
@@ -231,6 +239,7 @@ export const listStories = asyncHandler(async (req, res) => {
   for (const story of stories) {
     const serialized = serialize(story, req.user._id, byStory.get(String(story._id)), insightsByStory.get(String(story._id)));
     const creatorId = String(story.creator?._id || story.creator || "");
+    if (creatorId === viewerId) serialized.isInProfileMedia = ownProfileMediaStoryKeys.has(`${String(story._id)}:media`);
     if (creatorId === viewerId) {
       viewerStories.push(serialized);
       continue;
@@ -356,6 +365,8 @@ export const deleteStory = asyncHandler(async (req, res) => {
   const story = await Story.findOne({ _id: req.params.id, creator: req.user._id });
   if (!story) throw new ApiError(404, "Story not found");
   await Promise.all([StoryEngagement.deleteMany({ story: story._id }), story.deleteOne()]);
-  await deleteAsset(story.image.assetId, story.image.resourceType || story.mediaType || "image").catch(() => {});
+  if (!await profileMediaReferencesAsset(story.image.assetId)) {
+    await deleteAsset(story.image.assetId, story.image.resourceType || story.mediaType || "image").catch(() => {});
+  }
   return sendResponse(res, 200, "Story deleted");
 });

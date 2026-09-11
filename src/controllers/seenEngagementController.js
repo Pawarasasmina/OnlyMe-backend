@@ -4,6 +4,7 @@ import PublicationPreference from "../models/PublicationPreference.js";
 import MessageReport from "../models/MessageReport.js";
 import SavedItem from "../models/SavedItem.js";
 import SeenEngagement, { SEEN_REACTIONS } from "../models/SeenEngagement.js";
+import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
 import { canAccessPublicationAudience } from "../services/publicationAccessService.js";
 import ApiError from "../utils/ApiError.js";
@@ -24,6 +25,10 @@ const publishedPlanet = async (id) => {
   return publication;
 };
 
+const page = (req) => ({ page: Math.max(1, Number(req.query.page) || 1), limit: Math.min(50, Math.max(1, Number(req.query.limit) || 20)) });
+const reactionOrder = new Map(SEEN_REACTIONS.map((reaction, index) => [reaction, index]));
+const sortReactionCounts = (rows = []) => rows.sort((first, second) => second.count - first.count || (reactionOrder.get(first._id) ?? 100) - (reactionOrder.get(second._id) ?? 100) || String(first._id).localeCompare(String(second._id)));
+
 const publishedCommentable = async (id, viewer, shareToken = "") => {
   if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid publication ID");
   const publication = await Publication.findOne({ _id: id, kind: { $in: ["SEEN", "WORLD", "PREMIUM_WORLD"] }, status: "PUBLISHED" }).select("_id creator kind visibility +shareToken").lean();
@@ -34,7 +39,7 @@ const publishedCommentable = async (id, viewer, shareToken = "") => {
 const summary = async (publication, viewerId) => {
   const [counts, reactionCounts, viewer, comments] = await Promise.all([
     SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication) } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
-    SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), type: "REACTION" } }, { $group: { _id: { $ifNull: ["$reaction", "LIKE"] }, count: { $sum: 1 } } }, { $sort: { count: -1, _id: 1 } }]),
+    SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), type: "REACTION" } }, { $group: { _id: { $ifNull: ["$reaction", "LIKE"] }, count: { $sum: 1 } } }]),
     viewerId ? SeenEngagement.find({ publication, user: viewerId, type: { $in: ["REACTION", "SHARE", "SAVE"] } }).lean() : [],
     SeenEngagement.find({ publication, type: "COMMENT" }).sort({ createdAt: -1 }).limit(50).populate("user", "name username avatar").lean(),
   ]);
@@ -43,8 +48,9 @@ const summary = async (publication, viewerId) => {
     : [];
   const savedCommentIds = new Set(savedCommentRows.map((item) => String(item.targetId)));
   const count = Object.fromEntries(counts.map((item) => [item._id, item.count]));
-  const reactionBreakdown = Object.fromEntries(reactionCounts.map((item) => [item._id, item.count]));
-  return { reactionCount: count.REACTION || 0, reactionBreakdown, topReactions: reactionCounts.slice(0, 3).map((item) => item._id), commentCount: count.COMMENT || 0, shareCount: count.SHARE || 0, saveCount: count.SAVE || 0, viewCount: (count.WALKED || 0) + (count.REACTION || 0) + (count.COMMENT || 0) + (count.SHARE || 0) + (count.SAVE || 0), viewerReaction: viewer.find((item) => item.type === "REACTION")?.reaction || null, viewerShared: Boolean(viewer.find((item) => item.type === "SHARE")), viewerSaved: Boolean(viewer.find((item) => item.type === "SAVE")), comments: comments.reverse().map((item) => ({ id: item._id, text: item.text, createdAt: item.createdAt, author: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" }, viewerSaved: savedCommentIds.has(String(item._id)) })) };
+  const sortedReactionCounts = sortReactionCounts(reactionCounts);
+  const reactionBreakdown = Object.fromEntries(sortedReactionCounts.map((item) => [item._id, item.count]));
+  return { reactionCount: count.REACTION || 0, reactionBreakdown, topReactions: sortedReactionCounts.slice(0, 3).map((item) => item._id), commentCount: count.COMMENT || 0, shareCount: count.SHARE || 0, saveCount: count.SAVE || 0, viewCount: (count.WALKED || 0) + (count.REACTION || 0) + (count.COMMENT || 0) + (count.SHARE || 0) + (count.SAVE || 0), viewerReaction: viewer.find((item) => item.type === "REACTION")?.reaction || null, viewerShared: Boolean(viewer.find((item) => item.type === "SHARE")), viewerSaved: Boolean(viewer.find((item) => item.type === "SAVE")), comments: comments.reverse().map((item) => ({ id: item._id, text: item.text, createdAt: item.createdAt, author: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" }, viewerSaved: savedCommentIds.has(String(item._id)) })) };
 };
 
 const cleanString = (value, maxLength) => {
@@ -59,6 +65,58 @@ const notifyCreatorActivity = (req, publication) => {
 };
 
 export const getSeenEngagement = asyncHandler(async (req, res) => { await publishedCommentable(req.params.id, req.user || null, req.query.access || req.query.token); return sendResponse(res, 200, "Publication engagement fetched", { engagement: await summary(req.params.id, req.user?._id) }); });
+
+export const listSeenReactors = asyncHandler(async (req, res) => {
+  await publishedSeen(req.params.id, req.user || null, req.query.access || req.query.token);
+  const paging = page(req);
+  const reaction = req.query.reaction ? String(req.query.reaction).toUpperCase() : "";
+  if (reaction && !SEEN_REACTIONS.includes(reaction)) throw new ApiError(400, "A valid reaction filter is required");
+
+  const filter = { publication: req.params.id, type: "REACTION" };
+  if (reaction) filter.reaction = reaction;
+
+  let excludedUserIds = await User.distinct("_id", { $or: [{ status: { $ne: "active" } }, { deletionRequestedAt: { $ne: null } }] });
+  if (req.user?._id) {
+    const blocks = await UserBlock.find({ $or: [{ blocker: req.user._id }, { blocked: req.user._id }] }).select("blocker blocked").lean();
+    excludedUserIds = excludedUserIds.concat(blocks.map((block) => String(block.blocker) === String(req.user._id) ? block.blocked : block.blocker));
+  }
+  if (excludedUserIds.length) filter.user = { $nin: excludedUserIds };
+
+  const [rows, total] = await Promise.all([
+    SeenEngagement.find(filter)
+      .sort({ createdAt: -1, _id: -1 })
+      .skip((paging.page - 1) * paging.limit)
+      .limit(paging.limit)
+      .populate("user", "name username avatar isVerified status deletionRequestedAt")
+      .lean(),
+    SeenEngagement.countDocuments(filter),
+  ]);
+
+  const items = rows
+    .filter((item) => item.user)
+    .map((item) => ({
+      id: String(item._id),
+      reaction: item.reaction || "LIKE",
+      createdAt: item.createdAt,
+      user: {
+        id: String(item.user._id),
+        displayName: item.user.name || item.user.username || "Atseen user",
+        username: item.user.username || "",
+        avatarUrl: item.user.avatar || "",
+        verified: Boolean(item.user.isVerified),
+      },
+    }));
+
+  return sendResponse(res, 200, "Seen reactions fetched", {
+    items,
+    pagination: {
+      ...paging,
+      total,
+      pages: Math.max(1, Math.ceil(total / paging.limit)),
+      hasMore: paging.page * paging.limit < total,
+    },
+  });
+});
 
 export const reactToSeen = asyncHandler(async (req, res) => {
   const publication = await publishedSeen(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const reaction = String(req.body.reaction || "").toUpperCase();
