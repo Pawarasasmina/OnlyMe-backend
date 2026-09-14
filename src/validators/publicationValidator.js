@@ -10,7 +10,7 @@ const visibility = (value) => { const result = String(value || "PUBLIC").trim().
 
 export function derivedPublicationPolicy(kind) {
   if (!PUBLICATION_KINDS.includes(kind)) throw new ApiError(400, "Unsupported publication kind");
-  return kind === "SEEN" ? { pricing: { mode: "FREE", starsAmount: null, presetId: null }, previewPolicy: "ALL_FREE", placement: "SEEN" } : kind === "WORLD" ? { pricing: { mode: "FREE", starsAmount: null, presetId: null }, previewPolicy: "ALL_FREE", placement: "PROFILE_ORBIT" } : { previewPolicy: "ONE_CHAPTER", placement: "PROFILE_ORBIT" };
+  return kind === "SEEN" ? { pricing: { mode: "FREE", starsAmount: null, presetId: null }, previewPolicy: "ALL_FREE", placement: "SEEN" } : kind === "WORLD" ? { pricing: { mode: "FREE", starsAmount: null, presetId: null }, previewPolicy: "ALL_FREE", placement: "PROFILE_ORBIT" } : { previewPolicy: "ONE_CHAPTER", placement: kind === "EXPERIENCE" ? "PROFILE_EXPERIENCES" : "PROFILE_ORBIT" };
 }
 
 export function normalizePublicationDraft(payload = {}, { partial = false, kind = "" } = {}) {
@@ -23,6 +23,10 @@ export function normalizePublicationDraft(payload = {}, { partial = false, kind 
   if (Object.hasOwn(payload, "seriesId") || Object.hasOwn(payload, "series")) result.series = objectId(payload.seriesId || payload.series, "seriesId");
   if (!partial || Object.hasOwn(payload, "tags")) { if (!Array.isArray(payload.tags || [])) throw new ApiError(400, "Tags must be an array"); result.tags = [...new Set((payload.tags || []).map((tag) => text(tag, PUBLICATION_LIMITS.tag, "tag").toLowerCase()).filter(Boolean))]; if (result.tags.length > PUBLICATION_LIMITS.tags) throw new ApiError(400, "Too many tags"); }
   if (Object.hasOwn(payload, "pricing")) result.pricing = payload.pricing;
+  if (Object.hasOwn(payload, "includedInWorld")) result.includedInWorld = Boolean(payload.includedInWorld);
+  if (Object.hasOwn(payload, "experiencePath")) result.experiencePath = text(payload.experiencePath, PUBLICATION_LIMITS.summary, "Experience path");
+  if (Object.hasOwn(payload, "experienceLocation")) result.experienceLocation = text(payload.experienceLocation, 120, "Experience location");
+  if (Object.hasOwn(payload, "allowDownload")) result.allowDownload = Boolean(payload.allowDownload);
   if (Object.hasOwn(payload, "planet")) result.planet = { emoji: text(payload.planet?.emoji, 16, "planet emoji"), accent: text(payload.planet?.accent, 40, "planet accent") };
   if (Object.hasOwn(payload, "replyToSeenId") || Object.hasOwn(payload, "replyToSeen")) result.replyToSeen = objectId(payload.replyToSeenId || payload.replyToSeen, "replyToSeenId");
   return result;
@@ -62,11 +66,12 @@ export function assertCompletePublication(publication, chapters) {
   text(publication.title, PUBLICATION_LIMITS.title, "Title", true); text(publication.summary, PUBLICATION_LIMITS.summary, "Summary", true); text(publication.category, PUBLICATION_LIMITS.category, "Category", true);
   if (publication.kind === "SEEN") { seenCategory(publication.category); visibility(publication.visibility); }
   if (!publication.coverMedia?.assetId) throw new ApiError(400, "A verified cover image is required");
-  if (chapters.length < rules.minChapters || chapters.length > rules.maxChapters) throw new ApiError(400, `${publication.kind} requires ${rules.minChapters}-${rules.maxChapters} chapters`);
+  if (chapters.length < rules.minChapters || (rules.maxChapters && chapters.length > rules.maxChapters)) throw new ApiError(400, rules.maxChapters ? `${publication.kind} requires ${rules.minChapters}-${rules.maxChapters} chapters` : `${publication.kind} requires at least ${rules.minChapters} chapters`);
   chapters.forEach((chapter) => normalizeChapter(chapter));
   const previews = chapters.filter((chapter) => chapter.isPreview).length;
   if (publication.kind === "SEEN") { if (publication.pricing?.mode !== "FREE" || publication.pricing?.starsAmount != null) throw new ApiError(400, "Seen must be free"); if (previews !== chapters.length) throw new ApiError(400, "Every Seen chapter must be public"); }
   if (publication.kind === "WORLD") { if (publication.pricing?.mode !== "FREE" || publication.pricing?.starsAmount != null) throw new ApiError(400, "Free Worlds cannot charge Stars"); if (previews !== chapters.length) throw new ApiError(400, "Every free World chapter must be open"); }
   if (publication.kind === "PREMIUM_WORLD") { if (publication.pricing?.mode !== "MONTHLY" || !PREMIUM_PRICE_PRESETS.includes(publication.pricing?.starsAmount)) throw new ApiError(400, "Choose a supported creator residency price"); if (previews !== 1 || !chapters[0]?.isPreview) throw new ApiError(400, "Premium Planet Chapter 1 must be the only free chapter"); }
+  if (publication.kind === "EXPERIENCE") { const free = publication.pricing?.mode === "FREE"; if (!free && (publication.pricing?.mode !== "ONE_TIME" || !Number.isSafeInteger(publication.pricing?.starsAmount) || publication.pricing.starsAmount < 10)) throw new ApiError(400, "Experience price must be at least 10 Stars"); if (free && publication.pricing?.starsAmount != null) throw new ApiError(400, "Free Experiences cannot charge Stars"); if (free ? previews !== chapters.length : previews !== 0) throw new ApiError(400, free ? "Every free Experience chapter must be open" : "Premium Experience chapters unlock only after purchase"); }
   return policy;
 }

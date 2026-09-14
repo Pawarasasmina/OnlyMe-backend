@@ -34,13 +34,14 @@ async function loadProfile(owner, viewer) {
   const seenStatus = { $in: ["PUBLISHED", "CHANGES_REQUESTED"] };
   const seenAudienceFilter = await seenVisibilityFilter(viewer || null, [owner._id]);
   const planetStatus = profileOwner ? { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } : { $in: ["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED"] };
-  const [roleProfile, content, publishedContentCount, seens, planets, ownFeedPosts, shares, wallShares, feedSharePosts, followerCount, followingCount, supporterRows, viewerRelationships, viewerSeeSignal] = await Promise.all([
+  const [roleProfile, content, publishedContentCount, seens, planets, experiences, ownFeedPosts, shares, wallShares, feedSharePosts, followerCount, followingCount, supporterRows, viewerRelationships, viewerSeeSignal] = await Promise.all([
     Model.findOne({ user: owner._id }).lean(),
     Content.find(publishedFilter)
       .sort({ publishedAt: -1, _id: -1 }).limit(30).populate("creator", "name username avatar").lean(),
     Content.countDocuments(publishedFilter),
     Publication.find({ creator: owner._id, kind: "SEEN", status: seenStatus, publishedSnapshot: { $exists: true }, ...seenAudienceFilter }).select("+submittedSnapshot").sort({ publishedAt: -1, updatedAt: -1 }).populate("creator", "name username avatar").populate("series", "name").lean(),
     Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
+    Publication.find({ creator: owner._id, kind: "EXPERIENCE", status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ publishedAt: -1, updatedAt: -1 }).limit(3).populate("creator", "name username avatar").lean(),
     FeedPost.find({ author: owner._id, status: "published", visibility: "public", deletedAt: null }).sort({ publishedAt: -1, createdAt: -1 }).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }]).lean(),
     SeenEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("publication text createdAt").lean(),
     WallEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("post text createdAt").lean(),
@@ -89,7 +90,7 @@ async function loadProfile(owner, viewer) {
     currentPeriodEnd: { $gt: new Date() },
   }).select("premiumPublication").lean() : null;
   const ownWallPosts = ownFeedPosts.map((post) => serializePost(post, viewer));
-  const publicationPhotos = [...seens, ...planets].flatMap((publication) => [
+  const publicationPhotos = [...seens, ...planets, ...experiences].flatMap((publication) => [
     publication.coverMedia ? { ...publication.coverMedia, title: publication.title, publishedAt: publication.publishedAt } : null,
     publication.introMedia ? { ...publication.introMedia, title: publication.title, publishedAt: publication.publishedAt } : null,
   ]).filter(Boolean);
@@ -100,7 +101,7 @@ async function loadProfile(owner, viewer) {
     ...publicationPhotos,
     ...feedPhotos,
   ].filter(Boolean);
-  return serializeUnifiedProfile({ owner, roleProfile, content, photos: profilePhotos, pinnedMessageGroup, planets, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal) });
+  return serializeUnifiedProfile({ owner, roleProfile, content, photos: profilePhotos, pinnedMessageGroup, planets, experiences, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal) });
 }
 
 async function relationshipTarget(username) {
