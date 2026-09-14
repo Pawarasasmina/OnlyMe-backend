@@ -1,15 +1,26 @@
 import { Router } from "express";
-import { getOrbitCreators, getOwnProfileConnections, getOwnProfileViewers, getOwnUnifiedProfile, getProfileConnections, getUnifiedProfileByUsername, reportUnifiedProfile, toggleProfileFollow, toggleProfileSeeSignal } from "../controllers/unifiedProfileController.js";
+import { getOrbitCreators, getOwnProfileConnections, getOwnProfileViewers, getOwnUnifiedProfile, getProfileConnections, getUnifiedProfileByUsername, reportUnifiedProfile, toggleProfileFollow, toggleProfileSeeSignal, updateOwnProfileStatus } from "../controllers/unifiedProfileController.js";
+import { addOwnProfileMedia, addOwnProfileMediaFromSeen, addOwnProfileMediaFromStory, deleteOwnProfileMedia, getOwnProfileMedia, getProfileMediaByUsername, likeProfileMediaByUsername, reportProfileMediaByUsername } from "../controllers/profileMediaController.js";
 import { optionalProtect, protect } from "../middleware/authMiddleware.js";
+import { uploadProfileMedia } from "../middleware/uploadMiddleware.js";
 
 const router = Router();
 router.get("/me", protect, getOwnUnifiedProfile);
+router.patch("/me/status", protect, updateOwnProfileStatus);
 router.get("/me/connections", protect, getOwnProfileConnections);
 router.get("/me/viewers", protect, getOwnProfileViewers);
+router.get("/me/media", protect, getOwnProfileMedia);
+router.post("/me/media", protect, uploadProfileMedia.single("media"), addOwnProfileMedia);
+router.post("/me/media/from-story", protect, addOwnProfileMediaFromStory);
+router.post("/me/media/from-seen", protect, addOwnProfileMediaFromSeen);
+router.delete("/me/media/:mediaId", protect, deleteOwnProfileMedia);
 router.get("/orbit", protect, getOrbitCreators);
 router.put("/:username/follow", protect, toggleProfileFollow);
 router.put("/:username/see-signal", protect, toggleProfileSeeSignal);
 router.post("/:username/report", protect, reportUnifiedProfile);
 router.get("/:username/connections", optionalProtect, getProfileConnections);
+router.get("/:username/media", optionalProtect, getProfileMediaByUsername);
+router.put("/:username/media/:mediaId/like", protect, likeProfileMediaByUsername);
+router.post("/:username/media/:mediaId/report", protect, reportProfileMediaByUsername);
 router.get("/:username", optionalProtect, getUnifiedProfileByUsername);
 export default router;

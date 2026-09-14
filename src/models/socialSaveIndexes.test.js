@@ -38,8 +38,9 @@ test("Wall reactions support the complete picker while preserving one reaction p
 
 test("Seen reactions support the prototype picker while preserving one reaction per user", () => {
   assert.deepEqual(SeenEngagement.schema.path("reaction").enumValues, SEEN_REACTIONS);
-  assert.deepEqual(SEEN_REACTIONS.slice(0, 10), ["LIKE", "LOVE", "FIRE", "CLAP", "LAUGH", "SEE_YOU", "SAD", "PHONE", "STRONG", "PRAY"]);
+  assert.deepEqual(SEEN_REACTIONS.slice(0, 15), ["LIKE", "LOVE", "FIRE", "CLAP", "LAUGH", "SEE_YOU", "WOW", "TEARY", "ADMIRE", "SAD", "HUG", "STRONG", "PRAY", "HUNDRED", "SPARKLES"]);
   assert.ok(SeenEngagement.schema.indexes().some(([, options]) => options.name === "unique_seen_reaction_per_user" && options.unique));
+  assert.ok(SeenEngagement.schema.indexes().some(([, options]) => options.name === "seen_reactors_by_reaction"));
 });
 
 test("a shared Wall post has independent reactions and saves", () => {

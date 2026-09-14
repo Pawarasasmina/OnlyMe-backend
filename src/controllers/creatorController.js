@@ -5,6 +5,7 @@ import CreatorProfile from "../models/CreatorProfile.js";
 import Content from "../models/Content.js";
 import Subscription from "../models/Subscription.js";
 import ApiError from "../utils/ApiError.js";
+import { buildCreatorDashboard } from "../services/creatorDashboardService.js";
 
 async function buildCreatorView(user) {
   const [profile, posts, members] = await Promise.all([
@@ -52,8 +53,7 @@ export const getCreatorByUsername = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Creator fetched", { creator });
 });
 
-export const getCreatorDashboard = asyncHandler(async (_req, res) => {
-  return sendResponse(res, 200, "Creator dashboard placeholder", {
-    metrics: [],
-  });
+export const getCreatorDashboard = asyncHandler(async (req, res) => {
+  const dashboard = await buildCreatorDashboard(req.user._id);
+  return sendResponse(res, 200, "Creator dashboard fetched", dashboard);
 });
