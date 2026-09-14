@@ -3,6 +3,7 @@ import path from "node:path";
 import ApiError from "../utils/ApiError.js";
 import { env } from "../config/env.js";
 import { POST_ALLOWED_VOICE_TYPES, POST_MAX_IMAGE_SIZE, POST_MAX_IMAGES, POST_MAX_VOICE_NOTES } from "../constants/postConstants.js";
+import { PROFILE_MEDIA_ALLOWED_MIME_TYPES, PROFILE_MEDIA_MAX_UPLOAD_SIZE_BYTES } from "../constants/profileMediaConstants.js";
 
 const storage = multer.diskStorage({
   destination: "uploads/",
@@ -45,6 +46,17 @@ export const uploadCoverImage = multer({
   storage,
   fileFilter: imageFileFilter,
   limits: { fileSize: 8 * 1024 * 1024 },
+});
+
+const allowedProfileMediaTypes = new Set(PROFILE_MEDIA_ALLOWED_MIME_TYPES);
+export const uploadProfileMedia = multer({
+  storage,
+  limits: { files: 1, fileSize: PROFILE_MEDIA_MAX_UPLOAD_SIZE_BYTES },
+  fileFilter: (_req, file, callback) => {
+    const mimeType = normalizedMimeType(file);
+    if (!allowedProfileMediaTypes.has(mimeType)) return callback(new ApiError(400, "Profile Media supports JPEG, PNG, WebP, MP4, MOV, or WebM files"));
+    callback(null, true);
+  },
 });
 
 const allowedContentTypes = new Set([

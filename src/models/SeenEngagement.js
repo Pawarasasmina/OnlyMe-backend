@@ -1,6 +1,24 @@
 import mongoose from "mongoose";
 
-export const SEEN_REACTIONS = ["LIKE", "LOVE", "FIRE", "CLAP", "LAUGH", "SEE_YOU", "SAD", "PHONE", "STRONG", "PRAY", "INSIGHTFUL"];
+export const SEEN_REACTIONS = [
+  "LIKE",
+  "LOVE",
+  "FIRE",
+  "CLAP",
+  "LAUGH",
+  "SEE_YOU",
+  "WOW",
+  "TEARY",
+  "ADMIRE",
+  "SAD",
+  "HUG",
+  "STRONG",
+  "PRAY",
+  "HUNDRED",
+  "SPARKLES",
+  "PHONE",
+  "INSIGHTFUL",
+];
 
 const seenEngagementSchema = new mongoose.Schema({
   publication: { type: mongoose.Schema.Types.ObjectId, ref: "Publication", required: true, index: true },
@@ -15,5 +33,6 @@ seenEngagementSchema.index({ publication: 1, user: 1, type: 1, reaction: 1 }, { 
 seenEngagementSchema.index({ publication: 1, user: 1, type: 1 }, { name: "unique_seen_save_per_user", unique: true, partialFilterExpression: { type: "SAVE" } });
 seenEngagementSchema.index({ publication: 1, user: 1, type: 1 }, { name: "unique_world_walk_per_user", unique: true, partialFilterExpression: { type: "WALKED" } });
 seenEngagementSchema.index({ publication: 1, type: 1, createdAt: -1 });
+seenEngagementSchema.index({ publication: 1, type: 1, reaction: 1, createdAt: -1 }, { name: "seen_reactors_by_reaction" });
 
 export default mongoose.model("SeenEngagement", seenEngagementSchema);

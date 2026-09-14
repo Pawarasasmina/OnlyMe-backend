@@ -1,0 +1,9 @@
+export const PROFILE_MEDIA_IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"];
+export const PROFILE_MEDIA_VIDEO_MIME_TYPES = ["video/mp4", "video/webm", "video/quicktime"];
+export const PROFILE_MEDIA_ALLOWED_MIME_TYPES = [...PROFILE_MEDIA_IMAGE_MIME_TYPES, ...PROFILE_MEDIA_VIDEO_MIME_TYPES];
+export const PROFILE_MEDIA_IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
+export const PROFILE_MEDIA_VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov"];
+export const PROFILE_MEDIA_MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024;
+export const PROFILE_MEDIA_MAX_VIDEO_SIZE_BYTES = 80 * 1024 * 1024;
+export const PROFILE_MEDIA_MAX_UPLOAD_SIZE_BYTES = PROFILE_MEDIA_MAX_VIDEO_SIZE_BYTES;
+export const PROFILE_MEDIA_MAX_VIDEO_DURATION_SECONDS = 60;

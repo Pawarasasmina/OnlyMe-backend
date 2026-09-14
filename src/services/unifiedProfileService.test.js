@@ -62,6 +62,20 @@ test("profile contract separates published Seens, planets, and legacy content", 
   assert.equal(result.seens.length, 1); assert.equal(result.planets.length, 1); assert.equal(result.publicContent.length, 0);
 });
 
+test("profile contract exposes only intentional Profile Media", () => {
+  const result = serializeUnifiedProfile({
+    owner: { ...owner, avatar: "https://example.com/avatar.jpg" },
+    roleProfile: { ...roleProfile, coverPhoto: "https://example.com/cover.jpg" },
+    viewer: null,
+    media: [{ id: "media-id", type: "image", url: "https://example.com/media.jpg", sourceType: "direct" }],
+  });
+  assert.equal(result.media.length, 1);
+  assert.equal(result.media[0].url, "https://example.com/media.jpg");
+  assert.equal(JSON.stringify(result.media).includes("avatar.jpg"), false);
+  assert.equal(JSON.stringify(result.media).includes("cover.jpg"), false);
+  assert.equal("photos" in result, false);
+});
+
 test("profile planets expose active premium membership access to the subscribed viewer", () => {
   const snapshot = { metadata: { title: "Inner Room", summary: "", description: "", category: "", tags: [], pricing: { mode: "MONTHLY", starsAmount: 190 }, planet: { emoji: "🪐" } }, chapters: [{ stableChapterId: "free", order: 0, title: "Free", isPreview: true, blocks: [] }, { stableChapterId: "private", order: 1, title: "Private", isPreview: false, blocks: [] }], version: 1, frozenAt: new Date() };
   const planet = { _id: "premium-world", creator: owner._id, kind: "PREMIUM_WORLD", status: "PUBLISHED", publishedSnapshot: snapshot };

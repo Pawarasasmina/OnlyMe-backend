@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { v2 as cloudinary } from "cloudinary";
 import { env } from "../config/env.js";
+import ProfileMedia from "../models/ProfileMedia.js";
 import ApiError from "../utils/ApiError.js";
 
 cloudinary.config({ cloud_name: env.cloudinaryCloudName, api_key: env.cloudinaryApiKey, api_secret: env.cloudinaryApiSecret, secure: true });
@@ -24,6 +25,7 @@ export async function verifyPublicationAsset({ assetId, blockId, chapterId, crea
 
 export async function deletePublicationFile(media = {}) {
   if (!media.assetId) return;
+  if (await ProfileMedia.exists({ assetId: media.assetId })) return;
   configured();
   await cloudinary.uploader.destroy(media.assetId, {
     invalidate: true,
