@@ -6,11 +6,26 @@ const publicationSeriesSchema = new mongoose.Schema(
     creator: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     name: { type: String, required: true, trim: true, maxlength: PUBLICATION_LIMITS.seriesName },
     normalizedName: { type: String, required: true, lowercase: true, trim: true, maxlength: PUBLICATION_LIMITS.seriesName, index: true },
+    description: { type: String, trim: true, default: "", maxlength: PUBLICATION_LIMITS.description },
+    coverMedia: {
+      assetId: String,
+      resourceType: { type: String, enum: ["image", "video"] },
+      mediaType: { type: String, enum: ["IMAGE", "VIDEO", "AUDIO", "VOICE"] },
+      secureUrl: String,
+      format: String,
+      bytes: Number,
+      width: Number,
+      height: Number,
+      duration: Number,
+    },
+    isPinned: { type: Boolean, default: false, index: true },
+    sortOrder: { type: Number, default: 0 },
     archivedAt: { type: Date, default: null, index: true },
   },
   { timestamps: true },
 );
 
+publicationSeriesSchema.index({ creator: 1, createdAt: -1 });
 publicationSeriesSchema.index(
   { creator: 1, normalizedName: 1 },
   { unique: true, partialFilterExpression: { archivedAt: null } },
