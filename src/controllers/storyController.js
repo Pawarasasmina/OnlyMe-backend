@@ -4,6 +4,7 @@ import StoryEngagement from "../models/StoryEngagement.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import Conversation from "../models/Conversation.js";
 import Message from "../models/Message.js";
+import OrbitSignal from "../models/OrbitSignal.js";
 import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
 import { storeFile, deleteAsset } from "../services/storageService.js";
@@ -344,6 +345,21 @@ export const reactStory = asyncHandler(async (req, res) => {
     { upsert: true, new: true },
   );
   return sendResponse(res, 200, "Reaction sent", { reaction: engagement.reaction, reactedAt: engagement.updatedAt });
+});
+
+export const seeStory = asyncHandler(async (req, res) => {
+  const story = await followedStory(req.params.id, req.user._id);
+  if (String(story.creator) === String(req.user._id)) throw new ApiError(400, "You cannot send I see you to your own story");
+  const now = new Date();
+  const signal = await OrbitSignal.findOneAndUpdate(
+    { sender: req.user._id, targetUser: story.creator, type: "SEE_YOU", status: "active" },
+    {
+      $set: { acknowledgedAt: null, signaledAt: now },
+      $setOnInsert: { sender: req.user._id, targetUser: story.creator, type: "SEE_YOU", status: "active" },
+    },
+    { new: true, upsert: true, setDefaultsOnInsert: true },
+  );
+  return sendResponse(res, 201, "I see you sent", { signalId: String(signal._id), storyId: String(story._id) });
 });
 
 export const replyStory = asyncHandler(async (req, res) => {

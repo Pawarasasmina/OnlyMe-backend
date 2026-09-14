@@ -204,3 +204,27 @@ test("activity helpers count only unread received acknowledgable rows", () => {
 
   assert.equal(fanDashboardTestUtils.unreadActivityCount(rows), 1);
 });
+
+test("gift activity keeps Direct, Story, and Dream sources out of chat semantics", () => {
+  const base = {
+    _id: "gift1",
+    sender: { _id: "sender1", name: "Anna", username: "anna" },
+    recipient: { _id: "recipient1", name: "Mia", username: "mia" },
+    giftName: "Love You",
+    giftImageUrl: "https://example.com/gift.png",
+    starsAmount: 25,
+    createdAt: new Date("2026-09-14T10:00:00.000Z"),
+  };
+  const direct = fanDashboardTestUtils.giftActivity(base, "received", "Direct");
+  const story = fanDashboardTestUtils.giftActivity(base, "sent", "Story");
+  const dream = fanDashboardTestUtils.giftActivity({ ...base, supporter: base.sender, creator: base.recipient, dream: { title: "My studio" } }, "received", "Dream");
+
+  assert.equal(direct.type, "gift");
+  assert.equal(direct.metadata.giftSource, "Direct");
+  assert.equal(direct.actionPath, "/profile/anna");
+  assert.equal(story.metadata.giftSource, "Story");
+  assert.equal(story.starsChange, -25);
+  assert.equal(dream.metadata.giftSource, "Dream");
+  assert.equal(dream.preview, "My studio");
+  assert.deepEqual(direct.filterKeys, ["support", "earnings"]);
+});

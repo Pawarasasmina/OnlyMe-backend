@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createStory, deleteStory, getStory, getStoryInsights, listStories, reactStory, replyStory, updateStoryStatus, viewStory } from "../controllers/storyController.js";
+import { createStory, deleteStory, getStory, getStoryInsights, listStories, reactStory, replyStory, seeStory, updateStoryStatus, viewStory } from "../controllers/storyController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { uploadStoryMedia } from "../middleware/uploadMiddleware.js";
@@ -12,6 +12,7 @@ router.get("/:id", protect, authorize("fan", "creator"), getStory);
 router.post("/", protect, authorize("fan", "creator"), uploadStoryMedia.single("image"), createStory);
 router.post("/:id/views", protect, authorize("fan", "creator"), viewStory);
 router.post("/:id/reactions", protect, authorize("fan", "creator"), requireMessagingAccess, reactStory);
+router.post("/:id/see-you", protect, authorize("fan", "creator"), seeStory);
 router.post("/:id/replies", protect, authorize("fan", "creator"), requireMessagingAccess, replyStory);
 router.delete("/:id", protect, authorize("fan", "creator"), deleteStory);
 export default router;

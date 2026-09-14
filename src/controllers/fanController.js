@@ -13,6 +13,9 @@ import SeenEngagement from "../models/SeenEngagement.js";
 import WallEngagement from "../models/WallEngagement.js";
 import WallShareEngagement from "../models/WallShareEngagement.js";
 import OrbitSignal from "../models/OrbitSignal.js";
+import ActivityAcknowledgement from "../models/ActivityAcknowledgement.js";
+import ChatGift from "../models/ChatGift.js";
+import DreamGift from "../models/DreamGift.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 
@@ -654,6 +657,47 @@ function unreadActivityCount(items) {
   return items.filter((item) => item.direction === "received" && item.canAcknowledge && !item.acknowledged && !item.read).length;
 }
 
+function giftActivity(gift, direction, source) {
+  const received = direction === "received";
+  const person = received ? gift.sender || gift.supporter : gift.recipient || gift.creator;
+  const privateDream = source === "Dream" && received && gift.privateSupport;
+  const actor = privateDream ? null : serializeCreator(person);
+  const name = privateDream ? "Someone" : person?.name || person?.username || "Someone";
+  const giftName = gift.giftName || "a gift";
+  return activityBase({
+    id: `gift-${direction}-${gift._id}`,
+    type: "gift",
+    direction,
+    filter: "support",
+    filterKeys: ["support", received ? "earnings" : "purchases"],
+    title: received ? `${name} sent you ${giftName}` : `You sent ${giftName} to ${name}`,
+    preview: source === "Dream" && gift.dream?.title ? gift.dream.title : "",
+    createdAt: gift.createdAt,
+    actor,
+    actionPath: person?.username ? `/profile/${encodeURIComponent(person.username)}` : null,
+    starsChange: (received ? 1 : -1) * Number(gift.starsAmount || 0),
+    event: `${source.toUpperCase()}_GIFT`,
+    reference: { type: source === "Dream" ? "DREAM_GIFT" : "CHAT_GIFT", id: String(gift._id) },
+    metadata: { giftName, giftSource: source, giftImageUrl: gift.giftImageUrl || "" },
+    dedupeKey: `${source.toLowerCase()}-gift:${gift._id}`,
+    canAcknowledge: received,
+  });
+}
+
+const acknowledgementKey = (activityId) => String(activityId || "")
+  .replace("-received-", "-interaction-")
+  .replace("-sent-", "-interaction-");
+
+async function applyAcknowledgements(items) {
+  const keys = [...new Set(items.map((item) => acknowledgementKey(item.id)))];
+  const receipts = keys.length ? await ActivityAcknowledgement.find({ eventKey: { $in: keys } }).select("eventKey acknowledgedAt").lean() : [];
+  const byKey = new Map(receipts.map((receipt) => [receipt.eventKey, receipt.acknowledgedAt]));
+  return items.map((item) => {
+    const acknowledgedAt = byKey.get(acknowledgementKey(item.id));
+    return acknowledgedAt ? { ...item, acknowledged: true, acknowledgedAt } : item;
+  });
+}
+
 async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivity) {
   const [
     subscriptions,
@@ -673,6 +717,10 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
     sentFeedPostEngagementPosts,
     directAccessWindows,
     callSessions,
+    receivedChatGifts,
+    sentChatGifts,
+    receivedDreamGifts,
+    sentDreamGifts,
   ] = await Promise.all([
     Subscription.find({ fan: fanId }).sort({ updatedAt: -1 }).limit(limit).populate("creator", "name username avatar").lean(),
     Notification.find({ user: fanId }).sort({ createdAt: -1 }).limit(limit).lean(),
@@ -711,6 +759,10 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
     }).sort({ updatedAt: -1, createdAt: -1 }).limit(limit * 4).populate("author", "name username avatar role status").populate("reactions.user", "name username avatar role status").populate("comments.user", "name username avatar role status").populate("saves.user", "name username avatar role status").lean(),
     DAWindow.find({ $or: [{ creator: fanId }, { fan: fanId }] }).sort({ createdAt: -1 }).limit(limit).populate("fan creator", "name username avatar role status").lean(),
     CallSession.find({ $or: [{ recipient: fanId }, { caller: fanId }] }).sort({ createdAt: -1 }).limit(limit).populate("caller recipient", "name username avatar role status").lean(),
+    ChatGift.find({ recipient: fanId }).sort({ createdAt: -1 }).limit(limit).populate("sender", "name username avatar role status").lean(),
+    ChatGift.find({ sender: fanId }).sort({ createdAt: -1 }).limit(limit).populate("recipient", "name username avatar role status").lean(),
+    DreamGift.find({ creator: fanId }).sort({ createdAt: -1 }).limit(limit).populate("supporter", "name username avatar role status").populate("dream", "title").lean(),
+    DreamGift.find({ supporter: fanId }).sort({ createdAt: -1 }).limit(limit).populate("creator", "name username avatar role status").populate("dream", "title").lean(),
   ]);
 
   const receivedShareRows = receivedWallShareEngagements
@@ -745,6 +797,10 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
     ...feedPostEngagementActivities(sentFeedPostEngagementPosts, { direction: "sent", fanId }),
     ...directAccessWindows.map((window) => directAccessActivity({ ...window, questionQuote: directAccessQuestionByWindow.get(String(window._id)) || "" }, fanId)),
     ...callSessions.map((call) => callActivity(call, fanId)),
+    ...receivedChatGifts.map((gift) => giftActivity(gift, "received", gift.sourceType === "STORY" ? "Story" : "Direct")),
+    ...sentChatGifts.map((gift) => giftActivity(gift, "sent", gift.sourceType === "STORY" ? "Story" : "Direct")),
+    ...receivedDreamGifts.map((gift) => giftActivity(gift, "received", "Dream")),
+    ...sentDreamGifts.map((gift) => giftActivity(gift, "sent", "Dream")),
     ...subscriptions.map((subscription) => activityBase({
       id: `subscription-${subscription._id}`,
       type: "subscription",
@@ -760,7 +816,7 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
       actionPath: "/memberships",
       canAcknowledge: false,
     })),
-    ...transactions.map(transactionActivity),
+    ...transactions.filter((transaction) => !["CHAT_GIFT_DEBIT", "CHAT_GIFT_EARNING", "DREAM_GIFT_DEBIT", "DREAM_CREATOR_EARNING"].includes(transaction.type || transaction.event || transaction.transactionType)).map(transactionActivity),
     ...messages
       .filter((message) => message.sender?.role === "creator" && message.sender?.status === "active")
       .map((message) => activityBase({
@@ -775,7 +831,7 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
         actor: serializeCreator(message.sender),
         actionPath: "/messages",
       })),
-    ...notifications.map(notificationActivity),
+    ...notifications.filter((notification) => !["chat_gift", "direct_gift", "story_gift", "dream_gift"].includes(notification.type)).map(notificationActivity),
   ];
 
   const seenDedupe = new Set();
@@ -943,7 +999,7 @@ export const getFanActivity = asyncHandler(async (req, res) => {
   const requestedLimit = limitFromQuery(req.query.limit, 30);
   const page = Math.max(1, Number(req.query.page) || 1);
   const queryLimit = Math.min(100, Math.max(requestedLimit * page + 1, requestedLimit + 1));
-  const allActivity = await getActivity(req.user._id, wallet, queryLimit);
+  const allActivity = await applyAcknowledgements(await getActivity(req.user._id, wallet, queryLimit));
   const filteredActivity = filterActivityItems(allActivity, { direction, filter });
   const activity = filteredActivity.slice(0, requestedLimit * page);
 
@@ -963,6 +1019,17 @@ export const getFanActivity = asyncHandler(async (req, res) => {
 export const acknowledgeFanActivity = asyncHandler(async (req, res) => {
   const activityId = String(req.params.activityId || "");
   const acknowledgedAt = new Date();
+
+  const wallet = await Wallet.findOne({ user: req.user._id }).lean();
+  const receivedItems = await getActivity(req.user._id, wallet, 100);
+  const activity = receivedItems.find((item) => String(item.id) === activityId && item.direction === "received" && item.canAcknowledge);
+  if (!activity) return sendResponse(res, 404, "Activity not found", { acknowledged: false });
+
+  await ActivityAcknowledgement.findOneAndUpdate(
+    { eventKey: acknowledgementKey(activityId) },
+    { $set: { acknowledgedBy: req.user._id, acknowledgedAt } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
 
   if (activityId.startsWith("notification-")) {
     const notificationId = activityId.replace("notification-", "");
@@ -992,9 +1059,7 @@ export const acknowledgeFanActivity = asyncHandler(async (req, res) => {
     });
   }
 
-  return sendResponse(res, 422, "Activity acknowledgement is not supported for this item", {
-    acknowledged: false,
-  });
+  return sendResponse(res, 200, "Activity acknowledged", { acknowledged: true, acknowledgedAt });
 });
 
 export const getFanContentAccess = asyncHandler(async (req, res) => {
@@ -1012,6 +1077,7 @@ export const fanDashboardTestUtils = {
   filterSubscriptions,
   followActivity,
   filterActivityItems,
+  giftActivity,
   groupedSaveActivities,
   isExpiringSoon,
   messagePreview,
