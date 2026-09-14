@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   clearRecent,
   defaults,
+  locations,
   recent,
   removeRecent,
   search,
@@ -17,6 +18,7 @@ router.use(protect, searchRateLimit);
 router.get("/", search);
 router.get("/defaults", defaults);
 router.get("/suggestions", suggestions);
+router.get("/locations", locations);
 router.get("/recent", recent);
 router.delete("/recent/:id", removeRecent);
 router.delete("/recent", clearRecent);

@@ -12,6 +12,7 @@ import {
 import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyticsEventService.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
+import { searchLiveLocations } from "../services/locationSearchService.js";
 
 export const searchRateLimit = rateLimit({
   windowMs: 60 * 1000,
@@ -53,6 +54,16 @@ export const search = asyncHandler(async (req, res) => {
 export const suggestions = asyncHandler(async (req, res) => {
   const data = await searchSuggestions({ q: req.query.q, user: req.user });
   return sendResponse(res, 200, "Search suggestions fetched", data);
+});
+
+export const locations = asyncHandler(async (req, res) => {
+  const items = await searchLiveLocations({
+    language: req.query.language,
+    latitude: req.query.latitude,
+    longitude: req.query.longitude,
+    query: req.query.q,
+  });
+  return sendResponse(res, 200, "Live locations fetched", { items });
 });
 
 export const defaults = asyncHandler(async (req, res) => {

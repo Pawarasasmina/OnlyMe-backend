@@ -16,6 +16,9 @@ import GroupMessage from "../models/GroupMessage.js";
 import Gift from "../models/Gift.js";
 import ChatGift from "../models/ChatGift.js";
 import Notification from "../models/Notification.js";
+import PremiumMembership from "../models/PremiumMembership.js";
+import WorldEntitlement from "../models/WorldEntitlement.js";
+import DreamGift from "../models/DreamGift.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -336,6 +339,7 @@ export const listConversations = asyncHandler(async (req, res) => {
             ],
           },
         },
+        hasStoryReply: { $max: { $cond: [{ $ifNull: ["$storyReply.story", false] }, 1, 0] } },
       },
     },
     { $sort: { "lastMessage.createdAt": -1, "lastMessage._id": -1 } },
@@ -343,6 +347,20 @@ export const listConversations = asyncHandler(async (req, res) => {
   const users = await User.find({ _id: { $in: grouped.map((item) => item._id) }, status: "active" }).select(userFields).lean();
   const userById = new Map(users.map((item) => [String(item._id), item]));
   const conversationStates = await Conversation.find({ $or: [{ fan: me }, { creator: me }, { participants: me }] }).lean();
+  const otherIds = grouped.map((item) => item._id);
+  const [memberships, entitlements, dreamSupporterIds] = await Promise.all([
+    PremiumMembership.find({ creator: me, user: { $in: otherIds }, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] } }).select("user").lean(),
+    WorldEntitlement.find({ creator: me, user: { $in: otherIds }, status: "ACTIVE" }).select("user publication metadata").lean(),
+    DreamGift.find({ creator: me, supporter: { $in: otherIds } }).distinct("supporter"),
+  ]);
+  const experiencePublicationIds = await Publication.find({
+    _id: { $in: entitlements.map((item) => item.publication) },
+    kind: "EXPERIENCE",
+  }).distinct("_id");
+  const experiencePublicationSet = new Set(experiencePublicationIds.map(String));
+  const memberIds = new Set(memberships.map((item) => String(item.user)));
+  const experienceBuyerIds = new Set(entitlements.filter((item) => item.metadata?.publicationKind === "EXPERIENCE" || experiencePublicationSet.has(String(item.publication))).map((item) => String(item.user)));
+  const dreamKeeperIds = new Set(dreamSupporterIds.map(String));
   const stateByOther = new Map(conversationStates.flatMap((item) => {
     const ids = item.participants?.length ? item.participants : [item.fan, item.creator];
     const otherId = ids.find((id) => String(id) !== String(me));
@@ -356,6 +374,11 @@ export const listConversations = asyncHandler(async (req, res) => {
       participant: person(participant),
       lastMessage: item.lastMessage.disappearAfterSeconds !== null && item.lastMessage.disappearAfterSeconds !== undefined ? protectedMessage(serializedMessage(item.lastMessage)) : serializedMessage(item.lastMessage),
       unreadCount: item.unreadCount,
+      hasStoryReply: Boolean(item.hasStoryReply),
+      isUnanswered: String(item.lastMessage.sender) !== String(me),
+      isWorldMember: memberIds.has(String(item._id)),
+      unlockedExperience: experienceBuyerIds.has(String(item._id)),
+      isDreamKeeper: dreamKeeperIds.has(String(item._id)),
       status: stateByOther.get(String(item._id))?.status || "ACTIVE",
       archived: (stateByOther.get(String(item._id))?.archivedBy || []).some((id) => String(id) === String(me)),
       muted: (stateByOther.get(String(item._id))?.mutedBy || []).some((id) => String(id) === String(me)),
