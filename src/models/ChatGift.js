@@ -7,6 +7,7 @@ const schema = new mongoose.Schema({
   gift: { type: mongoose.Schema.Types.ObjectId, ref: "Gift", required: true },
   giftName: { type: String, required: true, maxlength: 80 },
   giftImageUrl: { type: String, required: true, maxlength: 2000 },
+  sourceType: { type: String, enum: ["DIRECT", "STORY"], default: "DIRECT", index: true },
   starsAmount: { type: Number, required: true, min: 1, validate: Number.isSafeInteger },
   debitLedgerEntry: { type: mongoose.Schema.Types.ObjectId, ref: "StarsLedgerEntry", required: true },
   creditLedgerEntry: { type: mongoose.Schema.Types.ObjectId, ref: "StarsLedgerEntry", required: true },

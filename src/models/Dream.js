@@ -5,6 +5,7 @@ const schema = new mongoose.Schema({
   emoji: { type: String, trim: true, maxlength: 16, default: "✨" },
   title: { type: String, trim: true, required: true, maxlength: 40 },
   reason: { type: String, trim: true, required: true, maxlength: 120 },
+  photo: { assetId: String, url: String, resourceType: { type: String, default: "image" } },
   goalStars: { type: Number, required: true, enum: [500, 900, 1500, 2500, 5000] },
   receivedStars: { type: Number, default: 0, min: 0, validate: Number.isSafeInteger },
   supporterCount: { type: Number, default: 0, min: 0, validate: Number.isSafeInteger },
