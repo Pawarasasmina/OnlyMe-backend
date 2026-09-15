@@ -13,13 +13,13 @@ export async function uploadGiftImage(file, adminId) {
   if (!file?.buffer?.length) throw new ApiError(400, "A gift image is required");
   const asset = await new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream({
-      resource_type: "image", folder: "onlyme/gifts", allowed_formats: ["png", "webp", "jpg", "jpeg"],
-      transformation: [{ width: 1024, height: 1024, crop: "limit" }, { quality: "auto:best", fetch_format: "auto" }],
+      resource_type: "image", folder: "onlyme/gifts", allowed_formats: ["png", "webp", "jpg", "jpeg", "gif"],
+      transformation: [{ width: 1024, height: 1024, crop: "limit" }, { quality: "auto:best" }],
       context: { purpose: "dream_gift", admin: String(adminId) },
     }, (error, result) => error ? reject(error) : resolve(result));
     stream.end(file.buffer);
   }).catch((error) => { throw new ApiError(502, error.message || "Gift image upload failed"); });
-  return { assetId: asset.public_id, url: asset.secure_url, format: asset.format, bytes: asset.bytes, width: asset.width, height: asset.height };
+  return { assetId: asset.public_id, url: asset.secure_url, format: asset.format, bytes: asset.bytes, width: asset.width, height: asset.height, isAnimated: Number(asset.pages || 1) > 1 || ["image/gif", "image/webp"].includes(String(file.mimetype || "").toLowerCase()) };
 }
 
 export async function deleteGiftImage(assetId) {

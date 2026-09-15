@@ -506,7 +506,16 @@ export const listChatGifts = asyncHandler(async (req, res) => {
   validId(req.query.recipientId);
   const other = await assertAllowedPair(req.user, req.query.recipientId, { allowBlocked: true });
   const gifts = await giftsForRecipient(other._id);
-  return sendResponse(res, 200, "Chat gifts fetched", { gifts: gifts.map(serializeGift) });
+  const usage = await ChatGift.aggregate([
+    { $match: { recipient: other._id } },
+    { $group: { _id: "$gift", count: { $sum: 1 } } },
+    { $sort: { count: -1, _id: 1 } },
+    { $limit: 4 },
+  ]);
+  const counts = new Map(usage.map((item) => [String(item._id), item.count]));
+  const serialized = gifts.map((gift) => ({ ...serializeGift(gift), receivedCount: counts.get(String(gift._id)) || 0 }));
+  const mostGifted = serialized.filter((gift) => gift.receivedCount > 0).sort((a, b) => b.receivedCount - a.receivedCount).slice(0, 4);
+  return sendResponse(res, 200, "Chat gifts fetched", { gifts: serialized, mostGifted });
 });
 
 export const sendChatGift = asyncHandler(async (req, res) => {
