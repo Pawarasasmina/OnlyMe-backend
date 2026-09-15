@@ -3,6 +3,7 @@ import {
   createDraftPost,
   createFeedPost,
   createPostComment,
+  archiveFeedPost,
   deleteFeedPost,
   blockPostAuthor,
   getFeedPost,
@@ -38,6 +39,7 @@ router.put("/:id/save", protect, togglePostSave);
 router.put("/:id/share", protect, togglePostShare);
 router.post("/:id/hide", protect, hideFeedPost);
 router.post("/:id/report", protect, reportFeedPost);
+router.post("/:id/archive", ...consumerOnly, archiveFeedPost);
 router.put("/:id/block-author", protect, blockPostAuthor);
 router.post("/:id/comments", protect, createPostComment);
 router.put("/:id", ...consumerOnly, updateFeedPost);

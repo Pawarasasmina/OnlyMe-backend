@@ -10,7 +10,7 @@ import UserBlock from "../models/UserBlock.js";
 import { storeFile, deleteAsset } from "../services/storageService.js";
 import { profileMediaReferencesAsset, profileMediaSourceKeysFor } from "../services/profileMediaService.js";
 import { parseStoryEditorMetadata, parseStoryOptions } from "../services/storyMetadataService.js";
-import { buildStatusFromPayload, serializeStatus } from "../services/statusService.js";
+import { buildStatusFromPayload, serializeProfileStatus, serializeStatus } from "../services/statusService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -79,6 +79,8 @@ const serializeUser = (user) => ({
 });
 
 const statusActivityTime = (status) => status?.startedAt || status?.expiresAt || null;
+
+const serializeStoryStripStatus = (status) => serializeStatus(status) || serializeProfileStatus(status);
 
 const recentTime = (values) => Math.max(0, ...values.filter(Boolean).map((value) => new Date(value).getTime() || 0));
 
@@ -250,7 +252,7 @@ export const listStories = asyncHandler(async (req, res) => {
         user: serializeUser(story.creator),
         stories: [],
         hasUnseenStories: false,
-        activeStatus: serializeStatus(story.creator.activeStatus),
+        activeStatus: serializeStoryStripStatus(story.creator.activeStatus),
         presence: { isOnline: false, lastActiveAt: story.creator.lastSeenAt || null },
         followed: followedSet.has(creatorId),
         latestActivityAt: null,
@@ -267,12 +269,15 @@ export const listStories = asyncHandler(async (req, res) => {
     role: { $in: ["fan", "creator"] },
     status: "active",
     "activeStatus.isActive": true,
-    "activeStatus.expiresAt": { $gt: now },
+    $or: [
+      { "activeStatus.expiresAt": { $gt: now } },
+      { "activeStatus.expiresAt": null },
+    ],
   }).select("name username avatar isVerified role activeStatus lastSeenAt").limit(80).lean();
 
   for (const person of statusUsers) {
     const personId = String(person._id);
-    const activeStatus = serializeStatus(person.activeStatus);
+    const activeStatus = serializeStoryStripStatus(person.activeStatus);
     if (!activeStatus) continue;
     if (!groups.has(personId)) {
       groups.set(personId, {
@@ -310,7 +315,7 @@ export const listStories = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Wall stories fetched", {
     viewer: {
       ...serializeUser(req.user),
-      activeStatus: serializeStatus(req.user.activeStatus),
+      activeStatus: serializeStoryStripStatus(req.user.activeStatus),
       hasActiveStories: viewerStories.length > 0,
       storyCount: viewerStories.length,
       stories: viewerStories,

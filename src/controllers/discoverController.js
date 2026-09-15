@@ -22,6 +22,7 @@ import {
 } from "../services/discoverFriendsService.js";
 import { canAccessPublicationAudience, seenVisibilityFilter } from "../services/publicationAccessService.js";
 import { getWallSawYouToday } from "../services/wallSeenTodayService.js";
+import { serializeProfileStatus } from "../services/statusService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -577,6 +578,7 @@ function serializeDiscoverPerson(user, profile, meta = {}) {
     hasActiveStory,
     hasUnseenStory,
     activeStoryCount,
+    activeStatus: serializeProfileStatus(user.activeStatus),
     firstUnseenStoryId: firstUnseenStory?.id || null,
     storyAvailable: hasActiveStory || Boolean(meta.storyAvailable),
     storyViewed: hasActiveStory && !hasUnseenStory,
@@ -606,7 +608,7 @@ async function discoverConnections({ blockedIds, previewByCreator, viewerId }) {
         role: { $in: ["fan", "creator"] },
         status: "active",
       },
-      select: "name username avatar role isVerified creatorApprovalStatus lastSeenAt createdAt",
+      select: "name username avatar role isVerified creatorApprovalStatus activeStatus lastSeenAt createdAt",
     })
       .lean(),
     ProfileRelationship.find({

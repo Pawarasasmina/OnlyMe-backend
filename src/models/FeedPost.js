@@ -45,6 +45,7 @@ const postCommentSchema = new mongoose.Schema(
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     text: { type: String, trim: true, required: true, maxlength: 500 },
     deletedAt: { type: Date, default: null },
+    archivedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

@@ -24,7 +24,7 @@ test("mutualFollowIds returns only two-way follows", () => {
 
 test("serializeDiscoverFriend exposes active unseen story state without duplicates", () => {
   const friend = serializeDiscoverFriend(
-    { _id: mutualId, name: "Mia Reed", username: "mia", avatar: "/mia.jpg", role: "creator", isVerified: true },
+    { _id: mutualId, name: "Mia Reed", username: "mia", avatar: "/mia.jpg", role: "creator", isVerified: true, activeStatus: { isActive: true, label: "🎉 Celebrating", emoji: "🎉", color: "#F6D365" } },
     { category: "Photography", profileVisibility: "public", privacySettings: {}, updatedAt: "2026-08-04T12:00:00.000Z" },
     {
       stories: [
@@ -40,6 +40,8 @@ test("serializeDiscoverFriend exposes active unseen story state without duplicat
   assert.equal(friend.hasUnseenStory, true);
   assert.equal(friend.activeStoryCount, 2);
   assert.equal(friend.firstUnseenStoryId, "story-2");
+  assert.equal(friend.activeStatus?.emoji, "🎉");
+  assert.equal(friend.activeStatus?.label, "🎉 Celebrating");
   assert.equal(friend.profileUrl, "/profile/mia");
 });
 
