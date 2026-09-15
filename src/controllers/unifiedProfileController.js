@@ -145,6 +145,7 @@ async function relationshipTarget(username) {
 
 export const toggleProfileFollow = asyncHandler(async (req, res) => {
   const relationship = await toggleFollowRelationship({ actor: req.user, targetUsername: req.params.username });
+  req.app.get("io")?.to(`user:${relationship.targetUserId}`).emit("activity:updated");
   const sessionId = readAnalyticsSessionId(req);
   if (relationship.active && sessionId) {
     await recordAnalyticsEvent({
@@ -164,6 +165,7 @@ export const toggleProfileSeeSignal = asyncHandler(async (req, res) => {
   if (!["fan", "creator"].includes(req.user.role)) throw new ApiError(403, "This action is available to fan and creator accounts");
   const target = await relationshipTarget(req.params.username);
   const signal = await sendSeeYouSignal({ sender: req.user, targetUserId: target._id });
+  req.app.get("io")?.to(`user:${signal.targetUserId}`).emit("activity:updated");
   return sendResponse(res, 200, "See signal updated", {
     relationship: {
       active: true,
