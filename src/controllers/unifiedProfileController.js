@@ -14,6 +14,7 @@ import OrbitSignal from "../models/OrbitSignal.js";
 import GroupConversation from "../models/GroupConversation.js";
 import MessageReport from "../models/MessageReport.js";
 import PremiumMembership from "../models/PremiumMembership.js";
+import WorldEntitlement from "../models/WorldEntitlement.js";
 import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
 import { listProfileMediaForUser } from "../services/profileMediaService.js";
 import { toggleFollowRelationship } from "../services/profileRelationshipService.js";
@@ -126,8 +127,14 @@ async function loadProfile(owner, viewer) {
     status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] },
     currentPeriodEnd: { $gt: new Date() },
   }).select("premiumPublication").lean() : null;
+  const experienceEntitlements = viewer?._id && !profileOwner && experiences.length ? await WorldEntitlement.find({
+    user: viewer._id,
+    publication: { $in: experiences.map((item) => item._id) },
+    status: "ACTIVE",
+  }).select("publication").lean() : [];
+  const entitledExperienceIds = new Set(experienceEntitlements.map((item) => String(item.publication)));
   const ownWallPosts = ownFeedPosts.map((post) => serializePost(post, viewer));
-  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal) });
+  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal) });
 }
 
 async function relationshipTarget(username) {

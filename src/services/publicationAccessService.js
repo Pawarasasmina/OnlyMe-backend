@@ -76,6 +76,7 @@ export function publicationAccess(publication, viewer, { audienceAllowed = null,
   }
   if (item.kind === "WORLD") return "PUBLIC_FULL";
   if (item.kind === "PREMIUM_WORLD" && entitlement === "ACTIVE_PREMIUM_MEMBER") return "ACTIVE_PREMIUM_MEMBER";
+  if (item.kind === "EXPERIENCE" && (item.publishedSnapshot?.metadata?.pricing?.mode || item.pricing?.mode) === "FREE") return "PUBLIC_FULL";
   if (item.kind === "EXPERIENCE" && ["ENTITLED_EXPERIENCE", "ACTIVE_PREMIUM_MEMBER"].includes(entitlement)) return entitlement;
   if (item.status === "ARCHIVED") return "NOT_VISIBLE";
   return "PUBLIC_PREVIEW";
