@@ -38,7 +38,7 @@ function completion(owner, roleProfile) {
   return { completed, total: checks.length, percentage: Math.round((completed / checks.length) * 100) };
 }
 
-export function serializeUnifiedProfile({ content = [], entitledExperienceIds = new Set(), experiences = [], followerCount = 0, followingCount = 0, media = [], owner, ownWallPosts = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, publishedContentCount = content.length, roleProfile, seens = [], series = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [], viewerSeeSignalSent = false }) {
+export function serializeUnifiedProfile({ content = [], entitledExperienceIds = new Set(), experienceOwnerCounts = new Map(), experiences = [], followerCount = 0, followingCount = 0, media = [], owner, ownWallPosts = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, publishedContentCount = content.length, roleProfile, seens = [], series = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [], viewerSeeSignalSent = false }) {
   const capabilities = profileViewerCapabilities(owner, viewer, roleProfile);
   const creatorEnabled = owner.creatorApprovalStatus === "approved";
   const contentViewer = capabilities.isOwner ? viewer : null;
@@ -93,13 +93,16 @@ export function serializeUnifiedProfile({ content = [], entitledExperienceIds = 
       .sort((left, right) => new Date(right.feedCreatedAt || right.createdAt) - new Date(left.feedCreatedAt || left.createdAt)),
     wallPosts: ownWallPosts,
     planets: planets.map((item) => serializePublication(item, contentViewer, { entitlement: premiumMembershipPublicationId && String(item._id) === String(premiumMembershipPublicationId) ? "ACTIVE_PREMIUM_MEMBER" : null })).filter(Boolean).slice(0, 3),
-    experiences: experiences.map((item) => serializePublication(item, contentViewer, {
-      entitlement: entitledExperienceIds.has(String(item._id))
-        ? "ENTITLED_EXPERIENCE"
-        : premiumMembershipPublicationId && item.includedInWorld
-          ? "ACTIVE_PREMIUM_MEMBER"
-          : null,
-    })).filter(Boolean).slice(0, 3),
+    experiences: experiences.map((item) => {
+      const publication = serializePublication(item, contentViewer, {
+        entitlement: entitledExperienceIds.has(String(item._id))
+          ? "ENTITLED_EXPERIENCE"
+          : premiumMembershipPublicationId && item.includedInWorld
+            ? "ACTIVE_PREMIUM_MEMBER"
+            : null,
+      });
+      return publication ? { ...publication, ownerCount: experienceOwnerCounts.get(String(item._id)) || 0 } : null;
+    }).filter(Boolean).slice(0, 3),
     viewerCapabilities: capabilities,
     viewerRelationship: { following: viewerRelationships.some((item) => item.type === "FOLLOW"), seeSignalSent: viewerSeeSignalSent || viewerRelationships.some((item) => item.type === "SEE_SIGNAL") },
     ...(capabilities.isOwner ? { profileCompletion: completion(owner, roleProfile) } : {}),
