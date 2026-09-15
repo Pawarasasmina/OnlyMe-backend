@@ -14,6 +14,7 @@ const schema = new mongoose.Schema({
   replyToSeen: { type: mongoose.Schema.Types.ObjectId, ref: "Publication", default: null, index: true },
   series: { type: mongoose.Schema.Types.ObjectId, ref: "PublicationSeries", default: null, index: true },
   visibility: { type: String, enum: PUBLICATION_VISIBILITIES, default: "PUBLIC", index: true },
+  isPinned: { type: Boolean, default: false, index: true },
   shareToken: { type: String, default: "", select: false },
   planet: { emoji: { type: String, default: "" }, slot: { type: String, enum: ["WORLD_1", "WORLD_2", "PREMIUM", null], default: null }, accent: { type: String, default: "" } },
   includedInWorld: { type: Boolean, default: false },

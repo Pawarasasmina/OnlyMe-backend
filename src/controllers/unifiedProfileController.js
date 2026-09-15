@@ -3,6 +3,7 @@ import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
 import User from "../models/User.js";
 import Publication from "../models/Publication.js";
+import PublicationSeries from "../models/PublicationSeries.js";
 import FeedPost from "../models/FeedPost.js";
 import DreamGift from "../models/DreamGift.js";
 import SeenEngagement from "../models/SeenEngagement.js";
@@ -36,12 +37,13 @@ async function loadProfile(owner, viewer) {
   const seenStatus = { $in: ["PUBLISHED", "CHANGES_REQUESTED"] };
   const seenAudienceFilter = await seenVisibilityFilter(viewer || null, [owner._id]);
   const planetStatus = profileOwner ? { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } : { $in: ["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED"] };
-  const [roleProfile, content, publishedContentCount, seens, planets, experiences, ownFeedPosts, shares, wallShares, feedSharePosts, followerCount, followingCount, supporterRows, viewerRelationships, viewerSeeSignal, profileMedia] = await Promise.all([
+  const [roleProfile, content, publishedContentCount, seens, seriesDocs, planets, experiences, ownFeedPosts, shares, wallShares, feedSharePosts, followerCount, followingCount, supporterRows, viewerRelationships, viewerSeeSignal, profileMedia] = await Promise.all([
     Model.findOne({ user: owner._id }).lean(),
     Content.find(publishedFilter)
       .sort({ publishedAt: -1, _id: -1 }).limit(30).populate("creator", "name username avatar").lean(),
     Content.countDocuments(publishedFilter),
-    Publication.find({ creator: owner._id, kind: "SEEN", status: seenStatus, publishedSnapshot: { $exists: true }, ...seenAudienceFilter }).select("+submittedSnapshot").sort({ publishedAt: -1, updatedAt: -1 }).populate("creator", "name username avatar").populate("series", "name").lean(),
+    Publication.find({ creator: owner._id, kind: "SEEN", status: seenStatus, publishedSnapshot: { $exists: true }, ...seenAudienceFilter }).select("+submittedSnapshot").sort({ isPinned: -1, publishedAt: -1, updatedAt: -1 }).populate("creator", "name username avatar").populate("series", "name").lean(),
+    PublicationSeries.find({ creator: owner._id, archivedAt: null }).sort({ isPinned: -1, sortOrder: 1, updatedAt: -1, name: 1 }).lean(),
     Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
     Publication.find({ creator: owner._id, kind: "EXPERIENCE", status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ publishedAt: -1, updatedAt: -1 }).limit(3).populate("creator", "name username avatar").lean(),
     FeedPost.find({ author: owner._id, status: "published", visibility: "public", deletedAt: null }).sort({ publishedAt: -1, createdAt: -1 }).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }]).lean(),
@@ -56,6 +58,38 @@ async function loadProfile(owner, viewer) {
     listProfileMediaForUser(owner._id, { limit: 12 }),
   ]);
   if (!roleProfile) throw new ApiError(404, "Profile not found");
+  const seensBySeries = new Map();
+  for (const seen of seens) {
+    const seriesId = seen.series?._id || seen.series;
+    if (!seriesId) continue;
+    const key = String(seriesId);
+    seensBySeries.set(key, [...(seensBySeries.get(key) || []), seen]);
+  }
+  const series = seriesDocs
+    .map((item) => {
+      const groupedSeens = seensBySeries.get(String(item._id)) || [];
+      if (!profileOwner && !groupedSeens.length) return null;
+      const previewSeens = groupedSeens.slice(0, 4).map((seen) => ({
+        id: String(seen._id),
+        title: seen.title || "Untitled Seen",
+        coverMedia: seen.coverMedia || null,
+        chapterCount: seen.publishedSnapshot?.chapters?.length || seen.submittedSnapshot?.chapters?.length || 0,
+      }));
+      return {
+        id: String(item._id),
+        name: item.name,
+        title: item.name,
+        description: item.description || "",
+        coverMedia: item.coverMedia?.secureUrl ? item.coverMedia : previewSeens.find((seen) => seen.coverMedia)?.coverMedia || null,
+        seenCount: groupedSeens.length,
+        previewSeens,
+        isPinned: Boolean(item.isPinned),
+        sortOrder: item.sortOrder || 0,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      };
+    })
+    .filter(Boolean);
   const sharedSeens = shares.length ? await Publication.find({ _id: { $in: shares.map((item) => item.publication) }, kind: "SEEN", status: "PUBLISHED", ...seenAudienceFilter }).populate("creator", "name username avatar").populate("series", "name").lean() : [];
   const shareOrder = new Map(shares.map((item, index) => [String(item.publication), index]));
   const seenShareByPublication = new Map(shares.map((item) => [String(item.publication), item]));
@@ -93,7 +127,7 @@ async function loadProfile(owner, viewer) {
     currentPeriodEnd: { $gt: new Date() },
   }).select("premiumPublication").lean() : null;
   const ownWallPosts = ownFeedPosts.map((post) => serializePost(post, viewer));
-  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal) });
+  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal) });
 }
 
 async function relationshipTarget(username) {
