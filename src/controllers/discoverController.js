@@ -842,10 +842,13 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const discoverSeens = visibleSeens.map((publication) => serializeDiscoverSeen(publication, seenEngagementCounts));
   const trendingSeen = [...discoverSeens]
     .sort((left, right) => right.viewCount - left.viewCount || new Date(right.publishedAt || 0) - new Date(left.publishedAt || 0))[0] || null;
-  const freshSeens = discoverSeens
+  const freshWithoutTrending = discoverSeens
     .filter((seen) => seen.id !== trendingSeen?.id)
     .sort((left, right) => new Date(right.publishedAt || 0) - new Date(left.publishedAt || 0))
     .slice(0, 3);
+  const freshSeens = freshWithoutTrending.length < 3 && trendingSeen
+    ? [...freshWithoutTrending, trendingSeen].slice(0, 3)
+    : freshWithoutTrending;
   const categories = categoriesFromCreators(creators);
   const trendingTags = [...new Set([...creators.flatMap((creator) => creator.tags || []), ...DISCOVER_TAGS])].slice(0, 18);
   const interestTags = [...new Set([...(viewerProfile?.interests || []), ...(viewerProfile?.categories || []), viewerProfile?.category, ...DISCOVER_TAGS].filter(Boolean))].slice(0, 18);

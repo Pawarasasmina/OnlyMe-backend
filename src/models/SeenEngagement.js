@@ -23,13 +23,15 @@ export const SEEN_REACTIONS = [
 const seenEngagementSchema = new mongoose.Schema({
   publication: { type: mongoose.Schema.Types.ObjectId, ref: "Publication", required: true, index: true },
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
-  type: { type: String, enum: ["REACTION", "COMMENT", "SHARE", "SAVE", "WALKED"], required: true, index: true },
+  type: { type: String, enum: ["REACTION", "COMMENT", "COMMENT_REACTION", "SHARE", "SAVE", "WALKED"], required: true, index: true },
+  parentComment: { type: mongoose.Schema.Types.ObjectId, ref: "SeenEngagement", default: undefined, index: true },
   reaction: { type: String, enum: SEEN_REACTIONS, default: undefined },
   text: { type: String, trim: true, maxlength: 500, default: undefined },
 }, { timestamps: true });
 
 seenEngagementSchema.index({ publication: 1, user: 1, type: 1 }, { name: "unique_seen_reaction_per_user", unique: true, partialFilterExpression: { type: "REACTION" } });
 seenEngagementSchema.index({ publication: 1, user: 1, type: 1, reaction: 1 }, { name: "unique_seen_share_per_user", unique: true, partialFilterExpression: { type: "SHARE" } });
+seenEngagementSchema.index({ publication: 1, parentComment: 1, user: 1, type: 1 }, { name: "unique_seen_comment_reaction_per_user", unique: true, partialFilterExpression: { type: "COMMENT_REACTION" } });
 seenEngagementSchema.index({ publication: 1, user: 1, type: 1 }, { name: "unique_seen_save_per_user", unique: true, partialFilterExpression: { type: "SAVE" } });
 seenEngagementSchema.index({ publication: 1, user: 1, type: 1 }, { name: "unique_world_walk_per_user", unique: true, partialFilterExpression: { type: "WALKED" } });
 seenEngagementSchema.index({ publication: 1, type: 1, createdAt: -1 });
