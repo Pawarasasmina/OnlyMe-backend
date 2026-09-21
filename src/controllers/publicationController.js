@@ -8,6 +8,7 @@ import PublicationPreference from "../models/PublicationPreference.js";
 import PublicationSeries from "../models/PublicationSeries.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import SeenEngagement, { SEEN_REACTIONS } from "../models/SeenEngagement.js";
+import StarsLedgerEntry from "../models/StarsLedgerEntry.js";
 import UserBlock from "../models/UserBlock.js";
 import WorldEntitlement from "../models/WorldEntitlement.js";
 import { attachEntityMetadata } from "../services/contentEntityService.js";
@@ -20,6 +21,7 @@ import { PUBLICATION_LIMITS, SEEN_CATEGORIES } from "../constants/publicationCon
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
+import { getStarExchangeRate } from "../services/starExchangeService.js";
 
 const page = (req) => ({ page: Math.max(1, Number(req.query.page) || 1), limit: Math.min(50, Math.max(1, Number(req.query.limit) || 20)) });
 const shareUrlFor = (item) => item.visibility === "LINK_ONLY" && item.shareToken ? `${String(env.clientUrl || "").replace(/\/+$/u, "")}/seen/${item._id}?access=${encodeURIComponent(item.shareToken)}` : null;
@@ -76,32 +78,50 @@ export const startRevision = asyncHandler(async (req, res) => sendResponse(res, 
 export const cancelRevision = asyncHandler(async (req, res) => sendResponse(res, 200, "Published revision canceled", { publication: serializePublication(await cancelPublishedRevision(req.user._id, req.params.id, req.body), req.user) }));
 export const archive = asyncHandler(async (req, res) => sendResponse(res, 200, "Publication archived", { publication: serializePublication(await archivePublication(req.user._id, req.params.id, req.body), req.user) }));
 export const pinSeen = asyncHandler(async (req, res) => sendResponse(res, 200, req.body.pinned ? "Seen pinned" : "Seen unpinned", { publication: serializePublication(await toggleSeenPinned(req.user._id, req.params.id, req.body), req.user) }));
+export const setCommentsEnabled = asyncHandler(async (req, res) => {
+  const publication = await Publication.findOneAndUpdate({ _id: req.params.id, creator: req.user._id }, { $set: { commentsEnabled: req.body.enabled !== false } }, { new: true });
+  if (!publication) throw new ApiError(404, "Publication not found");
+  return sendResponse(res, 200, publication.commentsEnabled ? "Comments enabled" : "Comments disabled", { commentsEnabled: publication.commentsEnabled });
+});
 export const removeSeen = asyncHandler(async (req, res) => { await deleteSeenPublication(req.user._id, req.params.id, req.body); return sendResponse(res, 200, "Seen deleted", { id: req.params.id }); });
 export const removePlanet = asyncHandler(async (req, res) => { await deletePlanet(req.user._id, req.params.id, req.body); return sendResponse(res, 200, "Planet deleted", { id: req.params.id }); });
 export const getSeenInsights = asyncHandler(async (req, res) => {
-  const seen = await ownerSeen(req.user._id, req.params.id);
-  const [engagementRows, uniqueViewers, analyticsRows] = await Promise.all([
-    SeenEngagement.aggregate([{ $match: { publication: seen._id } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
-    SeenEngagement.distinct("user", { publication: seen._id }),
+  const publication = await Publication.findOne({ _id: req.params.id, creator: req.user._id });
+  if (!publication) throw new ApiError(404, "Publication not found");
+  const sevenDaysAgo = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000);
+  sevenDaysAgo.setHours(0, 0, 0, 0);
+  const [engagementRows, uniqueViewers, analyticsRows, dailyViews, revenueRows, ownerCount, starsPerUsd] = await Promise.all([
+    SeenEngagement.aggregate([{ $match: { publication: publication._id } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
+    SeenEngagement.distinct("user", { publication: publication._id }),
     AnalyticsEvent.aggregate([
-      { $match: { entityType: "seen", entityId: String(seen._id), eventType: { $in: ["CONTENT_IMPRESSION", "CONTENT_OPENED", "CONTENT_VIEW", "SEEN_VIEW"] } } },
+      { $match: { entityId: String(publication._id), eventType: { $in: ["CONTENT_IMPRESSION", "CONTENT_OPENED", "CONTENT_VIEW", "SEEN_VIEW"] } } },
       { $group: { _id: "$eventType", count: { $sum: 1 }, users: { $addToSet: "$userId" } } },
     ]),
+    AnalyticsEvent.aggregate([{ $match: { entityId: String(publication._id), eventType: { $in: ["CONTENT_OPENED", "CONTENT_VIEW", "SEEN_VIEW"] }, createdAt: { $gte: sevenDaysAgo } } }, { $group: { _id: { $dateToString: { date: "$createdAt", format: "%Y-%m-%d" } }, value: { $sum: 1 } } }, { $sort: { _id: 1 } }]),
+    StarsLedgerEntry.aggregate([{ $match: { accountUser: req.user._id, publication: publication._id, entryType: { $in: ["WORLD_CREATOR_EARNING", "CREATOR_EARNING_REVERSAL"] } } }, { $group: { _id: null, stars: { $sum: "$signedAmount" } } }]),
+    WorldEntitlement.countDocuments({ publication: publication._id, status: "ACTIVE" }),
+    getStarExchangeRate(),
   ]);
   const engagement = Object.fromEntries(engagementRows.map((row) => [row._id, row.count]));
   const analytics = Object.fromEntries(analyticsRows.map((row) => [row._id, { count: row.count, uniqueUsers: row.users.length }]));
   return sendResponse(res, 200, "Seen insights fetched", {
     insights: {
-      seenId: String(seen._id),
+      seenId: String(publication._id),
       views: (engagement.WALKED || 0) + (engagement.REACTION || 0) + (engagement.COMMENT || 0) + (engagement.SHARE || 0) + (engagement.SAVE || 0),
       uniqueViewers: uniqueViewers.length,
       saves: engagement.SAVE || 0,
       shares: engagement.SHARE || 0,
       comments: engagement.COMMENT || 0,
       reactions: engagement.REACTION || 0,
+      walked: engagement.WALKED || 0,
       impressions: analytics.CONTENT_IMPRESSION?.count || 0,
       opens: (analytics.CONTENT_OPENED?.count || 0) + (analytics.CONTENT_VIEW?.count || 0) + (analytics.SEEN_VIEW?.count || 0),
       uniqueImpressionViewers: analytics.CONTENT_IMPRESSION?.uniqueUsers || 0,
+      dailyViews,
+      ownerCount,
+      revenueStars: Number(revenueRows[0]?.stars || 0),
+      revenueUsd: Number(revenueRows[0]?.stars || 0) / starsPerUsd,
+      priceStars: Number(publication.pricing?.starsAmount || 0),
     },
   });
 });

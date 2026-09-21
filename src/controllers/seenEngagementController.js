@@ -31,7 +31,7 @@ const sortReactionCounts = (rows = []) => rows.sort((first, second) => second.co
 
 const publishedCommentable = async (id, viewer, shareToken = "") => {
   if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid publication ID");
-  const publication = await Publication.findOne({ _id: id, kind: { $in: ["SEEN", "WORLD", "PREMIUM_WORLD"] }, status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("_id creator kind visibility +shareToken").lean();
+  const publication = await Publication.findOne({ _id: id, kind: { $in: ["SEEN", "WORLD", "PREMIUM_WORLD", "EXPERIENCE"] }, status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("_id creator kind visibility commentsEnabled +shareToken").lean();
   if (!publication || (publication.kind === "SEEN" && !await canAccessPublicationAudience(publication, viewer, { shareToken }))) throw new ApiError(404, "Published content not found");
   return publication;
 };
@@ -153,6 +153,7 @@ export const removeSeenReaction = asyncHandler(async (req, res) => { await publi
 
 export const commentOnSeen = asyncHandler(async (req, res) => {
   const publication = await publishedCommentable(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const text = String(req.body.text || "").trim();
+  if (publication.commentsEnabled === false) throw new ApiError(403, "Comments are turned off");
   if (!text || text.length > 500) throw new ApiError(400, "Comment must contain 1 to 500 characters");
   let parentComment;
   if (req.body.parentCommentId) {

@@ -84,6 +84,19 @@ test("profile planets expose active premium membership access to the subscribed 
   assert.equal(result.planets[0].locked, false);
 });
 
+test("creator profile experiences expose their active owner count", () => {
+  const snapshot = { metadata: { title: "Course", summary: "", description: "", category: "", tags: [], pricing: { mode: "ONE_TIME", starsAmount: 190 } }, chapters: [], version: 1, frozenAt: new Date() };
+  const experience = { _id: "experience-id", creator: owner._id, kind: "EXPERIENCE", status: "PUBLISHED", publishedSnapshot: snapshot };
+  const result = serializeUnifiedProfile({
+    owner,
+    roleProfile,
+    viewer: null,
+    experiences: [experience],
+    experienceOwnerCounts: new Map([["experience-id", 7]]),
+  });
+  assert.equal(result.experiences[0].ownerCount, 7);
+});
+
 test("profile contract exposes reposted Seen metadata", () => {
   const snapshot = { metadata: { title: "Shared Seen", summary: "", description: "", category: "", tags: [], pricing: {}, planet: {} }, chapters: [{ stableChapterId: "c", order: 0, title: "C", isPreview: true, blocks: [] }], version: 1, frozenAt: new Date() };
   const sharedAt = new Date();

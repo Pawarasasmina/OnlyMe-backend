@@ -133,8 +133,13 @@ async function loadProfile(owner, viewer) {
     status: "ACTIVE",
   }).select("publication").lean() : [];
   const entitledExperienceIds = new Set(experienceEntitlements.map((item) => String(item.publication)));
+  const experienceOwnerRows = experiences.length ? await WorldEntitlement.aggregate([
+    { $match: { publication: { $in: experiences.map((item) => item._id) }, status: "ACTIVE" } },
+    { $group: { _id: "$publication", ownerCount: { $sum: 1 } } },
+  ]) : [];
+  const experienceOwnerCounts = new Map(experienceOwnerRows.map((item) => [String(item._id), Number(item.ownerCount) || 0]));
   const ownWallPosts = ownFeedPosts.map((post) => serializePost(post, viewer));
-  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal) });
+  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal) });
 }
 
 async function relationshipTarget(username) {

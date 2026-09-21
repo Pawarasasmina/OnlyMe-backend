@@ -21,6 +21,7 @@ const schema = new mongoose.Schema({
   experiencePath: { type: String, trim: true, default: "", maxlength: 300 },
   experienceLocation: { type: String, trim: true, default: "", maxlength: 120 },
   allowDownload: { type: Boolean, default: false },
+  commentsEnabled: { type: Boolean, default: true },
   pricing: { mode: { type: String, enum: ["FREE", "ONE_TIME", "MONTHLY"], required: true }, starsAmount: { type: Number, default: null }, presetId: { type: String, default: null } },
   previewPolicy: { type: String, enum: ["ALL_FREE", "ONE_CHAPTER", "ONE_OR_TWO_CHAPTERS"], required: true },
   status: { type: String, enum: PUBLICATION_STATUSES, default: "DRAFT", index: true }, draftVersion: { type: Number, default: 1, min: 1 }, submittedVersion: { type: Number, default: null }, publishedVersion: { type: Number, default: null }, statusVersion: { type: Number, default: 0, min: 0 },
