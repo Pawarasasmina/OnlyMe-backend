@@ -1,6 +1,8 @@
+import crypto from "node:crypto";
 import Chapter from "../models/Chapter.js";
 import AnalyticsEvent from "../models/AnalyticsEvent.js";
 import CreatorProfile from "../models/CreatorProfile.js";
+import DAWindow from "../models/DAWindow.js";
 import mongoose from "mongoose";
 import PremiumMembership from "../models/PremiumMembership.js";
 import Publication from "../models/Publication.js";
@@ -9,6 +11,7 @@ import PublicationSeries from "../models/PublicationSeries.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import SeenEngagement, { SEEN_REACTIONS } from "../models/SeenEngagement.js";
 import StarsLedgerEntry from "../models/StarsLedgerEntry.js";
+import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
 import WorldEntitlement from "../models/WorldEntitlement.js";
 import { attachEntityMetadata } from "../services/contentEntityService.js";
@@ -16,8 +19,11 @@ import { canAccessPublicationAudience, seenVisibilityFilter, serializePublicatio
 import { addChapter, archivePublication, cancelPublishedRevision, createPublicationDraft, deletePlanet, deleteSeenPublication, ownerPublication, removeChapter, reorderChapters, resubmitPublication, startPublishedRevision, submitPublication, toggleSeenPinned, updateChapter, updatePublicationDraft } from "../services/publicationService.js";
 import { deletePublicationFile, uploadPublicationFile, verifyPublicationAsset } from "../services/publicationMediaStorageService.js";
 import { publicationEntitlement } from "../services/publicationEntitlementService.js";
+import { serializePremiumWorldPricing, updatePremiumWorldPricing } from "../services/premiumWorldPricingService.js";
+import { readCommentsEnabledSetting } from "../services/worldCommentsService.js";
 import { env } from "../config/env.js";
-import { PUBLICATION_LIMITS, SEEN_CATEGORIES } from "../constants/publicationConstants.js";
+import { MAX_MODERATORS_PER_EXPERIENCE, PREMIUM_PRICE_PRESETS, PREMIUM_WORLD_DEFAULT_CAPACITY, PREMIUM_WORLD_WAVE_SIZE, PUBLICATION_LIMITS, SEEN_CATEGORIES } from "../constants/publicationConstants.js";
+import { safeUserProfile } from "../services/publicationModeratorService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -39,14 +45,345 @@ const serializeSeries = (series, seens = []) => {
 };
 const ensureSeriesId = (id) => { if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid Series ID"); };
 const ensureSeenId = (id) => { if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid Seen ID"); };
+const ensurePublicationId = (id) => { if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid publication ID"); };
 const ownerSeries = async (creatorId, id) => { ensureSeriesId(id); const series = await PublicationSeries.findOne({ _id: id, creator: creatorId, archivedAt: null }); if (!series) throw new ApiError(404, "Series not found"); return series; };
 const ownerSeen = async (creatorId, id) => { ensureSeenId(id); const seen = await Publication.findOne({ _id: id, creator: creatorId, kind: "SEEN", status: { $ne: "REMOVED" } }); if (!seen) throw new ApiError(404, "Seen not found"); return seen; };
+const ownerWorld = async (creatorId, id) => { ensurePublicationId(id); const publication = await Publication.findOne({ _id: id, creator: creatorId, kind: { $in: ["WORLD", "PREMIUM_WORLD", "EXPERIENCE"] }, status: { $ne: "REMOVED" } }).select("+submittedSnapshot +shareToken"); if (!publication) throw new ApiError(404, "Experience not found"); return publication; };
 const visibleSeriesSeenFilter = (seriesId, viewer, series) => {
   const owner = viewer?._id && String(viewer._id) === String(series.creator?._id || series.creator);
   return { series: seriesId, kind: "SEEN", status: owner ? { $in: ["DRAFT", "CHANGES_REQUESTED", "PUBLISHED"] } : { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, ...(owner ? {} : { publishedSnapshot: { $exists: true } }) };
 };
+const monthAgo = () => new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+const weekAgo = () => new Date(Date.now() - 6 * 24 * 60 * 60 * 1000);
+const dayBucket = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+const updateSnapshotMetadata = (publication, values) => {
+  for (const snapshotKey of ["submittedSnapshot", "publishedSnapshot"]) {
+    if (!publication[snapshotKey]?.metadata) continue;
+    publication[snapshotKey].metadata = { ...publication[snapshotKey].metadata, ...values };
+    publication.markModified(`${snapshotKey}.metadata`);
+  }
+};
+const snapshotChapter = (chapter) => ({
+  stableChapterId: chapter.stableChapterId,
+  order: chapter.order,
+  title: chapter.title,
+  blocks: chapter.blocks.map((block) => (block.toObject ? block.toObject() : block)),
+  isPreview: chapter.isPreview,
+  releaseMode: chapter.releaseMode,
+  releaseAt: chapter.releaseAt,
+  draftVersion: chapter.draftVersion,
+});
+const upsertSnapshotChapter = (publication, chapter) => {
+  const nextChapter = snapshotChapter(chapter);
+  for (const snapshotKey of ["submittedSnapshot", "publishedSnapshot"]) {
+    if (!publication[snapshotKey]?.chapters) continue;
+    const chapters = publication[snapshotKey].chapters || [];
+    const index = chapters.findIndex((item) => item.stableChapterId === chapter.stableChapterId);
+    publication[snapshotKey].chapters = index >= 0
+      ? chapters.map((item, itemIndex) => itemIndex === index ? nextChapter : item)
+      : [...chapters, nextChapter].sort((a, b) => Number(a.order || 0) - Number(b.order || 0));
+    publication.markModified(`${snapshotKey}.chapters`);
+  }
+};
+const activeMembershipFilter = (publicationId) => ({ premiumPublication: publicationId, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } });
+async function serializeWorldManagement(publication, user) {
+  const publicationId = publication._id;
+  const now = new Date();
+  const sinceWeek = weekAgo();
+  const [chapters, residentCount, membershipRows, directAccessWaiting, engagementRows, dailyEngagementRows, ledgerRows, analyticsRows, includedExperiences, moderators] = await Promise.all([
+    Chapter.find({ publication: publicationId }).sort({ order: 1 }).lean(),
+    PremiumMembership.countDocuments(activeMembershipFilter(publicationId)),
+    PremiumMembership.aggregate([{ $match: activeMembershipFilter(publicationId) }, { $group: { _id: null, recurringStars: { $sum: "$starsPerPeriod" } } }]),
+    DAWindow.countDocuments({ creator: publication.creator, settlementStatus: "HELD", status: { $in: ["OPEN", "ANSWERED", "CLOSED"] } }),
+    SeenEngagement.aggregate([{ $match: { publication: publicationId } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
+    SeenEngagement.aggregate([{ $match: { publication: publicationId, createdAt: { $gte: sinceWeek } } }, { $group: { _id: { type: "$type", day: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } } }, count: { $sum: 1 } } }]),
+    StarsLedgerEntry.aggregate([{ $match: { accountUser: publication.creator, publication: publicationId, direction: "CREDIT", entryType: { $in: ["PREMIUM_CREATOR_EARNING", "WORLD_CREATOR_EARNING"] }, createdAt: { $gte: monthAgo() } } }, { $group: { _id: "$entryType", stars: { $sum: "$starsAmount" } } }]),
+    AnalyticsEvent.aggregate([{ $match: { entityId: String(publicationId), entityType: { $in: ["world", "publication", "seen"] }, createdAt: { $gte: sinceWeek } } }, { $group: { _id: { eventType: "$eventType", day: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } } }, count: { $sum: 1 }, users: { $addToSet: "$userId" } } }]),
+    publication.includedExperienceIds?.length ? Publication.find({ _id: { $in: publication.includedExperienceIds }, creator: publication.creator, kind: "EXPERIENCE", status: { $ne: "REMOVED" } }).lean() : [],
+    publication.worldModerators?.length ? User.find({ _id: { $in: publication.worldModerators.map((item) => item.user) } }).select("name username avatar isVerified").lean() : [],
+  ]);
+  const engagement = Object.fromEntries(engagementRows.map((row) => [row._id, row.count]));
+  const ledger = Object.fromEntries(ledgerRows.map((row) => [row._id, row.stars]));
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const daily = Array.from({ length: 7 }, (_, index) => {
+    const day = dayBucket(new Date(now.getFullYear(), now.getMonth(), now.getDate() - (6 - index)));
+    const key = day.toISOString().slice(0, 10);
+    const engagementViews = dailyEngagementRows.filter((row) => row._id.day === key && ["WALKED", "SHARE", "COMMENT", "SAVE", "REACTION"].includes(row._id.type)).reduce((sum, row) => sum + row.count, 0);
+    const analyticsViews = analyticsRows.filter((row) => row._id.day === key && ["CONTENT_IMPRESSION", "CONTENT_OPENED", "CONTENT_VIEW", "SEEN_VIEW"].includes(row._id.eventType)).reduce((sum, row) => sum + row.count, 0);
+    return { date: key, views: engagementViews + analyticsViews, current: key === todayKey };
+  });
+  const serialized = ownerView(publication, chapters, user);
+  const capacity = publication.worldSeatCapacity ?? PREMIUM_WORLD_DEFAULT_CAPACITY;
+  const recurringStars = membershipRows[0]?.recurringStars || 0;
+  return {
+    publication: serialized,
+    management: {
+      seatStatus: {
+        foundingCapacity: publication.worldFoundingCapacity || PREMIUM_WORLD_DEFAULT_CAPACITY,
+        occupiedSeats: residentCount,
+        capacity,
+        unlimited: publication.worldSeatCapacity === null,
+        waitingListCount: 0,
+        waitingListAvailable: false,
+        waveSize: publication.worldWaveSize || PREMIUM_WORLD_WAVE_SIZE,
+      },
+      subscription: {
+        priceStars: publication.pricing?.starsAmount || null,
+        pricePresets: PREMIUM_PRICE_PRESETS,
+        memberPriceLocked: publication.memberPriceLocked !== false,
+        firstMonthOfferEnabled: Boolean(publication.firstMonthOfferEnabled),
+        directAccessIncluded: publication.directAccessIncluded !== false,
+        directAccessIncludedReplies: Number(publication.directAccessIncludedReplies || 1),
+      },
+      directAccess: { waiting: directAccessWaiting, memberPriority: true, includedReplies: Number(publication.directAccessIncludedReplies || 1) },
+      comments: { enabled: publication.commentsEnabled !== false, count: engagement.COMMENT || 0 },
+      stories: { previewLimit: 3, freePreviewCount: chapters.filter((chapter) => chapter.isPreview).length, items: chapters },
+      includedExperiences: includedExperiences.map((item) => ({ id: String(item._id), title: item.title, summary: item.summary, coverMedia: item.coverMedia || null, chapterCount: item.publishedSnapshot?.chapters?.length || item.submittedSnapshot?.chapters?.length || 0, pricing: item.pricing, included: true })),
+      moderators: moderators.map(safeUserProfile).filter(Boolean),
+      moderatorLimit: MAX_MODERATORS_PER_EXPERIENCE,
+      analytics: {
+        supported: true,
+        daily,
+        views: (engagement.WALKED || 0) + (engagement.REACTION || 0) + (engagement.COMMENT || 0) + (engagement.SHARE || 0) + (engagement.SAVE || 0),
+        todayViews: daily.find((item) => item.current)?.views || 0,
+        residents: residentCount,
+        shares: engagement.SHARE || 0,
+        comments: engagement.COMMENT || 0,
+        grossRevenueStars30d: (ledger.PREMIUM_CREATOR_EARNING || 0) + (ledger.WORLD_CREATOR_EARNING || 0),
+        creatorEarningsStars30d: (ledger.PREMIUM_CREATOR_EARNING || 0) + (ledger.WORLD_CREATOR_EARNING || 0),
+        estimatedRecurringStars: recurringStars,
+        readToEnd: null,
+        stayOnRate: null,
+      },
+    },
+  };
+}
 export const listMine = asyncHandler(async (req, res) => { const paging = page(req); const filter = { creator: req.user._id }; if (req.query.kind) filter.kind = req.query.kind.includes(",") ? { $in: req.query.kind.split(",") } : req.query.kind; if (req.query.status) filter.status = req.query.status; const [items, total] = await Promise.all([Publication.find(filter).select("+shareToken").populate("series", "name").sort({ updatedAt: -1 }).skip((paging.page - 1) * paging.limit).limit(paging.limit).lean(), Publication.countDocuments(filter)]); const publicationIds = items.map((item) => item._id); const [counts, residentRows] = await Promise.all([Chapter.aggregate([{ $match: { publication: { $in: publicationIds } } }, { $group: { _id: "$publication", count: { $sum: 1 }, previewCount: { $sum: { $cond: ["$isPreview", 1, 0] } } } }]), PremiumMembership.aggregate([{ $match: { creator: req.user._id, premiumPublication: { $in: publicationIds }, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } } }, { $group: { _id: "$premiumPublication", residentCount: { $sum: 1 }, monthlyStars: { $sum: "$starsPerPeriod" } } }])]); const chapterCounts = new Map(counts.map((entry) => [String(entry._id), entry])); const residentCounts = new Map(residentRows.map((entry) => [String(entry._id), entry])); return sendResponse(res, 200, "Publications fetched", { items: items.map((item) => { const residents = residentCounts.get(String(item._id)); return { id: item._id, kind: item.kind, title: item.title, summary: item.summary, category: item.category, series: item.series ? { id: String(item.series._id), name: item.series.name } : null, seriesId: item.series?._id ? String(item.series._id) : null, visibility: item.visibility || "PUBLIC", shareUrl: shareUrlFor(item), coverMedia: item.coverMedia ? { mediaType: item.coverMedia.mediaType, format: item.coverMedia.format, width: item.coverMedia.width, height: item.coverMedia.height, secureUrl: item.coverMedia.secureUrl } : null, chapterCount: chapterCounts.get(String(item._id))?.count || 0, previewCount: chapterCounts.get(String(item._id))?.previewCount || 0, residentCount: residents?.residentCount || 0, monthlyStars: residents?.monthlyStars || 0, pricing: item.pricing, planet: item.planet, status: item.status, statusVersion: item.statusVersion, draftVersion: item.draftVersion, submittedAt: item.submittedAt, publishedAt: item.publishedAt, archivedAt: item.archivedAt, createdAt: item.createdAt, updatedAt: item.updatedAt }; }), pagination: { ...paging, total, pages: Math.max(1, Math.ceil(total / paging.limit)) } }); });
 export const getMine = asyncHandler(async (req, res) => { const { publication, chapters } = await ownerPublication(req.user._id, req.params.id); await attachEntityMetadata(publication, req.user); return sendResponse(res, 200, "Publication fetched", { publication: ownerView(publication, chapters, req.user) }); });
+export const getWorldManagement = asyncHandler(async (req, res) => {
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  await attachEntityMetadata(publication, req.user);
+  return sendResponse(res, 200, "World management fetched", await serializeWorldManagement(publication, req.user));
+});
+export const getWorldPricing = asyncHandler(async (req, res) => {
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  return sendResponse(res, 200, "World pricing fetched", { pricing: await serializePremiumWorldPricing(publication) });
+});
+export const updateWorldPricing = asyncHandler(async (req, res) => {
+  const monthlyStars = req.body.monthlyStars ?? req.body.monthlyCoins ?? req.body.priceStars;
+  const { publication, pricing } = await updatePremiumWorldPricing({ creatorId: req.user._id, publicationId: req.params.id, monthlyStars });
+  await attachEntityMetadata(publication, req.user);
+  return sendResponse(res, 200, "World price updated", { ...(await serializeWorldManagement(publication, req.user)), pricing });
+});
+export const updateWorldManagement = asyncHandler(async (req, res) => {
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  const updates = {};
+  if (Object.hasOwn(req.body, "priceStars") || Object.hasOwn(req.body, "monthlyStars") || Object.hasOwn(req.body, "monthlyCoins")) {
+    throw new ApiError(400, "Use the World pricing endpoint to change subscription price", "WORLD_PRICING_ENDPOINT_REQUIRED");
+  }
+  if (Object.hasOwn(req.body, "title") || Object.hasOwn(req.body, "name")) {
+    const title = String(req.body.title ?? req.body.name ?? "").trim().replace(/\s+/g, " ");
+    if (!title || title.length > 30) throw new ApiError(400, "World name must be between 1 and 30 characters");
+    updates.title = title;
+  }
+  if (Object.hasOwn(req.body, "description")) updates.description = String(req.body.description || "").trim().slice(0, PUBLICATION_LIMITS.description);
+  if (Object.hasOwn(req.body, "planetFaceEmoji") || Object.hasOwn(req.body, "planetEmoji")) {
+    const emoji = String(req.body.planetFaceEmoji ?? req.body.planetEmoji ?? "").trim();
+    if (!emoji || emoji.length > 16) throw new ApiError(400, "Choose one planet face emoji");
+    updates["planet.faceEmoji"] = emoji;
+  }
+  const commentsEnabled = readCommentsEnabledSetting(req.body);
+  if (commentsEnabled !== undefined) updates.commentsEnabled = commentsEnabled;
+  if (Object.hasOwn(req.body, "firstMonthOfferEnabled")) updates.firstMonthOfferEnabled = req.body.firstMonthOfferEnabled === true;
+  if (Object.hasOwn(req.body, "directAccessIncluded")) updates.directAccessIncluded = req.body.directAccessIncluded === true;
+  if (Object.hasOwn(req.body, "directAccessIncludedReplies")) {
+    const replies = Number(req.body.directAccessIncludedReplies);
+    if (!Number.isSafeInteger(replies) || replies < 0 || replies > 3) throw new ApiError(400, "Included replies must be between 0 and 3");
+    updates.directAccessIncludedReplies = replies;
+  }
+  if (!Object.keys(updates).length) return sendResponse(res, 200, "World unchanged", await serializeWorldManagement(publication, req.user));
+  const planetFaceEmoji = updates["planet.faceEmoji"];
+  delete updates["planet.faceEmoji"];
+  Object.assign(publication, updates);
+  if (planetFaceEmoji) {
+    publication.set("planet.faceEmoji", planetFaceEmoji);
+    if (!publication.planet?.emoji) publication.set("planet.emoji", "🪐");
+  }
+  publication.statusVersion += 1;
+  const snapshotUpdates = { ...updates };
+  if (planetFaceEmoji) snapshotUpdates.planet = { ...(publication.planet?.toObject?.() || publication.planet || {}), faceEmoji: planetFaceEmoji, emoji: publication.planet?.emoji || "🪐" };
+  if (updates.title || updates.description || updates.pricing || planetFaceEmoji || Object.hasOwn(updates, "commentsEnabled") || Object.hasOwn(updates, "firstMonthOfferEnabled") || Object.hasOwn(updates, "directAccessIncluded") || Object.hasOwn(updates, "directAccessIncludedReplies")) updateSnapshotMetadata(publication, snapshotUpdates);
+  await publication.save();
+  await attachEntityMetadata(publication, req.user);
+  return sendResponse(res, 200, "World updated", await serializeWorldManagement(publication, req.user));
+});
+export const uploadWorldCover = asyncHandler(async (req, res) => {
+  if (!req.file) throw new ApiError(400, "Cover image is required");
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  const mediaType = String(req.file.mimetype || "").startsWith("video/") ? "VIDEO" : "IMAGE";
+  if (mediaType !== "IMAGE") throw new ApiError(400, "World covers must be images");
+  const uploaded = await uploadPublicationFile({ file: req.file, creatorId: req.user._id, publicationId: publication._id, chapterId: "root", blockId: "cover", mediaType });
+  const trusted = await verifyPublicationAsset({ assetId: uploaded.assetId, creatorId: req.user._id, publicationId: publication._id, chapterId: "root", blockId: "cover", mediaType });
+  publication.coverMedia = trusted;
+  publication.statusVersion += 1;
+  updateSnapshotMetadata(publication, { coverMedia: trusted });
+  await publication.save();
+  await attachEntityMetadata(publication, req.user);
+  return sendResponse(res, 201, "World cover updated", await serializeWorldManagement(publication, req.user));
+});
+export const uploadWorldStoryPreview = asyncHandler(async (req, res) => {
+  if (!req.file) throw new ApiError(400, "Story image is required");
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  const mediaType = String(req.file.mimetype || "").startsWith("video/") ? "VIDEO" : "IMAGE";
+  if (mediaType !== "IMAGE") throw new ApiError(400, "World stories currently support images");
+
+  let chapter = await Chapter.findOne({ publication: publication._id, isPreview: true }).sort({ order: 1 });
+  if (!chapter) {
+    const count = await Chapter.countDocuments({ publication: publication._id });
+    chapter = await Chapter.create({
+      publication: publication._id,
+      stableChapterId: crypto.randomUUID(),
+      order: count,
+      title: "Chapter 1",
+      isPreview: true,
+      releaseMode: "IMMEDIATE",
+      blocks: [],
+    });
+  }
+
+  const existingStoryCount = (chapter.blocks || []).filter((block) => block.metadata?.storyPreview && block.media?.secureUrl).length;
+  if (existingStoryCount >= 3) throw new ApiError(409, "Worlds can show up to 3 preview stories");
+
+  const blockId = crypto.randomUUID();
+  const uploaded = await uploadPublicationFile({ file: req.file, creatorId: req.user._id, publicationId: publication._id, chapterId: chapter.stableChapterId, blockId, mediaType });
+  const trusted = await verifyPublicationAsset({ assetId: uploaded.assetId, creatorId: req.user._id, publicationId: publication._id, chapterId: chapter.stableChapterId, blockId, mediaType });
+  chapter.blocks.push({
+    id: blockId,
+    media: trusted,
+    metadata: { caption: String(req.body.caption || "").slice(0, 300), label: req.body.label || `Story ${existingStoryCount + 1}`, storyPreview: true },
+    order: chapter.blocks.length,
+    text: "",
+    type: "IMAGE",
+  });
+  chapter.draftVersion += 1;
+  await chapter.save();
+
+  publication.statusVersion += 1;
+  publication.draftVersion += 1;
+  upsertSnapshotChapter(publication, chapter);
+  await publication.save();
+  await attachEntityMetadata(publication, req.user);
+  return sendResponse(res, 201, "World story added", await serializeWorldManagement(publication, req.user));
+});
+export const includeWorldExperience = asyncHandler(async (req, res) => {
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  ensurePublicationId(req.params.experienceId);
+  const experience = await Publication.findOne({ _id: req.params.experienceId, creator: req.user._id, kind: "EXPERIENCE", status: { $ne: "REMOVED" } }).select("_id");
+  if (!experience) throw new ApiError(404, "Experience not found");
+  if (publication.includedExperienceIds.map(String).includes(String(experience._id))) throw new ApiError(409, "Experience is already included");
+  publication.includedExperienceIds.push(experience._id);
+  publication.statusVersion += 1;
+  updateSnapshotMetadata(publication, { includedExperienceIds: publication.includedExperienceIds });
+  await publication.save();
+  return sendResponse(res, 200, "Experience included", await serializeWorldManagement(publication, req.user));
+});
+export const removeWorldExperience = asyncHandler(async (req, res) => {
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  ensurePublicationId(req.params.experienceId);
+  publication.includedExperienceIds = publication.includedExperienceIds.filter((item) => String(item) !== String(req.params.experienceId));
+  publication.statusVersion += 1;
+  updateSnapshotMetadata(publication, { includedExperienceIds: publication.includedExperienceIds });
+  await publication.save();
+  return sendResponse(res, 200, "Experience removed", await serializeWorldManagement(publication, req.user));
+});
+export const openWorldWave = asyncHandler(async (req, res) => {
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  const previousCapacity = publication.worldSeatCapacity ?? PREMIUM_WORLD_DEFAULT_CAPACITY;
+  const waveSize = publication.worldWaveSize || PREMIUM_WORLD_WAVE_SIZE;
+  const nextCapacity = previousCapacity + waveSize;
+  publication.worldSeatCapacity = nextCapacity;
+  publication.worldWaves.push({ openedBy: req.user._id, previousCapacity, nextCapacity });
+  publication.statusVersion += 1;
+  updateSnapshotMetadata(publication, { worldSeatCapacity: nextCapacity, worldWaveSize: waveSize });
+  await publication.save();
+  return sendResponse(res, 200, "World wave opened", await serializeWorldManagement(publication, req.user));
+});
+
+export const listWorldModerators = asyncHandler(async (req, res) => {
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  const moderators = publication.worldModerators?.length
+    ? await User.find({ _id: { $in: publication.worldModerators.map((item) => item.user) } }).select("name username avatar isVerified").lean()
+    : [];
+  return sendResponse(res, 200, "Moderators fetched", {
+    moderators: moderators.map(safeUserProfile).filter(Boolean),
+    limit: MAX_MODERATORS_PER_EXPERIENCE,
+    count: moderators.length,
+  });
+});
+
+export const listWorldModeratorCandidates = asyncHandler(async (req, res) => {
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  const excluded = [publication.creator, ...(publication.worldModerators || []).map((item) => item.user)].filter(Boolean);
+  const query = String(req.query.q || "").trim();
+  const filter = {
+    _id: { $nin: excluded },
+    role: { $in: ["fan", "creator"] },
+    status: "active",
+    deletionRequestedAt: null,
+  };
+  if (query) filter.$or = [
+    { name: { $regex: query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" } },
+    { username: { $regex: query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" } },
+  ];
+  const candidates = await User.find(filter).select("name username avatar isVerified").sort({ isVerified: -1, name: 1, username: 1 }).limit(24).lean();
+  return sendResponse(res, 200, "Moderator candidates fetched", {
+    candidates: candidates.map(safeUserProfile).filter(Boolean),
+    limit: MAX_MODERATORS_PER_EXPERIENCE,
+    remaining: Math.max(0, MAX_MODERATORS_PER_EXPERIENCE - (publication.worldModerators || []).length),
+  });
+});
+
+export const addWorldModerator = asyncHandler(async (req, res) => {
+  const moderatorId = req.body.userId || req.params.userId;
+  ensurePublicationId(moderatorId);
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  if (String(moderatorId) === String(req.user._id)) throw new ApiError(400, "You already own this World");
+  if (publication.worldModerators.length >= MAX_MODERATORS_PER_EXPERIENCE) throw new ApiError(409, `An experience can have up to ${MAX_MODERATORS_PER_EXPERIENCE} moderators`);
+  if (publication.worldModerators.some((item) => String(item.user) === String(moderatorId))) throw new ApiError(409, "Moderator already added");
+  const moderator = await User.findOne({ _id: moderatorId, role: { $in: ["fan", "creator"] }, status: "active" }).select("_id");
+  if (!moderator) throw new ApiError(404, "User not found");
+  const updated = await Publication.findOneAndUpdate(
+    {
+      _id: publication._id,
+      creator: req.user._id,
+      kind: { $in: ["WORLD", "PREMIUM_WORLD", "EXPERIENCE"] },
+      "worldModerators.user": { $ne: moderator._id },
+      $expr: { $lt: [{ $size: { $ifNull: ["$worldModerators", []] } }, MAX_MODERATORS_PER_EXPERIENCE] },
+    },
+    { $push: { worldModerators: { user: moderator._id, addedBy: req.user._id, addedAt: new Date() } }, $inc: { statusVersion: 1 } },
+    { new: true, runValidators: true },
+  ).select("+submittedSnapshot +shareToken");
+  if (!updated) {
+    const fresh = await ownerWorld(req.user._id, req.params.id);
+    if (fresh.worldModerators.some((item) => String(item.user) === String(moderatorId))) throw new ApiError(409, "Moderator already added");
+    if (fresh.worldModerators.length >= MAX_MODERATORS_PER_EXPERIENCE) throw new ApiError(409, `An experience can have up to ${MAX_MODERATORS_PER_EXPERIENCE} moderators`);
+    throw new ApiError(409, "Moderator could not be added");
+  }
+  updateSnapshotMetadata(updated, { worldModerators: updated.worldModerators });
+  await updated.save();
+  return sendResponse(res, 200, "Moderator added", await serializeWorldManagement(updated, req.user));
+});
+export const removeWorldModerator = asyncHandler(async (req, res) => {
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  ensurePublicationId(req.params.userId);
+  const before = publication.worldModerators.length;
+  publication.worldModerators = publication.worldModerators.filter((item) => String(item.user) !== String(req.params.userId));
+  if (publication.worldModerators.length === before) throw new ApiError(404, "Moderator not found for this experience");
+  publication.statusVersion += 1;
+  updateSnapshotMetadata(publication, { worldModerators: publication.worldModerators });
+  await publication.save();
+  return sendResponse(res, 200, "Moderator removed", await serializeWorldManagement(publication, req.user));
+});
 export const createDraft = asyncHandler(async (req, res) => { const publication = await createPublicationDraft(req.user._id, req.body); await publication.populate("series", "name"); await attachEntityMetadata(publication, req.user); return sendResponse(res, 201, "Publication draft created", { publication: ownerView(publication, [], req.user) }); });
 export const updateDraft = asyncHandler(async (req, res) => { const publication = await updatePublicationDraft(req.user._id, req.params.id, req.body); await publication.populate("series", "name"); const chapters = await Chapter.find({ publication: publication._id }).sort({ order: 1 }).lean(); await attachEntityMetadata(publication, req.user); return sendResponse(res, 200, "Publication updated", { publication: ownerView(publication, chapters, req.user) }); });
 export const listSeenCategories = asyncHandler(async (req, res) => sendResponse(res, 200, "Seen categories fetched", { categories: SEEN_CATEGORIES.map((name) => ({ id: name, name })) }));
