@@ -191,6 +191,24 @@ async function bestSeenFor(seens) {
   };
 }
 
+async function bestWallPostFor(wallPosts) {
+  if (!wallPosts.length) return null;
+  const engagementRows = await WallEngagement.aggregate([
+    { $match: { post: { $in: wallPosts.map((post) => post._id) } } },
+    { $group: { _id: "$post", value: { $sum: 1 } } },
+  ]);
+  const scores = new Map(engagementRows.map((row) => [String(row._id), row.value]));
+  const best = wallPosts.reduce((selected, post) => (scores.get(String(post._id)) || 0) > (scores.get(String(selected?._id)) || 0) ? post : selected, wallPosts[0]);
+  const value = scores.get(String(best._id)) || 0;
+  const text = String(best.text || "Untitled wall post").replace(/\s+/g, " ").trim();
+  return {
+    id: String(best._id),
+    metricLabel: value ? `${value.toLocaleString()} interaction${value === 1 ? "" : "s"}` : "No interactions yet",
+    title: text.length > 64 ? `${text.slice(0, 61)}...` : text,
+    value,
+  };
+}
+
 async function locationRowsFor(wallPosts) {
   const located = wallPosts.filter((post) => post.location);
   if (!located.length) return { best: null };
@@ -290,6 +308,7 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
     memberships,
     worldEntriesThisWeek,
     bestSeen,
+    bestWallPost,
     locations,
     activity,
     averageStoryViewsRow,
@@ -306,6 +325,7 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
     PremiumMembership.find({ creator: creatorId, status: { $in: ACTIVE_MEMBERSHIP_STATUSES } }).select("user starsPerPeriod status currentPeriodEnd").lean(),
     WorldEntitlement.distinct("user", { creator: creatorId, status: "ACTIVE", grantedAt: { $gte: weekStart, $lte: now } }),
     bestSeenFor(publishedSeens),
+    bestWallPostFor(wallPosts),
     locationRowsFor(wallPosts),
     recentActivity({ creatorId, publicationIds, wallPostIds }),
     StoryEngagement.aggregate([{ $match: { story: { $in: storyIds } } }, { $group: { _id: "$story", views: { $sum: { $cond: ["$viewedAt", 1, 0] } } } }, { $group: { _id: null, average: { $avg: "$views" } } }]),
@@ -343,7 +363,7 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
       bestPerformers: {
         location: locations.best,
         seen: bestSeen,
-        status: null,
+        wallPost: bestWallPost,
       },
       discoverySources: content.discoverySources,
       earnings: { amount: money(currentStars), changePercent: percentChange(currentStars, previousStars), currency: "USD" },
