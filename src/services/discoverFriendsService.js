@@ -1,3 +1,5 @@
+import { serializeProfileStatus } from "./statusService.js";
+
 function idFor(value) {
   return String(value?._id || value?.id || value || "");
 }
@@ -100,6 +102,7 @@ export function serializeDiscoverFriend(user, profile, meta = {}) {
     hasActiveStory,
     hasUnseenStory,
     activeStoryCount,
+    activeStatus: serializeProfileStatus(user.activeStatus),
     firstUnseenStoryId: firstUnseenStory?.id || null,
     storyAvailable: hasActiveStory,
     storyViewed: hasActiveStory && !hasUnseenStory,

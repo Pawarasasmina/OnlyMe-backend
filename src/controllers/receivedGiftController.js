@@ -17,7 +17,7 @@ export const getMyReceivedGifts = asyncHandler(async (req, res) => {
     DreamGift.find({ creator: req.user._id }).sort({ createdAt: -1 }).limit(limit).populate("supporter", "name username avatar").lean(),
   ]);
   const gifts = [
-    ...chatGifts.map((gift) => ({ id: `chat-${gift._id}`, name: gift.giftName, imageUrl: gift.giftImageUrl, stars: gift.starsAmount, source: gift.sourceType === "STORY" ? "Story" : "Direct", sender: sender(gift.sender), createdAt: gift.createdAt })),
+    ...chatGifts.map((gift) => ({ id: `chat-${gift._id}`, name: gift.giftName, imageUrl: gift.giftImageUrl, stars: gift.starsAmount, source: gift.sourceType === "STORY" ? "Story" : "Direct", message: gift.messageText || "", visibility: gift.visibility || "EVERYONE", sender: sender(gift.sender), createdAt: gift.createdAt })),
     ...dreamGifts.map((gift) => ({ id: `dream-${gift._id}`, name: gift.giftName, imageUrl: gift.giftImageUrl, stars: gift.starsAmount, source: "Dream", sender: sender(gift.supporter, gift.privateSupport), createdAt: gift.createdAt })),
   ].sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt)).slice(0, limit);
   return sendResponse(res, 200, "Received gifts fetched", { gifts, total: chatGifts.length + dreamGifts.length });

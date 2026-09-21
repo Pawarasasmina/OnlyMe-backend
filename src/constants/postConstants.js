@@ -16,7 +16,7 @@ export const POST_CONTEXTS = [
   "Other",
 ];
 
-export const POST_STATUSES = ["draft", "published", "deleted"];
+export const POST_STATUSES = ["draft", "published", "archived", "deleted"];
 export const POST_VISIBILITIES = ["public", "followers", "private"];
 export const POST_REACTIONS = [
   "like",

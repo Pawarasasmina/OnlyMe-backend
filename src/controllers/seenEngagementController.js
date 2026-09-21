@@ -37,12 +37,14 @@ const publishedCommentable = async (id, viewer, shareToken = "") => {
 };
 
 const summary = async (publication, viewerId) => {
-  const [counts, reactionCounts, viewer, comments, reactions] = await Promise.all([
+  const [counts, reactionCounts, viewer, comments, reactions, commentReactionRows, viewerCommentReactions] = await Promise.all([
     SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication) } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
     SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), type: "REACTION" } }, { $group: { _id: { $ifNull: ["$reaction", "LIKE"] }, count: { $sum: 1 } } }]),
     viewerId ? SeenEngagement.find({ publication, user: viewerId, type: { $in: ["REACTION", "SHARE", "SAVE"] } }).lean() : [],
     SeenEngagement.find({ publication, type: "COMMENT" }).sort({ createdAt: -1 }).limit(50).populate("user", "name username avatar").lean(),
     SeenEngagement.find({ publication, type: "REACTION" }).sort({ updatedAt: -1 }).limit(200).populate("user", "name username avatar").lean(),
+    SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), type: "COMMENT_REACTION" } }, { $group: { _id: { comment: "$parentComment", reaction: { $ifNull: ["$reaction", "LIKE"] } }, count: { $sum: 1 } } }]),
+    viewerId ? SeenEngagement.find({ publication, user: viewerId, type: "COMMENT_REACTION" }).select("parentComment reaction").lean() : [],
   ]);
   const savedCommentRows = viewerId && comments.length
     ? await SavedItem.find({ user: viewerId, targetType: "comment", targetModel: "SeenEngagement", targetId: { $in: comments.map((item) => item._id) } }).select("targetId").lean()
@@ -51,7 +53,27 @@ const summary = async (publication, viewerId) => {
   const count = Object.fromEntries(counts.map((item) => [item._id, item.count]));
   const sortedReactionCounts = sortReactionCounts(reactionCounts);
   const reactionBreakdown = Object.fromEntries(sortedReactionCounts.map((item) => [item._id, item.count]));
-  return { reactionCount: count.REACTION || 0, reactionBreakdown, topReactions: sortedReactionCounts.slice(0, 3).map((item) => item._id), reactors: reactions.map((item) => ({ id: item._id, reaction: item.reaction || "LIKE", user: { id: item.user?._id, name: item.user?.name || item.user?.username || "User", username: item.user?.username || "", avatar: item.user?.avatar || "" } })), commentCount: count.COMMENT || 0, shareCount: count.SHARE || 0, saveCount: count.SAVE || 0, viewCount: (count.WALKED || 0) + (count.REACTION || 0) + (count.COMMENT || 0) + (count.SHARE || 0) + (count.SAVE || 0), viewerReaction: viewer.find((item) => item.type === "REACTION")?.reaction || null, viewerShared: Boolean(viewer.find((item) => item.type === "SHARE")), viewerSaved: Boolean(viewer.find((item) => item.type === "SAVE")), comments: comments.reverse().map((item) => ({ id: item._id, text: item.text, createdAt: item.createdAt, author: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" }, viewerSaved: savedCommentIds.has(String(item._id)) })) };
+  const reactionsByComment = new Map();
+  commentReactionRows.forEach((row) => {
+    const id = String(row._id.comment);
+    const entry = reactionsByComment.get(id) || {};
+    entry[row._id.reaction] = row.count;
+    reactionsByComment.set(id, entry);
+  });
+  const viewerReactionByComment = new Map(viewerCommentReactions.map((row) => [String(row.parentComment), row.reaction || "LIKE"]));
+  const serialized = comments.reverse().map((item) => {
+    const breakdown = reactionsByComment.get(String(item._id)) || {};
+    const ordered = sortReactionCounts(Object.entries(breakdown).map(([_id, reactionCount]) => ({ _id, count: reactionCount })));
+    return { id: item._id, parentCommentId: item.parentComment ? String(item.parentComment) : null, text: item.text, createdAt: item.createdAt, author: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" }, reactionCount: ordered.reduce((total, row) => total + row.count, 0), reactionBreakdown: breakdown, topReactions: ordered.slice(0, 3).map((row) => row._id), viewerReaction: viewerReactionByComment.get(String(item._id)) || null, viewerSaved: savedCommentIds.has(String(item._id)), replies: [] };
+  });
+  const byId = new Map(serialized.map((item) => [String(item.id), item]));
+  const topLevelComments = [];
+  serialized.forEach((item) => {
+    const parent = item.parentCommentId && byId.get(item.parentCommentId);
+    if (parent) parent.replies.push(item);
+    else topLevelComments.push(item);
+  });
+  return { reactionCount: count.REACTION || 0, reactionBreakdown, topReactions: sortedReactionCounts.slice(0, 3).map((item) => item._id), reactors: reactions.map((item) => ({ id: item._id, reaction: item.reaction || "LIKE", user: { id: item.user?._id, name: item.user?.name || item.user?.username || "User", username: item.user?.username || "", avatar: item.user?.avatar || "" } })), commentCount: count.COMMENT || 0, shareCount: count.SHARE || 0, saveCount: count.SAVE || 0, viewCount: (count.WALKED || 0) + (count.REACTION || 0) + (count.COMMENT || 0) + (count.SHARE || 0) + (count.SAVE || 0), viewerReaction: viewer.find((item) => item.type === "REACTION")?.reaction || null, viewerShared: Boolean(viewer.find((item) => item.type === "SHARE")), viewerSaved: Boolean(viewer.find((item) => item.type === "SAVE")), comments: topLevelComments };
 };
 
 const cleanString = (value, maxLength) => {
@@ -132,9 +154,32 @@ export const removeSeenReaction = asyncHandler(async (req, res) => { await publi
 export const commentOnSeen = asyncHandler(async (req, res) => {
   const publication = await publishedCommentable(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const text = String(req.body.text || "").trim();
   if (!text || text.length > 500) throw new ApiError(400, "Comment must contain 1 to 500 characters");
-  await SeenEngagement.create({ publication: req.params.id, user: req.user._id, type: "COMMENT", text });
+  let parentComment;
+  if (req.body.parentCommentId) {
+    if (!mongoose.isValidObjectId(req.body.parentCommentId)) throw new ApiError(400, "Invalid parent comment ID");
+    parentComment = await SeenEngagement.findOne({ _id: req.body.parentCommentId, publication: req.params.id, type: "COMMENT" }).select("_id parentComment").lean();
+    if (!parentComment) throw new ApiError(404, "Parent comment not found");
+    if (parentComment.parentComment) parentComment = await SeenEngagement.findById(parentComment.parentComment).select("_id").lean();
+  }
+  await SeenEngagement.create({ publication: req.params.id, user: req.user._id, type: "COMMENT", text, parentComment: parentComment?._id });
   notifyCreatorActivity(req, publication);
   return sendResponse(res, 201, "Comment added", { engagement: await summary(req.params.id, req.user._id) });
+});
+
+export const reactToSeenComment = asyncHandler(async (req, res) => {
+  await publishedCommentable(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token);
+  const reaction = String(req.body.reaction || "").toUpperCase();
+  if (!SEEN_REACTIONS.includes(reaction)) throw new ApiError(400, "A valid reaction is required");
+  const comment = await SeenEngagement.findOne({ _id: req.params.commentId, publication: req.params.id, type: "COMMENT" }).select("_id").lean();
+  if (!comment) throw new ApiError(404, "Comment not found");
+  await SeenEngagement.findOneAndUpdate({ publication: req.params.id, parentComment: comment._id, user: req.user._id, type: "COMMENT_REACTION" }, { $set: { reaction } }, { upsert: true, new: true, runValidators: true });
+  return sendResponse(res, 200, "Comment reaction saved", { engagement: await summary(req.params.id, req.user._id) });
+});
+
+export const removeSeenCommentReaction = asyncHandler(async (req, res) => {
+  await publishedCommentable(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token);
+  await SeenEngagement.deleteOne({ publication: req.params.id, parentComment: req.params.commentId, user: req.user._id, type: "COMMENT_REACTION" });
+  return sendResponse(res, 200, "Comment reaction removed", { engagement: await summary(req.params.id, req.user._id) });
 });
 
 export const shareSeen = asyncHandler(async (req, res) => { await publishedSeen(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const caption = String(req.body.caption || "").trim(); if (caption.length > 500) throw new ApiError(400, "Share caption must not exceed 500 characters"); await SeenEngagement.findOneAndUpdate({ publication: req.params.id, user: req.user._id, type: "SHARE" }, { $set: { text: caption || undefined }, $setOnInsert: { publication: req.params.id, user: req.user._id, type: "SHARE" } }, { upsert: true, new: true, runValidators: true }); return sendResponse(res, 200, "Seen shared to your profile", { engagement: await summary(req.params.id, req.user._id) }); });

@@ -22,6 +22,7 @@ import {
 } from "../services/discoverFriendsService.js";
 import { canAccessPublicationAudience, seenVisibilityFilter } from "../services/publicationAccessService.js";
 import { getWallSawYouToday } from "../services/wallSeenTodayService.js";
+import { serializeProfileStatus } from "../services/statusService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -577,6 +578,7 @@ function serializeDiscoverPerson(user, profile, meta = {}) {
     hasActiveStory,
     hasUnseenStory,
     activeStoryCount,
+    activeStatus: serializeProfileStatus(user.activeStatus),
     firstUnseenStoryId: firstUnseenStory?.id || null,
     storyAvailable: hasActiveStory || Boolean(meta.storyAvailable),
     storyViewed: hasActiveStory && !hasUnseenStory,
@@ -606,7 +608,7 @@ async function discoverConnections({ blockedIds, previewByCreator, viewerId }) {
         role: { $in: ["fan", "creator"] },
         status: "active",
       },
-      select: "name username avatar role isVerified creatorApprovalStatus lastSeenAt createdAt",
+      select: "name username avatar role isVerified creatorApprovalStatus activeStatus lastSeenAt createdAt",
     })
       .lean(),
     ProfileRelationship.find({
@@ -840,10 +842,13 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const discoverSeens = visibleSeens.map((publication) => serializeDiscoverSeen(publication, seenEngagementCounts));
   const trendingSeen = [...discoverSeens]
     .sort((left, right) => right.viewCount - left.viewCount || new Date(right.publishedAt || 0) - new Date(left.publishedAt || 0))[0] || null;
-  const freshSeens = discoverSeens
+  const freshWithoutTrending = discoverSeens
     .filter((seen) => seen.id !== trendingSeen?.id)
     .sort((left, right) => new Date(right.publishedAt || 0) - new Date(left.publishedAt || 0))
     .slice(0, 3);
+  const freshSeens = freshWithoutTrending.length < 3 && trendingSeen
+    ? [...freshWithoutTrending, trendingSeen].slice(0, 3)
+    : freshWithoutTrending;
   const categories = categoriesFromCreators(creators);
   const trendingTags = [...new Set([...creators.flatMap((creator) => creator.tags || []), ...DISCOVER_TAGS])].slice(0, 18);
   const interestTags = [...new Set([...(viewerProfile?.interests || []), ...(viewerProfile?.categories || []), viewerProfile?.category, ...DISCOVER_TAGS].filter(Boolean))].slice(0, 18);

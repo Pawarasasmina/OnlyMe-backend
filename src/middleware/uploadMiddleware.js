@@ -138,7 +138,11 @@ export const uploadMessageImage = multer({
 export const uploadGiftImage = multer({
   storage: multer.memoryStorage(),
   limits: { files: 1, fileSize: 8 * 1024 * 1024 },
-  fileFilter: imageFileFilter,
+  fileFilter: (_req, file, callback) => {
+    const giftTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+    if (!giftTypes.has(normalizedMimeType(file))) return callback(new ApiError(400, "Gifts support JPEG, PNG, animated WebP, or GIF files"));
+    callback(null, true);
+  },
 });
 
 const allowedStoryTypes = new Set(["image/jpeg", "image/png", "image/webp", "video/mp4", "video/quicktime", "video/webm"]);

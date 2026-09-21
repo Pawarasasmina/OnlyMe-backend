@@ -8,6 +8,8 @@ const schema = new mongoose.Schema({
   giftName: { type: String, required: true, maxlength: 80 },
   giftImageUrl: { type: String, required: true, maxlength: 2000 },
   sourceType: { type: String, enum: ["DIRECT", "STORY"], default: "DIRECT", index: true },
+  messageText: { type: String, trim: true, maxlength: 500, default: "" },
+  visibility: { type: String, enum: ["EVERYONE", "RECIPIENT_ONLY"], default: "EVERYONE", index: true },
   starsAmount: { type: Number, required: true, min: 1, validate: Number.isSafeInteger },
   debitLedgerEntry: { type: mongoose.Schema.Types.ObjectId, ref: "StarsLedgerEntry", required: true },
   creditLedgerEntry: { type: mongoose.Schema.Types.ObjectId, ref: "StarsLedgerEntry", required: true },
