@@ -3,6 +3,7 @@ import Publication from "../models/Publication.js";
 import { executeFinancialCommand } from "./financialCommandService.js";
 import { transferStars, safeWallet } from "./walletLedgerService.js";
 import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
+import { PREMIUM_PRICE_PRESETS } from "../constants/publicationConstants.js";
 import ApiError from "../utils/ApiError.js";
 import { FINANCIAL_ERROR_CODES } from "../constants/financialConstants.js";
 
@@ -60,7 +61,7 @@ export async function joinPremium({ user, publicationId, key }) {
         );
 
       const price = publication.publishedSnapshot.metadata?.pricing?.starsAmount;
-      if (![90, 190, 290].includes(price))
+      if (!PREMIUM_PRICE_PRESETS.includes(price))
         throw new ApiError(
           409,
           "Premium price is invalid",

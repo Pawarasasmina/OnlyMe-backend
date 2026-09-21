@@ -5,6 +5,9 @@ import { ACTIVE_PLANET_STATUSES, PUBLICATION_KINDS, PUBLICATION_STATUSES, PUBLIC
 const mediaSchema = new mongoose.Schema({ assetId: { type: String, required: true }, resourceType: { type: String, enum: ["image", "video"], required: true }, mediaType: { type: String, enum: ["IMAGE", "VIDEO", "AUDIO", "VOICE"], required: true }, secureUrl: { type: String, required: true }, format: String, bytes: Number, width: Number, height: Number, duration: Number }, { _id: false });
 const snapshotSchema = new mongoose.Schema({ version: { type: Number, required: true }, metadata: { type: mongoose.Schema.Types.Mixed, required: true }, chapters: { type: [mongoose.Schema.Types.Mixed], required: true }, frozenAt: { type: Date, required: true } }, { _id: false });
 const entityRefSchema = new mongoose.Schema({ entityType: { type: String, enum: CONTENT_ENTITY_TYPES, required: true }, entityId: { type: mongoose.Schema.Types.ObjectId, required: true } }, { _id: false });
+const worldModeratorSchema = new mongoose.Schema({ user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }, addedAt: { type: Date, default: Date.now }, addedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true } }, { _id: false });
+const worldWaveSchema = new mongoose.Schema({ openedAt: { type: Date, default: Date.now }, openedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }, previousCapacity: { type: Number, default: null }, nextCapacity: { type: Number, required: true } }, { _id: false });
+const priceHistorySchema = new mongoose.Schema({ previousStarsAmount: { type: Number, default: null, min: 1, validate: { validator: (value) => value === null || Number.isSafeInteger(value), message: "Previous price must be an integer" } }, starsAmount: { type: Number, required: true, min: 1, validate: Number.isSafeInteger }, changedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }, changedAt: { type: Date, default: Date.now } }, { _id: false });
 
 const schema = new mongoose.Schema({
   creator: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
@@ -16,12 +19,25 @@ const schema = new mongoose.Schema({
   visibility: { type: String, enum: PUBLICATION_VISIBILITIES, default: "PUBLIC", index: true },
   isPinned: { type: Boolean, default: false, index: true },
   shareToken: { type: String, default: "", select: false },
-  planet: { emoji: { type: String, default: "" }, slot: { type: String, enum: ["WORLD_1", "WORLD_2", "PREMIUM", null], default: null }, accent: { type: String, default: "" } },
+  planet: { emoji: { type: String, default: "" }, faceEmoji: { type: String, default: "" }, slot: { type: String, enum: ["WORLD_1", "WORLD_2", "PREMIUM", null], default: null }, accent: { type: String, default: "" } },
   includedInWorld: { type: Boolean, default: false },
+  includedExperienceIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Publication" }],
+  worldSeatCapacity: { type: Number, default: null, min: 0, validate: { validator: (value) => value === null || Number.isSafeInteger(value), message: "Seat capacity must be an integer" } },
+  worldFoundingCapacity: { type: Number, default: 250, min: 0, validate: Number.isSafeInteger },
+  worldWaveSize: { type: Number, default: 100, min: 1, validate: Number.isSafeInteger },
+  worldWaves: { type: [worldWaveSchema], default: [] },
+  commentsEnabled: { type: Boolean, default: true },
+  firstMonthOfferEnabled: { type: Boolean, default: false },
+  memberPriceLocked: { type: Boolean, default: true },
+  directAccessIncluded: { type: Boolean, default: true },
+  directAccessIncludedReplies: { type: Number, default: 1, min: 0, max: 3, validate: Number.isSafeInteger },
+  worldModerators: { type: [worldModeratorSchema], default: [] },
   experiencePath: { type: String, trim: true, default: "", maxlength: 300 },
   experienceLocation: { type: String, trim: true, default: "", maxlength: 120 },
   allowDownload: { type: Boolean, default: false },
   pricing: { mode: { type: String, enum: ["FREE", "ONE_TIME", "MONTHLY"], required: true }, starsAmount: { type: Number, default: null }, presetId: { type: String, default: null } },
+  pricingLastChangedAt: { type: Date, default: null },
+  priceHistory: { type: [priceHistorySchema], default: [] },
   previewPolicy: { type: String, enum: ["ALL_FREE", "ONE_CHAPTER", "ONE_OR_TWO_CHAPTERS"], required: true },
   status: { type: String, enum: PUBLICATION_STATUSES, default: "DRAFT", index: true }, draftVersion: { type: Number, default: 1, min: 1 }, submittedVersion: { type: Number, default: null }, publishedVersion: { type: Number, default: null }, statusVersion: { type: Number, default: 0, min: 0 },
   submittedSnapshot: { type: snapshotSchema, default: undefined, select: false }, publishedSnapshot: { type: snapshotSchema, default: undefined },
@@ -41,4 +57,6 @@ schema.index({ shareToken: 1 }, { unique: true, sparse: true, partialFilterExpre
 schema.index({ "entityRefs.entityType": 1, "entityRefs.entityId": 1, kind: 1, status: 1 });
 schema.index({ creator: 1, "planet.slot": 1 }, { unique: true, partialFilterExpression: { status: { $in: ACTIVE_PLANET_STATUSES }, "planet.slot": { $type: "string" } } });
 schema.index({ creator: 1, kind: 1 }, { unique: true, partialFilterExpression: { kind: "PREMIUM_WORLD", status: { $in: ACTIVE_PLANET_STATUSES } } });
+schema.index({ includedExperienceIds: 1 });
+schema.index({ "worldModerators.user": 1 });
 export default mongoose.model("Publication", schema);

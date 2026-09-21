@@ -7,6 +7,8 @@ import SeenEngagement, { SEEN_REACTIONS } from "../models/SeenEngagement.js";
 import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
 import { canAccessPublicationAudience } from "../services/publicationAccessService.js";
+import { canModeratePublication } from "../services/publicationModeratorService.js";
+import { assertWorldCommentsEnabled } from "../services/worldCommentsService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -31,7 +33,7 @@ const sortReactionCounts = (rows = []) => rows.sort((first, second) => second.co
 
 const publishedCommentable = async (id, viewer, shareToken = "") => {
   if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid publication ID");
-  const publication = await Publication.findOne({ _id: id, kind: { $in: ["SEEN", "WORLD", "PREMIUM_WORLD"] }, status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("_id creator kind visibility +shareToken").lean();
+  const publication = await Publication.findOne({ _id: id, kind: { $in: ["SEEN", "WORLD", "PREMIUM_WORLD", "EXPERIENCE"] }, status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("_id creator kind visibility commentsEnabled +shareToken").lean();
   if (!publication || (publication.kind === "SEEN" && !await canAccessPublicationAudience(publication, viewer, { shareToken }))) throw new ApiError(404, "Published content not found");
   return publication;
 };
@@ -153,6 +155,7 @@ export const removeSeenReaction = asyncHandler(async (req, res) => { await publi
 
 export const commentOnSeen = asyncHandler(async (req, res) => {
   const publication = await publishedCommentable(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const text = String(req.body.text || "").trim();
+  assertWorldCommentsEnabled(publication);
   if (!text || text.length > 500) throw new ApiError(400, "Comment must contain 1 to 500 characters");
   let parentComment;
   if (req.body.parentCommentId) {
@@ -182,10 +185,62 @@ export const removeSeenCommentReaction = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Comment reaction removed", { engagement: await summary(req.params.id, req.user._id) });
 });
 
+export const removeSeenComment = asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid publication ID");
+  if (!mongoose.isValidObjectId(req.params.commentId)) throw new ApiError(400, "Invalid comment ID");
+  const comment = await SeenEngagement.findOne({ _id: req.params.commentId, publication: req.params.id, type: "COMMENT" }).select("_id publication").lean();
+  if (!comment) throw new ApiError(404, "Comment not found");
+  const publication = await Publication.findOne({ _id: comment.publication, kind: { $in: ["SEEN", "WORLD", "PREMIUM_WORLD", "EXPERIENCE"] } }).select("_id creator kind worldModerators").lean();
+  if (!publication) throw new ApiError(404, "Publication not found");
+  if (!canModeratePublication(req.user._id, publication)) throw new ApiError(403, "Only the creator or this experience's moderator can remove comments");
+  await SeenEngagement.deleteMany({
+    publication: publication._id,
+    $or: [
+      { _id: comment._id },
+      { parentComment: comment._id },
+    ],
+  });
+  await SeenEngagement.deleteMany({ publication: publication._id, type: "COMMENT_REACTION", parentComment: comment._id });
+  return sendResponse(res, 200, "Comment removed", { engagement: await summary(publication._id, req.user._id) });
+});
+
 export const shareSeen = asyncHandler(async (req, res) => { await publishedSeen(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const caption = String(req.body.caption || "").trim(); if (caption.length > 500) throw new ApiError(400, "Share caption must not exceed 500 characters"); await SeenEngagement.findOneAndUpdate({ publication: req.params.id, user: req.user._id, type: "SHARE" }, { $set: { text: caption || undefined }, $setOnInsert: { publication: req.params.id, user: req.user._id, type: "SHARE" } }, { upsert: true, new: true, runValidators: true }); return sendResponse(res, 200, "Seen shared to your profile", { engagement: await summary(req.params.id, req.user._id) }); });
 export const removeSeenShare = asyncHandler(async (req, res) => { await publishedSeen(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); await SeenEngagement.deleteOne({ publication: req.params.id, user: req.user._id, type: "SHARE" }); return sendResponse(res, 200, "Seen removed from your profile", { engagement: await summary(req.params.id, req.user._id) }); });
 export const toggleSeenSave = asyncHandler(async (req, res) => { await publishedSeen(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const filter = { publication: req.params.id, user: req.user._id, type: "SAVE" }; const existing = await SeenEngagement.findOne(filter); if (existing) await existing.deleteOne(); else await SeenEngagement.create(filter); return sendResponse(res, 200, existing ? "Seen removed from Saved" : "Seen saved", { engagement: await summary(req.params.id, req.user._id) }); });
 export const markWorldWalked = asyncHandler(async (req, res) => { const publication = await publishedPlanet(req.params.id); await SeenEngagement.findOneAndUpdate({ publication: publication._id, user: req.user._id, type: "WALKED" }, { $setOnInsert: { publication: publication._id, user: req.user._id, type: "WALKED" } }, { upsert: true, new: true }); return sendResponse(res, 200, "World marked as walked", { walked: true, publication: { id: publication._id, title: publication.title } }); });
+
+export const listWorldWalkers = asyncHandler(async (req, res) => {
+  const publication = await publishedPlanet(req.params.id);
+  const viewerId = String(req.user?._id || req.user?.id || "");
+  const creatorId = String(publication.creator?._id || publication.creator?.id || publication.creator || "");
+  if (!viewerId || !creatorId || viewerId !== creatorId) throw new ApiError(403, "Only the world creator can view walkers");
+  const paging = page(req);
+  const filter = { publication: publication._id, type: "WALKED" };
+  const [rows, total] = await Promise.all([
+    SeenEngagement.find(filter)
+      .sort({ createdAt: -1, _id: -1 })
+      .skip((paging.page - 1) * paging.limit)
+      .limit(paging.limit)
+      .populate("user", "name username avatar isVerified")
+      .lean(),
+    SeenEngagement.countDocuments(filter),
+  ]);
+  const items = rows.filter((item) => item.user).map((item) => ({
+    id: String(item._id),
+    createdAt: item.createdAt,
+    user: {
+      id: String(item.user._id),
+      displayName: item.user.name || item.user.username || "Atseen user",
+      username: item.user.username || "",
+      avatarUrl: item.user.avatar || "",
+      verified: Boolean(item.user.isVerified),
+    },
+  }));
+  return sendResponse(res, 200, "World walkers fetched", {
+    items,
+    pagination: { ...paging, total, pages: Math.max(1, Math.ceil(total / paging.limit)), hasMore: paging.page * paging.limit < total },
+  });
+});
 
 export const hideSeen = asyncHandler(async (req, res) => {
   const publication = await publishedSeen(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token);
