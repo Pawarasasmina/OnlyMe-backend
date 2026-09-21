@@ -10,6 +10,7 @@ import { activateWalletLedger } from "../services/walletAdministrationService.js
 import { refundWorld, refundPremium } from "../services/refundService.js";
 import { positiveStars, idempotencyKey, requiredReason, fingerprint } from "../validators/financialValidator.js";
 import { env } from "../config/env.js";
+import { getStarExchangeRate, setStarExchangeRate } from "../services/starExchangeService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -18,6 +19,15 @@ const objectId = (value) => {
   if (!mongoose.isObjectIdOrHexString(value)) throw new ApiError(400, "A valid financial record identifier is required", "INVALID_FINANCIAL_ID");
   return value;
 };
+
+export const getExchangeRate = asyncHandler(async (_req, res) => sendResponse(res, 200, "Star exchange rate fetched", { starsPerUsd: await getStarExchangeRate() }));
+
+export const updateExchangeRate = asyncHandler(async (req, res) => {
+  const starsPerUsd = Number(req.body.starsPerUsd);
+  if (!Number.isFinite(starsPerUsd) || starsPerUsd < 0.01 || starsPerUsd > 100000) throw new ApiError(400, "Stars per USD must be between 0.01 and 100,000", "INVALID_STAR_EXCHANGE_RATE");
+  const setting = await setStarExchangeRate(Math.round(starsPerUsd * 100) / 100, req.user._id);
+  return sendResponse(res, 200, "Star exchange rate updated", { starsPerUsd: setting.starsPerUsd, updatedAt: setting.updatedAt });
+});
 
 export const creditStars = asyncHandler(async (req, res) => {
   if (!env.enableAdminStarCredits) throw new ApiError(403, "Admin Stars credits are disabled", "ADMIN_CREDITS_DISABLED");

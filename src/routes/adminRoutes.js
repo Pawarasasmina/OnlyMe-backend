@@ -15,7 +15,7 @@ import {
 } from "../controllers/adminController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
-import { createGift, deleteGift, listGifts, reorderGifts, updateGift } from "../controllers/adminGiftController.js";
+import { createGift, createGiftCategory, deleteGift, deleteGiftCategory, listGifts, reorderGifts, updateGift, updateGiftCategory } from "../controllers/adminGiftController.js";
 import { uploadGiftImage } from "../middleware/uploadMiddleware.js";
 import { getWelcomeEmailTemplate, updateWelcomeEmailTemplate } from "../controllers/adminEmailTemplateController.js";
 
@@ -29,6 +29,9 @@ router.get("/dashboard", getAdminDashboard);
 router.get("/email-templates/welcome", getWelcomeEmailTemplate);
 router.patch("/email-templates/welcome", uploadGiftImage.single("logo"), updateWelcomeEmailTemplate);
 router.get("/gifts", listGifts);
+router.post("/gift-categories", createGiftCategory);
+router.patch("/gift-categories/:id", updateGiftCategory);
+router.delete("/gift-categories/:id", deleteGiftCategory);
 router.post("/gifts", uploadGiftImage.single("image"), createGift);
 router.patch("/gifts/reorder", reorderGifts);
 router.patch("/gifts/:id", uploadGiftImage.single("image"), updateGift);
