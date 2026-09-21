@@ -246,8 +246,12 @@ async function sharedContentSnapshot(input, viewer) {
     };
   }
   if (["seen", "world", "experience"].includes(contentType)) {
-    const kind = contentType === "seen" ? "SEEN" : "WORLD";
-    const publication = await Publication.findOne({ _id: contentId, kind, status: "PUBLISHED" })
+    const kindFilter = contentType === "seen"
+      ? "SEEN"
+      : contentType === "experience"
+        ? "EXPERIENCE"
+        : { $in: ["WORLD", "PREMIUM_WORLD"] };
+    const publication = await Publication.findOne({ _id: contentId, kind: kindFilter, status: { $ne: "REMOVED" } })
       .select("+shareToken")
       .populate("creator", "name username avatar role status")
       .lean();
@@ -259,7 +263,7 @@ async function sharedContentSnapshot(input, viewer) {
     return {
       contentType,
       contentId: publication._id,
-      route: `/${contentType === "seen" ? "seen" : "world"}/${publication._id}`,
+      route: `/${contentType === "seen" ? "seen" : contentType === "experience" ? "experience" : "world"}/${publication._id}`,
       title: compactPreview(serialized.title || contentLabel(contentType), 120),
       previewText: compactPreview(serialized.summary || serialized.description || serialized.title || ""),
       imageUrl: serialized.coverMedia?.secureUrl || "",
