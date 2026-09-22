@@ -15,6 +15,7 @@ import WallEngagement from "../models/WallEngagement.js";
 import WallPost from "../models/WallPost.js";
 import WorldEntitlement from "../models/WorldEntitlement.js";
 import { ACTIVE_MEMBERSHIP_STATUSES } from "../constants/financialConstants.js";
+import { getStarExchangeRate } from "./starExchangeService.js";
 
 const CREATOR_EARNING_TYPES = [
   "WORLD_CREATOR_EARNING",
@@ -58,8 +59,10 @@ function percentChange(current, previous) {
   return Math.round(((current - previous) / previous) * 100);
 }
 
-function money(stars) {
-  return Number(((Number(stars) || 0) / 10).toFixed(2));
+export function starsToUsd(stars, starsPerUsd) {
+  const rate = Number(starsPerUsd);
+  if (!Number.isFinite(rate) || rate <= 0) return 0;
+  return Number(((Number(stars) || 0) / rate).toFixed(2));
 }
 
 function publicUser(user) {
@@ -129,8 +132,12 @@ function baseMetric(value, previousValue) {
   return { changePercent: percentChange(value, previousValue), value };
 }
 
-async function contentAudience({ creatorId, publicationIds, storyIds, start, previousStart, previousEnd, now }) {
-  const entityIds = [...publicationIds.map(String), ...storyIds.map(String)];
+export function totalContentViews({ analyticsViews = 0, storyViews = 0 } = {}) {
+  return Math.max(0, Number(analyticsViews) || 0) + Math.max(0, Number(storyViews) || 0);
+}
+
+async function contentAudience({ creatorId, publicationIds, wallPostIds, storyIds, start, previousStart, previousEnd, now }) {
+  const entityIds = [...publicationIds.map(String), ...wallPostIds.map(String), ...storyIds.map(String)];
   const contentMatch = entityIds.length
     ? {
       $or: [
@@ -312,8 +319,13 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
     locations,
     activity,
     averageStoryViewsRow,
+    starsPerUsd,
+    currentContentAnalyticsViews,
+    previousContentAnalyticsViews,
+    currentStoryViews,
+    previousStoryViews,
   ] = await Promise.all([
-    contentAudience({ creatorId, now, previousEnd, previousStart, publicationIds, start, storyIds }),
+    contentAudience({ creatorId, now, previousEnd, previousStart, publicationIds, wallPostIds, start, storyIds }),
     seenIds.length ? AnalyticsEvent.countDocuments({ eventType: { $in: ["CONTENT_VIEW", "CONTENT_OPENED", "SEEN_VIEW"] }, entityId: { $in: seenIds.map(String) }, createdAt: { $gte: start, $lte: now } }) : 0,
     seenIds.length ? AnalyticsEvent.countDocuments({ eventType: { $in: ["CONTENT_VIEW", "CONTENT_OPENED", "SEEN_VIEW"] }, entityId: { $in: seenIds.map(String) }, createdAt: { $gte: previousStart, $lte: previousEnd } }) : 0,
     AnalyticsEvent.countDocuments({ eventType: "PROFILE_VIEW", entityId: String(creatorId), createdAt: { $gte: start, $lte: now } }),
@@ -329,6 +341,11 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
     locationRowsFor(wallPosts),
     recentActivity({ creatorId, publicationIds, wallPostIds }),
     StoryEngagement.aggregate([{ $match: { story: { $in: storyIds } } }, { $group: { _id: "$story", views: { $sum: { $cond: ["$viewedAt", 1, 0] } } } }, { $group: { _id: null, average: { $avg: "$views" } } }]),
+    getStarExchangeRate(),
+    publicationIds.length || wallPostIds.length ? AnalyticsEvent.countDocuments({ eventType: { $in: ["CONTENT_VIEW", "CONTENT_OPENED", "SEEN_VIEW"] }, entityId: { $in: [...publicationIds, ...wallPostIds].map(String) }, createdAt: { $gte: start, $lte: now } }) : 0,
+    publicationIds.length || wallPostIds.length ? AnalyticsEvent.countDocuments({ eventType: { $in: ["CONTENT_VIEW", "CONTENT_OPENED", "SEEN_VIEW"] }, entityId: { $in: [...publicationIds, ...wallPostIds].map(String) }, createdAt: { $gte: previousStart, $lte: previousEnd } }) : 0,
+    storyIds.length ? StoryEngagement.countDocuments({ story: { $in: storyIds }, viewedAt: { $gte: start, $lte: now } }) : 0,
+    storyIds.length ? StoryEngagement.countDocuments({ story: { $in: storyIds }, viewedAt: { $gte: previousStart, $lte: previousEnd } }) : 0,
   ]);
 
   const answered = directWindows.filter((item) => item.firstCreatorReplyAt || item.answeredAt);
@@ -339,8 +356,9 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
   currentLedger.forEach((entry) => { bySourceStars[sourceBucketForEntry(entry)] += entry.signedAmount; });
 
   const followerIds = followerRows.map((row) => row.actor);
-  const [newFollowersThisWeek, mutualRows, audience] = await Promise.all([
-    ProfileRelationship.countDocuments({ target: creatorId, type: "FOLLOW", createdAt: { $gte: weekStart, $lte: now } }),
+  const [newFollowersThisMonth, previousFollowersThisPeriod, mutualRows, audience] = await Promise.all([
+    ProfileRelationship.countDocuments({ target: creatorId, type: "FOLLOW", createdAt: { $gte: start, $lte: now } }),
+    ProfileRelationship.countDocuments({ target: creatorId, type: "FOLLOW", createdAt: { $gte: previousStart, $lte: previousEnd } }),
     followerIds.length ? ProfileRelationship.find({ actor: creatorId, target: { $in: followerIds }, type: "FOLLOW" }).select("target").lean() : [],
     audienceBreakdown(followerIds),
   ]);
@@ -355,9 +373,15 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
 
   const activeMemberships = memberships.filter((item) => new Date(item.currentPeriodEnd) > now);
   const recurringStars = activeMemberships.reduce((sum, item) => sum + Number(item.starsPerPeriod || 0), 0);
+  const money = (stars) => starsToUsd(stars, starsPerUsd);
+  const reach = baseMetric(
+    totalContentViews({ analyticsViews: currentContentAnalyticsViews, storyViews: currentStoryViews }),
+    totalContentViews({ analyticsViews: previousContentAnalyticsViews, storyViews: previousStoryViews }),
+  );
 
   return {
     period: { end: now.toISOString(), start: start.toISOString() },
+    exchangeRate: { starsPerUsd },
     creatorPath: { ...creatorPath, completed, total: 4 },
     overview: {
       bestPerformers: {
@@ -367,9 +391,9 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
       },
       discoverySources: content.discoverySources,
       earnings: { amount: money(currentStars), changePercent: percentChange(currentStars, previousStars), currency: "USD" },
-      newFollowers: { periodLabel: "this week", value: newFollowersThisWeek },
+      newFollowers: { ...baseMetric(newFollowersThisMonth, previousFollowersThisPeriod), periodLabel: "this month" },
       profileVisits: baseMetric(currentProfileVisits, previousProfileVisits),
-      reach: content.reach,
+      reach,
       recentActivity: activity,
       responseRate: directWindows.length ? { medianResponseMinutes: median(responseMinutes), value: Math.round(answered.length / directWindows.length * 100) } : { medianResponseMinutes: null, value: null },
       seenViews: baseMetric(currentSeenViews, previousSeenViews),
@@ -380,7 +404,7 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
       followers: followerRows.length,
       interests: audience.interests,
       mutualConnections: mutualRows.length,
-      newFollowersThisWeek,
+      newFollowersThisMonth,
       newVsReturning: content.newVsReturning,
       topCities: audience.topCities,
     },

@@ -63,6 +63,21 @@ const updateSnapshotMetadata = (publication, values) => {
     publication.markModified(`${snapshotKey}.metadata`);
   }
 };
+const premiumWorldForCreator = (creatorId) => Publication.findOne({ creator: creatorId, kind: "PREMIUM_WORLD", status: { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } }).select("+submittedSnapshot");
+async function syncExperienceWithPremiumWorld(creatorId, experienceId, included, premiumWorld = null) {
+  const world = premiumWorld || await premiumWorldForCreator(creatorId);
+  if (!world) {
+    if (included) throw new ApiError(409, "Create your Premium World before including this Experience");
+    return;
+  }
+  const ids = (world.includedExperienceIds || []).map(String);
+  world.includedExperienceIds = included
+    ? [...new Set([...ids, String(experienceId)])]
+    : ids.filter((id) => id !== String(experienceId));
+  world.statusVersion += 1;
+  updateSnapshotMetadata(world, { includedExperienceIds: world.includedExperienceIds });
+  await world.save();
+}
 const snapshotChapter = (chapter) => ({
   stableChapterId: chapter.stableChapterId,
   order: chapter.order,
@@ -178,6 +193,7 @@ export const updateWorldPricing = asyncHandler(async (req, res) => {
 export const updateWorldManagement = asyncHandler(async (req, res) => {
   const publication = await ownerWorld(req.user._id, req.params.id);
   const updates = {};
+  let premiumWorld = null;
   if (Object.hasOwn(req.body, "priceStars") || Object.hasOwn(req.body, "monthlyStars") || Object.hasOwn(req.body, "monthlyCoins")) {
     throw new ApiError(400, "Use the World pricing endpoint to change subscription price", "WORLD_PRICING_ENDPOINT_REQUIRED");
   }
@@ -201,6 +217,21 @@ export const updateWorldManagement = asyncHandler(async (req, res) => {
     if (!Number.isSafeInteger(replies) || replies < 0 || replies > 3) throw new ApiError(400, "Included replies must be between 0 and 3");
     updates.directAccessIncludedReplies = replies;
   }
+  if (Object.hasOwn(req.body, "allowDownload")) updates.allowDownload = req.body.allowDownload === true;
+  if (Object.hasOwn(req.body, "includedInWorld")) {
+    updates.includedInWorld = req.body.includedInWorld === true;
+    if (publication.kind !== "EXPERIENCE") throw new ApiError(400, "Only Experiences can be included in a Premium World");
+    premiumWorld = await premiumWorldForCreator(req.user._id);
+    if (updates.includedInWorld && !premiumWorld) throw new ApiError(409, "Create your Premium World before including this Experience");
+  }
+  if (Object.hasOwn(req.body, "taggedPeople")) {
+    if (publication.kind !== "EXPERIENCE") throw new ApiError(400, "People can only be tagged in an Experience");
+    const taggedPeople = [...new Set((Array.isArray(req.body.taggedPeople) ? req.body.taggedPeople : []).map(String))];
+    if (taggedPeople.length > 10 || taggedPeople.some((id) => !mongoose.isValidObjectId(id) || id === String(req.user._id))) throw new ApiError(400, "Choose up to 10 valid people");
+    const existingCount = await User.countDocuments({ _id: { $in: taggedPeople }, role: { $in: ["fan", "creator"] }, status: "active" });
+    if (existingCount !== taggedPeople.length) throw new ApiError(400, "One or more tagged people are unavailable");
+    updates.taggedPeople = taggedPeople;
+  }
   if (!Object.keys(updates).length) return sendResponse(res, 200, "World unchanged", await serializeWorldManagement(publication, req.user));
   const planetFaceEmoji = updates["planet.faceEmoji"];
   delete updates["planet.faceEmoji"];
@@ -212,8 +243,9 @@ export const updateWorldManagement = asyncHandler(async (req, res) => {
   publication.statusVersion += 1;
   const snapshotUpdates = { ...updates };
   if (planetFaceEmoji) snapshotUpdates.planet = { ...(publication.planet?.toObject?.() || publication.planet || {}), faceEmoji: planetFaceEmoji, emoji: publication.planet?.emoji || "🪐" };
-  if (updates.title || updates.description || updates.pricing || planetFaceEmoji || Object.hasOwn(updates, "commentsEnabled") || Object.hasOwn(updates, "firstMonthOfferEnabled") || Object.hasOwn(updates, "directAccessIncluded") || Object.hasOwn(updates, "directAccessIncludedReplies")) updateSnapshotMetadata(publication, snapshotUpdates);
+  if (updates.title || updates.description || updates.pricing || planetFaceEmoji || Object.hasOwn(updates, "commentsEnabled") || Object.hasOwn(updates, "firstMonthOfferEnabled") || Object.hasOwn(updates, "directAccessIncluded") || Object.hasOwn(updates, "directAccessIncludedReplies") || Object.hasOwn(updates, "allowDownload") || Object.hasOwn(updates, "includedInWorld") || Object.hasOwn(updates, "taggedPeople")) updateSnapshotMetadata(publication, snapshotUpdates);
   await publication.save();
+  if (Object.hasOwn(updates, "includedInWorld")) await syncExperienceWithPremiumWorld(req.user._id, publication._id, updates.includedInWorld, premiumWorld);
   await attachEntityMetadata(publication, req.user);
   return sendResponse(res, 200, "World updated", await serializeWorldManagement(publication, req.user));
 });
@@ -278,13 +310,17 @@ export const uploadWorldStoryPreview = asyncHandler(async (req, res) => {
 export const includeWorldExperience = asyncHandler(async (req, res) => {
   const publication = await ownerWorld(req.user._id, req.params.id);
   ensurePublicationId(req.params.experienceId);
-  const experience = await Publication.findOne({ _id: req.params.experienceId, creator: req.user._id, kind: "EXPERIENCE", status: { $ne: "REMOVED" } }).select("_id");
+  const experience = await Publication.findOne({ _id: req.params.experienceId, creator: req.user._id, kind: "EXPERIENCE", status: { $ne: "REMOVED" } }).select("+submittedSnapshot");
   if (!experience) throw new ApiError(404, "Experience not found");
   if (publication.includedExperienceIds.map(String).includes(String(experience._id))) throw new ApiError(409, "Experience is already included");
   publication.includedExperienceIds.push(experience._id);
   publication.statusVersion += 1;
   updateSnapshotMetadata(publication, { includedExperienceIds: publication.includedExperienceIds });
   await publication.save();
+  experience.includedInWorld = true;
+  experience.statusVersion += 1;
+  updateSnapshotMetadata(experience, { includedInWorld: true });
+  await experience.save();
   return sendResponse(res, 200, "Experience included", await serializeWorldManagement(publication, req.user));
 });
 export const removeWorldExperience = asyncHandler(async (req, res) => {
@@ -294,6 +330,13 @@ export const removeWorldExperience = asyncHandler(async (req, res) => {
   publication.statusVersion += 1;
   updateSnapshotMetadata(publication, { includedExperienceIds: publication.includedExperienceIds });
   await publication.save();
+  const experience = await Publication.findOne({ _id: req.params.experienceId, creator: req.user._id, kind: "EXPERIENCE" }).select("+submittedSnapshot");
+  if (experience) {
+    experience.includedInWorld = false;
+    experience.statusVersion += 1;
+    updateSnapshotMetadata(experience, { includedInWorld: false });
+    await experience.save();
+  }
   return sendResponse(res, 200, "Experience removed", await serializeWorldManagement(publication, req.user));
 });
 export const openWorldWave = asyncHandler(async (req, res) => {
