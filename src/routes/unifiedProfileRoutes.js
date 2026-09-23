@@ -3,7 +3,7 @@ import { getOrbitCreators, getOwnProfileConnections, getOwnProfileViewers, getOw
 import { addOwnProfileMedia, addOwnProfileMediaFromSeen, addOwnProfileMediaFromStory, deleteOwnProfileMedia, getOwnProfileMedia, getProfileMediaByUsername, likeProfileMediaByUsername, reportProfileMediaByUsername } from "../controllers/profileMediaController.js";
 import { optionalProtect, protect } from "../middleware/authMiddleware.js";
 import { uploadProfileMedia } from "../middleware/uploadMiddleware.js";
-import { getMyReceivedGifts } from "../controllers/receivedGiftController.js";
+import { getMyReceivedGifts, getPublicReceivedGifts } from "../controllers/receivedGiftController.js";
 
 const router = Router();
 router.get("/me", protect, getOwnUnifiedProfile);
@@ -24,5 +24,6 @@ router.get("/:username/connections", optionalProtect, getProfileConnections);
 router.get("/:username/media", optionalProtect, getProfileMediaByUsername);
 router.put("/:username/media/:mediaId/like", protect, likeProfileMediaByUsername);
 router.post("/:username/media/:mediaId/report", protect, reportProfileMediaByUsername);
+router.get("/:username/gifts", optionalProtect, getPublicReceivedGifts);
 router.get("/:username", optionalProtect, getUnifiedProfileByUsername);
 export default router;
