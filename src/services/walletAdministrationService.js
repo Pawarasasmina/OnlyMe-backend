@@ -10,6 +10,9 @@ export async function activateWalletLedger({ user, openingBalance, reason, admin
 
   const previous = { balance: wallet.balance, currency: wallet.currency };
   wallet.balance = openingBalance;
+  wallet.bonusBalance = 0;
+  wallet.purchasedBalance = openingBalance;
+  wallet.earnedBalance = 0;
   wallet.currency = "STARS";
   wallet.version = Number(wallet.version || 0) + 1;
   wallet.ledgerActivatedAt = new Date();

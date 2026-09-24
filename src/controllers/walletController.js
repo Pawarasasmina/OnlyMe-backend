@@ -4,8 +4,8 @@ import WorldEntitlement from "../models/WorldEntitlement.js";
 import PremiumMembership from "../models/PremiumMembership.js";
 import { getStarExchangeRate } from "../services/starExchangeService.js";
 import { executeFinancialCommand } from "../services/financialCommandService.js";
-import { creditWallet, safeWallet } from "../services/walletLedgerService.js";
-import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
+import { creditWallet, rebuildWalletBuckets, safeWallet } from "../services/walletLedgerService.js";
+import { fingerprint, idempotencyKey, positiveStars } from "../validators/financialValidator.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import ApiError from "../utils/ApiError.js";
@@ -18,18 +18,43 @@ const TOPUP_PACKS = {
   "99.99": { usd: 99.99, bonus: 150 },
   "249.99": { usd: 249.99, bonus: 500 },
 };
-const CREATOR_EVENTS = ["WORLD_CREATOR_EARNING", "PREMIUM_CREATOR_EARNING", "DREAM_CREATOR_EARNING", "CHAT_GIFT_EARNING", "DA_CREATOR_EARNING", "CALL_CREATOR_EARNING", "CREATOR_EARNING_REVERSAL"];
+const CREATOR_EVENTS = ["WORLD_CREATOR_EARNING", "PREMIUM_CREATOR_EARNING", "DREAM_CREATOR_EARNING", "CHAT_GIFT_EARNING", "DA_CREATOR_EARNING", "CALL_CREATOR_EARNING"];
 const safePublication = (item) => item ? { id: item._id, title: item.title || item.publishedSnapshot?.metadata?.title || "", kind: item.kind, planet: item.planet || null } : null;
+export function withdrawalBalances(earnedBalance, recentIncomeStars) {
+  const pendingIncomeStars = Math.min(Math.max(0, Number(earnedBalance || 0)), Math.max(0, Number(recentIncomeStars || 0)));
+  return { pendingIncomeStars, availableIncomeStars: Math.max(0, Number(earnedBalance || 0) - pendingIncomeStars) };
+}
 
 export const getWallet = asyncHandler(async (req, res) => {
-  const [wallet, starsPerUsd, income] = await Promise.all([
+  const now = new Date();
+  const withdrawalCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const automaticFilter = { creator: req.user._id, status: "ACTIVE", cancelAtPeriodEnd: false, currentPeriodEnd: { $gt: now } };
+  const [wallet, starsPerUsd, income, recentIncome, automaticMemberships, automaticSummary] = await Promise.all([
     Wallet.findOne({ user: req.user._id }).lean(),
     getStarExchangeRate(),
     StarsLedgerEntry.aggregate([{ $match: { accountUser: req.user._id, entryType: { $in: CREATOR_EVENTS } } }, { $group: { _id: null, stars: { $sum: "$signedAmount" } } }]),
+    StarsLedgerEntry.aggregate([
+      { $match: { accountUser: req.user._id, entryType: { $in: CREATOR_EVENTS }, createdAt: { $gt: withdrawalCutoff } } },
+      { $lookup: { from: StarsLedgerEntry.collection.name, localField: "_id", foreignField: "reversalOf", as: "reversals" } },
+      { $match: { reversals: { $size: 0 } } },
+      { $group: { _id: null, stars: { $sum: "$signedAmount" } } },
+    ]),
+    PremiumMembership.find(automaticFilter).sort({ currentPeriodEnd: 1 }).limit(10).populate("user", "name username avatar").populate("premiumPublication", "title publishedSnapshot.metadata.title").lean(),
+    PremiumMembership.aggregate([{ $match: automaticFilter }, { $group: { _id: null, count: { $sum: 1 }, starsPerMonth: { $sum: "$starsPerPeriod" } } }]),
   ]);
   const balance = wallet?.balance || 0;
+  let sourceBalances = { bonus: Number(wallet?.bonusBalance || 0), purchased: Number(wallet?.purchasedBalance || 0), earned: Number(wallet?.earnedBalance || 0) };
+  if (sourceBalances.bonus + sourceBalances.purchased + sourceBalances.earned !== balance) {
+    const history = await StarsLedgerEntry.find({ accountUser: req.user._id }).sort({ createdAt: 1, _id: 1 }).lean();
+    sourceBalances = rebuildWalletBuckets(history);
+  }
+  const bonusBalance = sourceBalances.bonus;
+  const earnedBalance = sourceBalances.earned;
+  const purchasedBalance = sourceBalances.purchased;
   const incomeStars = Math.max(0, Number(income[0]?.stars || 0));
-  return sendResponse(res, 200, "Wallet fetched", { wallet: { balance, bonusBalance: Number(wallet?.bonusBalance || 0), version: wallet?.version || 0, currency: "STARS", role: req.user.role, starsPerUsd, incomeStars, balanceUsd: balance / starsPerUsd, incomeUsd: incomeStars / starsPerUsd } });
+  const { pendingIncomeStars, availableIncomeStars } = withdrawalBalances(earnedBalance, recentIncome[0]?.stars);
+  const autoTotals = automaticSummary[0] || { count: 0, starsPerMonth: 0 };
+  return sendResponse(res, 200, "Wallet fetched", { wallet: { balance, bonusBalance, purchasedBalance, earnedBalance, version: wallet?.version || 0, currency: "STARS", role: req.user.role, starsPerUsd, lifetimeIncomeStars: incomeStars, pendingIncomeStars, availableIncomeStars, withdrawalHoldHours: 24, withdrawalMinimumUsd: 20, balanceUsd: balance / starsPerUsd, incomeUsd: earnedBalance / starsPerUsd, pendingIncomeUsd: pendingIncomeStars / starsPerUsd, availableIncomeUsd: availableIncomeStars / starsPerUsd, automaticIncome: { activeSubscriptions: Number(autoTotals.count || 0), starsPerMonth: Number(autoTotals.starsPerMonth || 0), usdPerMonth: Number(autoTotals.starsPerMonth || 0) / starsPerUsd, items: automaticMemberships.map((membership) => ({ id: membership._id, subscriber: membership.user ? { name: membership.user.name, username: membership.user.username, avatar: membership.user.avatar || "" } : null, world: { id: membership.premiumPublication?._id, title: membership.premiumPublication?.title || membership.premiumPublication?.publishedSnapshot?.metadata?.title || "Premium World" }, stars: membership.starsPerPeriod, usd: membership.starsPerPeriod / starsPerUsd, nextRenewalAt: membership.currentPeriodEnd })) } } });
 });
 
 export const topUpWallet = asyncHandler(async (req, res) => {
@@ -47,6 +72,50 @@ export const topUpWallet = asyncHandler(async (req, res) => {
     },
   );
   return sendResponse(res, 200, "Wallet topped up", result);
+});
+
+export const convertIncomeToCoins = asyncHandler(async (req, res) => {
+  const key = idempotencyKey(req.body.idempotencyKey);
+  const amount = positiveStars(req.body.starsAmount);
+  const result = await executeFinancialCommand(
+    { user: req.user._id, commandType: "CONVERT_INCOME_TO_COINS", idempotencyKey: key, requestFingerprint: fingerprint({ starsAmount: amount }) },
+    async (session, command) => {
+      let wallet = await Wallet.findOne({ user: req.user._id }).session(session);
+      if (!wallet) throw new ApiError(422, "Wallet is unavailable", "WALLET_UNAVAILABLE");
+      const classified = Number(wallet.bonusBalance || 0) + Number(wallet.purchasedBalance || 0) + Number(wallet.earnedBalance || 0);
+      if (classified !== Number(wallet.balance || 0)) {
+        const history = await StarsLedgerEntry.find({ accountUser: req.user._id }).sort({ createdAt: 1, _id: 1 }).session(session).lean();
+        const rebuilt = rebuildWalletBuckets(history);
+        wallet.bonusBalance = rebuilt.bonus;
+        wallet.purchasedBalance = rebuilt.purchased;
+        wallet.earnedBalance = rebuilt.earned;
+        await wallet.save({ session });
+      }
+      const conversionCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const recentRows = await StarsLedgerEntry.aggregate([
+        { $match: { accountUser: req.user._id, entryType: { $in: CREATOR_EVENTS }, createdAt: { $gt: conversionCutoff } } },
+        { $lookup: { from: StarsLedgerEntry.collection.name, localField: "_id", foreignField: "reversalOf", as: "reversals" } },
+        { $match: { reversals: { $size: 0 } } },
+        { $group: { _id: null, stars: { $sum: "$signedAmount" } } },
+      ]).session(session);
+      const { availableIncomeStars } = withdrawalBalances(wallet.earnedBalance, recentRows[0]?.stars);
+      if (amount > availableIncomeStars) throw new ApiError(422, "Income received during the last 24 hours cannot be converted yet", "INCOME_HOLD_ACTIVE");
+      wallet = await Wallet.findOneAndUpdate(
+        { _id: wallet._id, earnedBalance: { $gte: amount } },
+        { $inc: { earnedBalance: -amount, purchasedBalance: amount, version: 1 } },
+        { new: true, session, runValidators: true },
+      );
+      if (!wallet) throw new ApiError(422, "Your creator income balance is too low", "INSUFFICIENT_CREATOR_INCOME");
+      const metadata = { oneWay: true, source: "EARNED", destination: "PURCHASED", starsAmount: amount };
+      const [debit, credit] = await StarsLedgerEntry.create([
+        { accountUser: req.user._id, entryType: "INCOME_CONVERSION_DEBIT", entryRole: "INCOME_CONVERSION_SOURCE", direction: "DEBIT", starsAmount: amount, signedAmount: -amount, balanceAfter: wallet.balance, referenceType: "INCOME_CONVERSION", referenceId: String(command._id), commandId: command._id, idempotencyKey: key, metadata: { ...metadata, bucketSpend: { bonus: 0, purchased: 0, earned: amount } } },
+        { accountUser: req.user._id, entryType: "INCOME_CONVERSION_CREDIT", entryRole: "INCOME_CONVERSION_DESTINATION", direction: "CREDIT", starsAmount: amount, signedAmount: amount, balanceAfter: wallet.balance, referenceType: "INCOME_CONVERSION", referenceId: String(command._id), commandId: command._id, idempotencyKey: key, parentEntry: null, reversalOf: null, metadata: { ...metadata, bucketCredit: { bonus: 0, purchased: amount, earned: 0 } } },
+      ], { session, ordered: true });
+      await Wallet.updateOne({ _id: wallet._id }, { $set: { lastLedgerEntry: credit._id } }, { session });
+      return { resultReference: credit._id, wallet: safeWallet(wallet), conversion: { starsAmount: amount, debitLedgerEntry: debit._id, creditLedgerEntry: credit._id } };
+    },
+  );
+  return sendResponse(res, 200, "Creator income converted to Coins", result);
 });
 
 export const getLedger = asyncHandler(async (req, res) => {
