@@ -97,6 +97,25 @@ test("creator profile experiences expose their active owner count", () => {
   assert.equal(result.experiences[0].ownerCount, 7);
 });
 
+test("an active World membership opens only Experiences included in that World", () => {
+  const snapshot = { metadata: { title: "Course", summary: "", description: "", category: "", tags: [], pricing: { mode: "ONE_TIME", starsAmount: 190 } }, chapters: [{ stableChapterId: "one", order: 0, title: "One", isPreview: false, blocks: [] }, { stableChapterId: "two", order: 1, title: "Two", isPreview: false, blocks: [] }], version: 1, frozenAt: new Date() };
+  const included = { _id: "included-experience", creator: owner._id, kind: "EXPERIENCE", status: "PUBLISHED", publishedSnapshot: snapshot };
+  const separate = { ...included, _id: "separate-experience" };
+  const result = serializeUnifiedProfile({
+    owner,
+    roleProfile,
+    viewer: { _id: "fan", role: "fan" },
+    experiences: [included, separate],
+    membershipIncludedExperienceIds: new Set(["included-experience"]),
+  });
+  assert.equal(result.experiences[0].access, "ACTIVE_PREMIUM_MEMBER");
+  assert.equal(result.experiences[0].locked, false);
+  assert.equal(result.experiences[0].paymentAvailable, false);
+  assert.equal(result.experiences[1].access, "PUBLIC_PREVIEW");
+  assert.equal(result.experiences[1].locked, true);
+  assert.equal(result.experiences[1].paymentAvailable, true);
+});
+
 test("profile contract exposes reposted Seen metadata", () => {
   const snapshot = { metadata: { title: "Shared Seen", summary: "", description: "", category: "", tags: [], pricing: {}, planet: {} }, chapters: [{ stableChapterId: "c", order: 0, title: "C", isPreview: true, blocks: [] }], version: 1, frozenAt: new Date() };
   const sharedAt = new Date();

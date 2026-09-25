@@ -16,6 +16,7 @@ import MessageReport from "../models/MessageReport.js";
 import PremiumMembership from "../models/PremiumMembership.js";
 import WorldEntitlement from "../models/WorldEntitlement.js";
 import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
+import { activeIncludedExperienceIds } from "../services/publicationEntitlementService.js";
 import { listProfileMediaForUser } from "../services/profileMediaService.js";
 import { toggleFollowRelationship } from "../services/profileRelationshipService.js";
 import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyticsEventService.js";
@@ -133,13 +134,16 @@ async function loadProfile(owner, viewer) {
     status: "ACTIVE",
   }).select("publication").lean() : [];
   const entitledExperienceIds = new Set(experienceEntitlements.map((item) => String(item.publication)));
+  const membershipIncludedExperienceIds = activePremiumMembership
+    ? await activeIncludedExperienceIds(viewer._id, owner._id)
+    : new Set();
   const experienceOwnerRows = experiences.length ? await WorldEntitlement.aggregate([
     { $match: { publication: { $in: experiences.map((item) => item._id) }, status: "ACTIVE" } },
     { $group: { _id: "$publication", ownerCount: { $sum: 1 } } },
   ]) : [];
   const experienceOwnerCounts = new Map(experienceOwnerRows.map((item) => [String(item._id), Number(item.ownerCount) || 0]));
   const ownWallPosts = ownFeedPosts.map((post) => serializePost(post, viewer));
-  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal) });
+  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, membershipIncludedExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal) });
 }
 
 async function relationshipTarget(username) {
@@ -159,9 +163,12 @@ export const getProfileExperiences = asyncHandler(async (req, res) => {
     req.user?._id ? PremiumMembership.findOne({ user: req.user._id, creator: owner._id, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }).select("premiumPublication").lean() : null,
   ]);
   const entitled = new Set(entitlements.map((item) => String(item.publication)));
+  const membershipIncludedExperienceIds = membership
+    ? await activeIncludedExperienceIds(req.user._id, owner._id)
+    : new Set();
   const counts = new Map(ownerRows.map((item) => [String(item._id), Number(item.count) || 0]));
   const items = experiences.map((item) => {
-    const serialized = serializePublication(item, req.user || null, { entitlement: entitled.has(String(item._id)) ? "ENTITLED_EXPERIENCE" : membership && item.includedInWorld ? "ACTIVE_PREMIUM_MEMBER" : null });
+    const serialized = serializePublication(item, req.user || null, { entitlement: entitled.has(String(item._id)) ? "ENTITLED_EXPERIENCE" : membershipIncludedExperienceIds.has(String(item._id)) ? "ACTIVE_PREMIUM_MEMBER" : null });
     return serialized ? { ...serialized, ownerCount: counts.get(String(item._id)) || 0 } : null;
   }).filter(Boolean);
   return sendResponse(res, 200, "Profile Experiences fetched", { creator: { name: owner.name, username: owner.username, avatar: owner.avatar || "", verified: Boolean(owner.isVerified) }, items });

@@ -1,6 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { percentageRows, starsToUsd, totalContentViews } from "./creatorDashboardService.js";
+import { CREATOR_EARNING_ROLE_PATTERN, percentageRows, sourceBucketForEntry, starsToUsd, totalContentViews } from "./creatorDashboardService.js";
+
+test("creator dashboard includes every creator earning role and excludes non-earnings", () => {
+  ["CREATOR_EARNING", "CREATOR_DA_EARNING", "CREATOR_CALL_EARNING", "CREATOR_FUTURE_SOURCE_EARNING"]
+    .forEach((role) => assert.match(role, CREATOR_EARNING_ROLE_PATTERN));
+
+  ["FAN_REFUND", "WALLET_TOPUP", "ADMIN_CREDIT", "CREATOR_REVERSAL", "INCOME_CONVERSION_CREDIT"]
+    .forEach((role) => assert.doesNotMatch(role, CREATOR_EARNING_ROLE_PATTERN));
+});
+
+test("creator dashboard separates Experience unlocks from monthly World subscriptions", () => {
+  assert.equal(sourceBucketForEntry({ entryType: "WORLD_CREATOR_EARNING", metadata: { publicationKind: "EXPERIENCE" } }), "unlocks");
+  assert.equal(sourceBucketForEntry({ entryType: "WORLD_CREATOR_EARNING", referenceType: "EXPERIENCE_PURCHASE" }), "unlocks");
+  assert.equal(sourceBucketForEntry({ entryType: "PREMIUM_CREATOR_EARNING" }), "worldSubscriptions");
+  assert.equal(sourceBucketForEntry({ entryType: "WORLD_CREATOR_EARNING", metadata: { publicationKind: "WORLD" } }), "other");
+});
 
 test("totalContentViews combines Seen and wall analytics with story views", () => {
   assert.equal(totalContentViews({ analyticsViews: 125, storyViews: 30 }), 155);

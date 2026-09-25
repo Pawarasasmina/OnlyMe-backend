@@ -38,7 +38,7 @@ function completion(owner, roleProfile) {
   return { completed, total: checks.length, percentage: Math.round((completed / checks.length) * 100) };
 }
 
-export function serializeUnifiedProfile({ content = [], entitledExperienceIds = new Set(), experienceOwnerCounts = new Map(), experiences = [], followerCount = 0, followingCount = 0, media = [], owner, ownWallPosts = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, publishedContentCount = content.length, roleProfile, seens = [], series = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [], viewerSeeSignalSent = false }) {
+export function serializeUnifiedProfile({ content = [], entitledExperienceIds = new Set(), experienceOwnerCounts = new Map(), experiences = [], followerCount = 0, followingCount = 0, media = [], membershipIncludedExperienceIds = new Set(), owner, ownWallPosts = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, publishedContentCount = content.length, roleProfile, seens = [], series = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [], viewerSeeSignalSent = false }) {
   const capabilities = profileViewerCapabilities(owner, viewer, roleProfile);
   const creatorEnabled = owner.creatorApprovalStatus === "approved";
   const contentViewer = capabilities.isOwner ? viewer : null;
@@ -97,7 +97,7 @@ export function serializeUnifiedProfile({ content = [], entitledExperienceIds = 
       const publication = serializePublication(item, contentViewer, {
         entitlement: entitledExperienceIds.has(String(item._id))
           ? "ENTITLED_EXPERIENCE"
-          : premiumMembershipPublicationId && item.includedInWorld
+          : membershipIncludedExperienceIds.has(String(item._id))
             ? "ACTIVE_PREMIUM_MEMBER"
             : null,
       });

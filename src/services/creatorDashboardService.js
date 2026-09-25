@@ -17,14 +17,10 @@ import WorldEntitlement from "../models/WorldEntitlement.js";
 import { ACTIVE_MEMBERSHIP_STATUSES } from "../constants/financialConstants.js";
 import { getStarExchangeRate } from "./starExchangeService.js";
 
-const CREATOR_EARNING_TYPES = [
-  "WORLD_CREATOR_EARNING",
-  "PREMIUM_CREATOR_EARNING",
-  "DREAM_CREATOR_EARNING",
-  "CHAT_GIFT_EARNING",
-  "DA_CREATOR_EARNING",
-  "CALL_CREATOR_EARNING",
-];
+// Earnings are selected by their ledger role rather than a fixed event-type
+// allowlist. This automatically includes future fan-to-creator earning sources,
+// while top-ups, refunds, admin credits, conversions and reversals stay out.
+export const CREATOR_EARNING_ROLE_PATTERN = /^CREATOR_(?:.*_)?EARNING$/;
 
 const SOURCE_COLORS = {
   Discover: "#9CCBFF",
@@ -109,19 +105,20 @@ function median(values = []) {
   return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
 }
 
-function sourceBucketForEntry(entry = {}) {
-  if (["PREMIUM_CREATOR_EARNING", "WORLD_CREATOR_EARNING"].includes(entry.entryType)) return "worldSubscriptions";
+export function sourceBucketForEntry(entry = {}) {
+  if (entry.entryType === "PREMIUM_CREATOR_EARNING") return "worldSubscriptions";
   if (["DA_CREATOR_EARNING", "CALL_CREATOR_EARNING"].includes(entry.entryType)) return "directAccess";
   if (entry.entryType === "CHAT_GIFT_EARNING") return "gifts";
   if (entry.entryType === "DREAM_CREATOR_EARNING") return "dreamSupport";
-  return "unlocks";
+  if (entry.entryType === "WORLD_CREATOR_EARNING" && (entry.metadata?.publicationKind === "EXPERIENCE" || entry.referenceType === "EXPERIENCE_PURCHASE")) return "unlocks";
+  return "other";
 }
 
 function earningDescription(entry = {}) {
   const person = entry.counterpartyUser?.name || entry.counterpartyUser?.username || "Someone";
   const title = entry.publication?.title || entry.publication?.publishedSnapshot?.metadata?.title || "";
   if (entry.entryType === "PREMIUM_CREATOR_EARNING") return title ? `${person} subscribed to your World` : `${person} became a resident`;
-  if (entry.entryType === "WORLD_CREATOR_EARNING") return title ? `${person} unlocked ${title}` : `${person} unlocked your World`;
+  if (entry.entryType === "WORLD_CREATOR_EARNING" && (entry.metadata?.publicationKind === "EXPERIENCE" || entry.referenceType === "EXPERIENCE_PURCHASE" || entry.publication?.kind === "EXPERIENCE")) return title ? `${person} unlocked ${title}` : `${person} unlocked your Experience`;
   if (entry.entryType === "DREAM_CREATOR_EARNING") return `${person} supported your dream`;
   if (entry.entryType === "CHAT_GIFT_EARNING") return `${person} sent a gift`;
   if (["DA_CREATOR_EARNING", "CALL_CREATOR_EARNING"].includes(entry.entryType)) return `${person} bought Direct Access`;
@@ -331,9 +328,9 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
     AnalyticsEvent.countDocuments({ eventType: "PROFILE_VIEW", entityId: String(creatorId), createdAt: { $gte: start, $lte: now } }),
     AnalyticsEvent.countDocuments({ eventType: "PROFILE_VIEW", entityId: String(creatorId), createdAt: { $gte: previousStart, $lte: previousEnd } }),
     DAWindow.find({ creator: creatorId, openedAt: { $gte: start, $lte: now } }).select("openedAt firstCreatorReplyAt answeredAt status settlementStatus").lean(),
-    StarsLedgerEntry.find({ accountUser: creatorId, direction: "CREDIT", entryType: { $in: CREATOR_EARNING_TYPES }, createdAt: { $gte: start, $lte: now } }).lean(),
-    StarsLedgerEntry.find({ accountUser: creatorId, direction: "CREDIT", entryType: { $in: CREATOR_EARNING_TYPES }, createdAt: { $gte: previousStart, $lte: previousEnd } }).lean(),
-    StarsLedgerEntry.find({ accountUser: creatorId, direction: "CREDIT", entryType: { $in: CREATOR_EARNING_TYPES } }).sort({ createdAt: -1 }).limit(5).populate("counterpartyUser", "name username avatar isVerified").populate("publication", "title kind planet publishedSnapshot.metadata.title").lean(),
+    StarsLedgerEntry.find({ accountUser: creatorId, direction: "CREDIT", entryRole: CREATOR_EARNING_ROLE_PATTERN, createdAt: { $gte: start, $lte: now } }).lean(),
+    StarsLedgerEntry.find({ accountUser: creatorId, direction: "CREDIT", entryRole: CREATOR_EARNING_ROLE_PATTERN, createdAt: { $gte: previousStart, $lte: previousEnd } }).lean(),
+    StarsLedgerEntry.find({ accountUser: creatorId, direction: "CREDIT", entryRole: CREATOR_EARNING_ROLE_PATTERN }).sort({ createdAt: -1 }).limit(20).populate("counterpartyUser", "name username avatar isVerified").populate("publication", "title kind planet publishedSnapshot.metadata.title").lean(),
     PremiumMembership.find({ creator: creatorId, status: { $in: ACTIVE_MEMBERSHIP_STATUSES } }).select("user starsPerPeriod status currentPeriodEnd").lean(),
     WorldEntitlement.distinct("user", { creator: creatorId, status: "ACTIVE", grantedAt: { $gte: weekStart, $lte: now } }),
     bestSeenFor(publishedSeens),
@@ -352,7 +349,7 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
   const responseMinutes = answered.map((item) => Math.round((new Date(item.firstCreatorReplyAt || item.answeredAt).getTime() - new Date(item.openedAt).getTime()) / 60000));
   const currentStars = currentLedger.reduce((sum, entry) => sum + entry.signedAmount, 0);
   const previousStars = previousLedger.reduce((sum, entry) => sum + entry.signedAmount, 0);
-  const bySourceStars = { directAccess: 0, dreamSupport: 0, gifts: 0, unlocks: 0, worldSubscriptions: 0 };
+  const bySourceStars = { directAccess: 0, dreamSupport: 0, gifts: 0, unlocks: 0, worldSubscriptions: 0, other: 0 };
   currentLedger.forEach((entry) => { bySourceStars[sourceBucketForEntry(entry)] += entry.signedAmount; });
 
   const followerIds = followerRows.map((row) => row.actor);
