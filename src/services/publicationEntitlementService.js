@@ -1,6 +1,7 @@
 import PremiumMembership from "../models/PremiumMembership.js";
 import Publication from "../models/Publication.js";
 import WorldEntitlement from "../models/WorldEntitlement.js";
+import ExperienceAccessRequest from "../models/ExperienceAccessRequest.js";
 
 const ACTIVE_MEMBERSHIP_STATUSES = ["ACTIVE", "CANCEL_AT_PERIOD_END"];
 
@@ -34,7 +35,7 @@ export async function publicationEntitlement(publication, viewer) {
   if (viewer.role === "admin" || String(viewer._id) === String(creator)) return null;
 
   if (["WORLD", "EXPERIENCE"].includes(publication.kind)) {
-    if (await WorldEntitlement.exists({ user: viewer._id, publication: publication._id, status: "ACTIVE" })) {
+    if (await WorldEntitlement.exists({ user: viewer._id, publication: publication._id, status: "ACTIVE" }) || await ExperienceAccessRequest.exists({ requester: viewer._id, publication: publication._id, status: "APPROVED" })) {
       return publication.kind === "EXPERIENCE" ? "ENTITLED_EXPERIENCE" : "ENTITLED_WORLD";
     }
     if (publication.kind === "EXPERIENCE") {
