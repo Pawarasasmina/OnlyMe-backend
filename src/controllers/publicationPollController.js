@@ -1,22 +1,24 @@
 import Publication from "../models/Publication.js";
-import PremiumMembership from "../models/PremiumMembership.js";
 import PublicationPollVote from "../models/PublicationPollVote.js";
+import { canAccessPublicationAudience, publicationAccess } from "../services/publicationAccessService.js";
+import { publicationEntitlement } from "../services/publicationEntitlementService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 
 async function accessiblePoll(req) {
-  const publication = await Publication.findOne({ _id: req.params.id, status: "PUBLISHED", publishedSnapshot: { $exists: true } }).lean();
+  const publication = await Publication.findOne({ _id: req.params.id, status: "PUBLISHED", publishedSnapshot: { $exists: true } }).select("+shareToken").lean();
   if (!publication) throw new ApiError(404, "Planet not found");
+  const audienceAllowed = await canAccessPublicationAudience(publication, req.user || null, { shareToken: req.query.access || req.query.token || req.body.access || req.body.token });
+  const entitlement = await publicationEntitlement(publication, req.user || null);
+  const access = publicationAccess(publication, req.user || null, { audienceAllowed, entitlement });
+  if (access === "NOT_VISIBLE") throw new ApiError(404, "Poll not found");
   const chapter = publication.publishedSnapshot.chapters.find((item) => String(item.stableChapterId) === String(req.params.chapterId));
   const block = chapter?.blocks?.find((item) => item.id === req.params.blockId && item.type === "POLL");
   if (!chapter || !block) throw new ApiError(404, "Poll not found");
-  const owner = req.user?._id && String(req.user._id) === String(publication.creator);
-  if (publication.kind === "PREMIUM_WORLD" && !chapter.isPreview && !owner) {
-    const membership = req.user?._id && await PremiumMembership.exists({ user: req.user._id, premiumPublication: publication._id, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } });
-    if (!membership) throw new ApiError(403, "Join this Planet to vote in this poll");
-  }
-  return { publication, chapter, block, owner: Boolean(owner) };
+  const owner = access === "OWNER" || access === "ADMIN";
+  if (access === "PUBLIC_PREVIEW" && !chapter.isPreview && !owner) throw new ApiError(403, "Unlock this Planet to vote in this poll");
+  return { publication, chapter, block, owner };
 }
 
 async function pollPayload(req, source) {
