@@ -41,6 +41,14 @@ export function normalizeBlocks(blocks = []) {
     const item = { id, type: block.type, order };
     if (TEXT_BLOCK_TYPES.includes(block.type)) { item.text = text(block.text, PUBLICATION_LIMITS.chapterText, "Block text", true); textualCharacters += item.text.length; if (block.type === "HIGHLIGHT") { const color = String(block.metadata?.color || "ICE_BLUE").toUpperCase(); if (!PLANET_MARKER_COLORS.includes(color)) throw new ApiError(400, "Marker color must use one of the six brand colors"); item.metadata = { color }; } else if (block.type === "KEY_POINT" && block.metadata?.location) { item.metadata = { location: { label: text(block.metadata.location.label, PUBLICATION_LIMITS.blockLabel, "Location", true) } }; } }
     if (block.type === "LINK") { item.url = safeUrl(block.url); item.label = text(block.label, PUBLICATION_LIMITS.blockLabel, "Link label", true); textualCharacters += item.label.length; }
+    if (block.type === "LIST") {
+      const rawItems = Array.isArray(block.metadata?.listItems) ? block.metadata.listItems : Array.isArray(block.metadata?.items) ? block.metadata.items : String(block.text || "").split("\n");
+      const items = rawItems.map((option) => text(option, 120, "List item", true));
+      if (items.length < 1 || items.length > 12) throw new ApiError(400, "Lists require 1 to 12 items");
+      item.text = items.join("\n");
+      item.metadata = { listItems: items };
+      textualCharacters += items.join("").length;
+    }
     if (block.type === "POLL") {
       const question = text(block.metadata?.question, 180, "Poll question", true);
       if (!Array.isArray(block.metadata?.options)) throw new ApiError(400, "Poll options must be an array");
@@ -52,7 +60,31 @@ export function normalizeBlocks(blocks = []) {
       item.metadata = { question, options, resultsVisibility };
       textualCharacters += question.length + options.join("").length;
     }
-    if (["IMAGE", "VIDEO", "AUDIO", "VOICE"].includes(block.type)) { if (!block.media?.assetId) throw new ApiError(400, "Verified media is required"); item.media = block.media; if (block.metadata?.storyPreview) item.metadata = { label: text(block.metadata.label, PUBLICATION_LIMITS.blockLabel, "Story preview label"), storyPreview: true }; }
+    if (["IMAGE", "VIDEO", "AUDIO", "VOICE"].includes(block.type)) {
+      if (!block.media?.assetId) throw new ApiError(400, "Verified media is required");
+      item.media = block.media;
+      const metadata = {};
+      if (block.metadata?.storyPreview) Object.assign(metadata, { label: text(block.metadata.label, PUBLICATION_LIMITS.blockLabel, "Story preview label"), storyPreview: true });
+      if (block.type === "IMAGE") {
+        const overlayText = text(block.metadata?.overlayText, 180, "Image overlay text");
+        const overlayColor = text(block.metadata?.overlayColor, 40, "Image overlay color");
+        const overlayFillColor = text(block.metadata?.overlayFillColor, 40, "Image overlay fill color");
+        if (overlayText) metadata.overlayText = overlayText;
+        if (overlayColor) metadata.overlayColor = overlayColor;
+        if (overlayFillColor) metadata.overlayFillColor = overlayFillColor;
+      }
+      const transcript = text(block.metadata?.transcript, PUBLICATION_LIMITS.chapterText, "Voice transcript");
+      if (transcript && ["AUDIO", "VOICE"].includes(block.type)) {
+        metadata.transcript = transcript;
+        const confidence = Number(block.metadata?.transcriptConfidence);
+        if (Number.isFinite(confidence)) metadata.transcriptConfidence = confidence;
+        const language = text(block.metadata?.transcriptLanguage, 40, "Transcript language");
+        const provider = text(block.metadata?.transcriptProvider, 40, "Transcript provider");
+        if (language) metadata.transcriptLanguage = language;
+        if (provider) metadata.transcriptProvider = provider;
+      }
+      if (Object.keys(metadata).length) item.metadata = metadata;
+    }
     return item;
   });
   if (textualCharacters > PUBLICATION_LIMITS.chapterText) throw new ApiError(400, "Chapter text cannot exceed 2000 characters");
