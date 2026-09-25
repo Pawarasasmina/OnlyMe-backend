@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getOrbitCreators, getOwnProfileConnections, getOwnProfileViewers, getOwnUnifiedProfile, getProfileConnections, getUnifiedProfileByUsername, reportUnifiedProfile, toggleProfileFollow, toggleProfileSeeSignal, updateOwnProfileStatus } from "../controllers/unifiedProfileController.js";
+import { getOrbitCreators, getOwnProfileConnections, getOwnProfileViewers, getOwnUnifiedProfile, getProfileConnections, getProfileExperiences, getUnifiedProfileByUsername, reportUnifiedProfile, toggleProfileFollow, toggleProfileSeeSignal, updateOwnProfileStatus } from "../controllers/unifiedProfileController.js";
 import { addOwnProfileMedia, addOwnProfileMediaFromSeen, addOwnProfileMediaFromStory, deleteOwnProfileMedia, getOwnProfileMedia, getProfileMediaByUsername, likeProfileMediaByUsername, reportProfileMediaByUsername } from "../controllers/profileMediaController.js";
 import { optionalProtect, protect } from "../middleware/authMiddleware.js";
 import { uploadProfileMedia } from "../middleware/uploadMiddleware.js";
@@ -25,5 +25,6 @@ router.get("/:username/media", optionalProtect, getProfileMediaByUsername);
 router.put("/:username/media/:mediaId/like", protect, likeProfileMediaByUsername);
 router.post("/:username/media/:mediaId/report", protect, reportProfileMediaByUsername);
 router.get("/:username/gifts", optionalProtect, getPublicReceivedGifts);
+router.get("/:username/experiences", optionalProtect, getProfileExperiences);
 router.get("/:username", optionalProtect, getUnifiedProfileByUsername);
 export default router;
