@@ -15,16 +15,19 @@ export async function activeDreamGifts(recipientId) {
 }
 
 const clean = (value, max) => String(value || "").trim().slice(0, max);
-const serialize = (dream, supporters = []) => dream ? ({ id: dream._id, emoji: dream.emoji, title: dream.title, reason: dream.reason, photo: dream.photo?.url ? { url: dream.photo.url } : null, goalStars: dream.goalStars, receivedStars: dream.receivedStars, supporterCount: dream.supporterCount, status: dream.status, completedAt: dream.completedAt, version: dream.version, creator: dream.creator?._id ? { id: dream.creator._id, name: dream.creator.name, username: dream.creator.username, avatar: dream.creator.avatar } : undefined, supporters }) : null;
+const serialize = (dream, supporters = [], cameTrueCount = 0) => dream ? ({ id: dream._id, emoji: dream.emoji, title: dream.title, reason: dream.reason, photo: dream.photo?.url ? { url: dream.photo.url } : null, goalStars: dream.goalStars, receivedStars: dream.receivedStars, supporterCount: dream.supporterCount, cameTrueCount, status: dream.status, completedAt: dream.completedAt, version: dream.version, creator: dream.creator?._id ? { id: dream.creator._id, name: dream.creator.name, username: dream.creator.username, avatar: dream.creator.avatar } : undefined, supporters }) : null;
 
 export async function publicDream(username) {
   const creator = await User.findOne({ username: String(username).toLowerCase(), role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved", status: "active" }).select("name username avatar").lean();
   if (!creator) throw new ApiError(404, "Creator not found");
-  const dream = await Dream.findOne({ creator: creator._id, status: { $in: ["ACTIVE", "COMPLETED"] } }).sort({ status: 1, updatedAt: -1 }).populate("creator", "name username avatar").lean();
+  const [dream, cameTrueCount] = await Promise.all([
+    Dream.findOne({ creator: creator._id, status: { $in: ["ACTIVE", "COMPLETED"] } }).sort({ status: 1, updatedAt: -1 }).populate("creator", "name username avatar").lean(),
+    Dream.countDocuments({ creator: creator._id, status: "COMPLETED" }),
+  ]);
   if (!dream) return null;
   const gifts = await DreamGift.find({ dream: dream._id, privateSupport: false }).sort({ createdAt: -1 }).limit(8).populate("supporter", "name username avatar").lean();
   const supporters = gifts.filter((gift) => gift.supporter).map((gift) => ({ name: gift.supporter.name, username: gift.supporter.username, avatar: gift.supporter.avatar, giftName: gift.giftName }));
-  return serialize(dream, supporters);
+  return serialize(dream, supporters, cameTrueCount);
 }
 
 export async function saveDream(creatorId, payload) {

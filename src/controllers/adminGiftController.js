@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import Gift from "../models/Gift.js";
 import GiftCategory from "../models/GiftCategory.js";
+import GiftPreference from "../models/GiftPreference.js";
 import DreamGift from "../models/DreamGift.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -29,6 +30,7 @@ export const createGift = asyncHandler(async (req, res) => {
   try {
     const lastGift = await Gift.findOne().sort({ sortOrder: -1 }).select("sortOrder").lean();
     const gift = await Gift.create({ name: nameValue(req.body.name), stars: integer(req.body.stars, "Star value", 1, 1000000), category: await categoryValue(req.body.categoryId), displayScale: integer(req.body.displayScale || 100, "Display scale", 40, 140), imagePositionX: integer(req.body.imagePositionX || 0, "Horizontal position", -50, 50), imagePositionY: integer(req.body.imagePositionY || 0, "Vertical position", -50, 50), sortOrder: Math.min((lastGift?.sortOrder || 0) + 1, 100000), isActive: String(req.body.isActive) !== "false", image, createdBy: req.user._id, updatedBy: req.user._id });
+    if (gift.isActive) await GiftPreference.updateMany({}, { $addToSet: { enabledGifts: gift._id } });
     return sendResponse(res, 201, "Gift created", { gift: serialize(gift) });
   } catch (error) { await deleteGiftImage(image.assetId).catch(() => {}); throw error; }
 });
@@ -38,6 +40,7 @@ export const updateGift = asyncHandler(async (req, res) => {
   const gift = await Gift.findById(req.params.id);
   if (!gift) throw new ApiError(404, "Gift not found");
   const previousAssetId = gift.image.assetId;
+  const wasActive = gift.isActive;
   let uploaded;
   if (req.file) uploaded = await uploadGiftImage(req.file, req.user._id);
   try {
@@ -52,6 +55,7 @@ export const updateGift = asyncHandler(async (req, res) => {
     if (uploaded) gift.image = uploaded;
     gift.updatedBy = req.user._id;
     await gift.save();
+    if (!wasActive && gift.isActive) await GiftPreference.updateMany({}, { $addToSet: { enabledGifts: gift._id } });
   } catch (error) { if (uploaded) await deleteGiftImage(uploaded.assetId).catch(() => {}); throw error; }
   if (uploaded) await deleteGiftImage(previousAssetId).catch(() => {});
   return sendResponse(res, 200, "Gift updated", { gift: serialize(gift) });

@@ -19,7 +19,7 @@ import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
 import { listProfileMediaForUser } from "../services/profileMediaService.js";
 import { toggleFollowRelationship } from "../services/profileRelationshipService.js";
 import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyticsEventService.js";
-import { seenVisibilityFilter } from "../services/publicationAccessService.js";
+import { seenVisibilityFilter, serializePublication } from "../services/publicationAccessService.js";
 import { sendSeeYouSignal } from "../services/orbitRecommendationService.js";
 import { buildProfileStatusFromPayload, serializeProfileStatus } from "../services/statusService.js";
 import ApiError from "../utils/ApiError.js";
@@ -147,6 +147,25 @@ async function relationshipTarget(username) {
   if (!target) throw new ApiError(404, "Profile not found");
   return target;
 }
+
+export const getProfileExperiences = asyncHandler(async (req, res) => {
+  const owner = await User.findOne({ username: normalizeUsername(req.params.username), status: "active" }).select("_id name username avatar isVerified").lean();
+  if (!owner) throw new ApiError(404, "Profile not found");
+  const experiences = await Publication.find({ creator: owner._id, kind: "EXPERIENCE", status: { $in: ["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).sort({ publishedAt: -1, updatedAt: -1 }).populate("creator", "name username avatar isVerified").lean();
+  const ids = experiences.map((item) => item._id);
+  const [entitlements, ownerRows, membership] = await Promise.all([
+    req.user?._id && ids.length ? WorldEntitlement.find({ user: req.user._id, publication: { $in: ids }, status: "ACTIVE" }).select("publication").lean() : [],
+    ids.length ? WorldEntitlement.aggregate([{ $match: { publication: { $in: ids }, status: "ACTIVE" } }, { $group: { _id: "$publication", count: { $sum: 1 } } }]) : [],
+    req.user?._id ? PremiumMembership.findOne({ user: req.user._id, creator: owner._id, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }).select("premiumPublication").lean() : null,
+  ]);
+  const entitled = new Set(entitlements.map((item) => String(item.publication)));
+  const counts = new Map(ownerRows.map((item) => [String(item._id), Number(item.count) || 0]));
+  const items = experiences.map((item) => {
+    const serialized = serializePublication(item, req.user || null, { entitlement: entitled.has(String(item._id)) ? "ENTITLED_EXPERIENCE" : membership && item.includedInWorld ? "ACTIVE_PREMIUM_MEMBER" : null });
+    return serialized ? { ...serialized, ownerCount: counts.get(String(item._id)) || 0 } : null;
+  }).filter(Boolean);
+  return sendResponse(res, 200, "Profile Experiences fetched", { creator: { name: owner.name, username: owner.username, avatar: owner.avatar || "", verified: Boolean(owner.isVerified) }, items });
+});
 
 export const toggleProfileFollow = asyncHandler(async (req, res) => {
   const relationship = await toggleFollowRelationship({ actor: req.user, targetUsername: req.params.username });
