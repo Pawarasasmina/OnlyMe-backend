@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import Publication from "../models/Publication.js";
 import PublicationPreference from "../models/PublicationPreference.js";
 import MessageReport from "../models/MessageReport.js";
+import PremiumMembership from "../models/PremiumMembership.js";
 import SavedItem from "../models/SavedItem.js";
 import SeenEngagement, { SEEN_REACTIONS } from "../models/SeenEngagement.js";
 import User from "../models/User.js";
@@ -22,9 +23,23 @@ const publishedSeen = async (id, viewer, shareToken = "") => {
 
 const publishedPlanet = async (id) => {
   if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid Planet ID");
-  const publication = await Publication.findOne({ _id: id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: "PUBLISHED" }).select("_id creator title").lean();
+  const publication = await Publication.findOne({ _id: id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: "PUBLISHED" }).select("_id creator kind title").lean();
   if (!publication) throw new ApiError(404, "Published Planet not found");
   return publication;
+};
+
+const hasActivePremiumAccess = async (publication, viewer) => {
+  const creatorId = String(publication.creator?._id || publication.creator || "");
+  const viewerId = String(viewer?._id || viewer?.id || "");
+  if (!viewerId) return false;
+  if (viewer?.role === "admin" || viewerId === creatorId) return true;
+  if (publication.kind !== "PREMIUM_WORLD") return true;
+  return Boolean(await PremiumMembership.exists({
+    user: viewer._id,
+    premiumPublication: publication._id,
+    status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] },
+    currentPeriodEnd: { $gt: new Date() },
+  }));
 };
 
 const page = (req) => ({ page: Math.max(1, Number(req.query.page) || 1), limit: Math.min(50, Math.max(1, Number(req.query.limit) || 20)) });
@@ -35,6 +50,13 @@ const publishedCommentable = async (id, viewer, shareToken = "") => {
   if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid publication ID");
   const publication = await Publication.findOne({ _id: id, kind: { $in: ["SEEN", "WORLD", "PREMIUM_WORLD", "EXPERIENCE"] }, status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("_id creator kind visibility commentsEnabled +shareToken").lean();
   if (!publication || (publication.kind === "SEEN" && !await canAccessPublicationAudience(publication, viewer, { shareToken }))) throw new ApiError(404, "Published content not found");
+  if (publication.kind === "PREMIUM_WORLD" && !await hasActivePremiumAccess(publication, viewer)) throw new ApiError(403, "Join this World to access member activity");
+  return publication;
+};
+
+const publishedSaveable = async (id, viewer, shareToken = "") => {
+  const publication = await publishedCommentable(id, viewer, shareToken);
+  if (!["SEEN", "WORLD", "PREMIUM_WORLD", "EXPERIENCE"].includes(publication.kind)) throw new ApiError(404, "Published content not found");
   return publication;
 };
 
@@ -206,8 +228,8 @@ export const removeSeenComment = asyncHandler(async (req, res) => {
 
 export const shareSeen = asyncHandler(async (req, res) => { await publishedSeen(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const caption = String(req.body.caption || "").trim(); if (caption.length > 500) throw new ApiError(400, "Share caption must not exceed 500 characters"); await SeenEngagement.findOneAndUpdate({ publication: req.params.id, user: req.user._id, type: "SHARE" }, { $set: { text: caption || undefined }, $setOnInsert: { publication: req.params.id, user: req.user._id, type: "SHARE" } }, { upsert: true, new: true, runValidators: true }); return sendResponse(res, 200, "Seen shared to your profile", { engagement: await summary(req.params.id, req.user._id) }); });
 export const removeSeenShare = asyncHandler(async (req, res) => { await publishedSeen(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); await SeenEngagement.deleteOne({ publication: req.params.id, user: req.user._id, type: "SHARE" }); return sendResponse(res, 200, "Seen removed from your profile", { engagement: await summary(req.params.id, req.user._id) }); });
-export const toggleSeenSave = asyncHandler(async (req, res) => { await publishedSeen(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const filter = { publication: req.params.id, user: req.user._id, type: "SAVE" }; const existing = await SeenEngagement.findOne(filter); if (existing) await existing.deleteOne(); else await SeenEngagement.create(filter); return sendResponse(res, 200, existing ? "Seen removed from Saved" : "Seen saved", { engagement: await summary(req.params.id, req.user._id) }); });
-export const markWorldWalked = asyncHandler(async (req, res) => { const publication = await publishedPlanet(req.params.id); await SeenEngagement.findOneAndUpdate({ publication: publication._id, user: req.user._id, type: "WALKED" }, { $setOnInsert: { publication: publication._id, user: req.user._id, type: "WALKED" } }, { upsert: true, new: true }); return sendResponse(res, 200, "World marked as walked", { walked: true, publication: { id: publication._id, title: publication.title } }); });
+export const toggleSeenSave = asyncHandler(async (req, res) => { const publication = await publishedSaveable(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const filter = { publication: req.params.id, user: req.user._id, type: "SAVE" }; const existing = await SeenEngagement.findOne(filter); if (existing) await existing.deleteOne(); else await SeenEngagement.create(filter); return sendResponse(res, 200, existing ? "Removed from Saved" : "Saved", { engagement: await summary(req.params.id, req.user._id), saved: !existing, publication: { id: publication._id, kind: publication.kind } }); });
+export const markWorldWalked = asyncHandler(async (req, res) => { const publication = await publishedPlanet(req.params.id); if (publication.kind === "PREMIUM_WORLD" && !await hasActivePremiumAccess(publication, req.user)) throw new ApiError(403, "Join this World to step inside"); await SeenEngagement.findOneAndUpdate({ publication: publication._id, user: req.user._id, type: "WALKED" }, { $setOnInsert: { publication: publication._id, user: req.user._id, type: "WALKED" } }, { upsert: true, new: true }); return sendResponse(res, 200, "World marked as walked", { walked: true, publication: { id: publication._id, title: publication.title } }); });
 
 export const listWorldWalkers = asyncHandler(async (req, res) => {
   const publication = await publishedPlanet(req.params.id);

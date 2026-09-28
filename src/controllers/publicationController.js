@@ -9,6 +9,7 @@ import Publication from "../models/Publication.js";
 import PublicationPreference from "../models/PublicationPreference.js";
 import PublicationSeries from "../models/PublicationSeries.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
+import SavedItem from "../models/SavedItem.js";
 import SeenEngagement, { SEEN_REACTIONS } from "../models/SeenEngagement.js";
 import StarsLedgerEntry from "../models/StarsLedgerEntry.js";
 import User from "../models/User.js";
@@ -101,6 +102,88 @@ const upsertSnapshotChapter = (publication, chapter) => {
   }
 };
 const activeMembershipFilter = (publicationId) => ({ premiumPublication: publicationId, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } });
+const memberWorldAccessFilter = (publicationId, userId) => ({ premiumPublication: publicationId, user: userId, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } });
+const serializeMemberComment = (item, reactionsByComment, viewerReactionByComment, savedCommentIds) => {
+  const breakdown = reactionsByComment.get(String(item._id)) || {};
+  const ordered = sortSeenReactionRows(Object.entries(breakdown).map(([_id, count]) => ({ _id: { reaction: _id }, count })));
+  return {
+    id: String(item._id),
+    parentCommentId: item.parentComment ? String(item.parentComment) : null,
+    text: item.text,
+    createdAt: item.createdAt,
+    author: { id: String(item.user?._id || item.user || ""), name: item.user?.name || item.user?.username || "User", username: item.user?.username || "", avatar: item.user?.avatar || "" },
+    reactionCount: ordered.reduce((total, row) => total + row.count, 0),
+    reactionBreakdown: breakdown,
+    topReactions: ordered.slice(0, 3).map((row) => row._id.reaction),
+    viewerReaction: viewerReactionByComment.get(String(item._id)) || null,
+    viewerSaved: savedCommentIds.has(String(item._id)),
+    replies: [],
+  };
+};
+async function memberWorldEngagement(publicationId, viewerId) {
+  const [counts, viewerRows, comments, commentReactionRows, viewerCommentReactions] = await Promise.all([
+    SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publicationId) } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
+    SeenEngagement.find({ publication: publicationId, user: viewerId, type: { $in: ["REACTION", "SHARE", "SAVE"] } }).lean(),
+    SeenEngagement.find({ publication: publicationId, type: "COMMENT" }).sort({ createdAt: -1 }).limit(50).populate("user", "name username avatar").lean(),
+    SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publicationId), type: "COMMENT_REACTION" } }, { $group: { _id: { comment: "$parentComment", reaction: { $ifNull: ["$reaction", "LIKE"] } }, count: { $sum: 1 } } }]),
+    SeenEngagement.find({ publication: publicationId, user: viewerId, type: "COMMENT_REACTION" }).select("parentComment reaction").lean(),
+  ]);
+  const savedCommentRows = comments.length ? await SavedItem.find({ user: viewerId, targetType: "comment", targetModel: "SeenEngagement", targetId: { $in: comments.map((item) => item._id) } }).select("targetId").lean() : [];
+  const savedCommentIds = new Set(savedCommentRows.map((item) => String(item.targetId)));
+  const count = Object.fromEntries(counts.map((item) => [item._id, item.count]));
+  const reactionsByComment = new Map();
+  commentReactionRows.forEach((row) => {
+    const id = String(row._id.comment);
+    const current = reactionsByComment.get(id) || {};
+    current[row._id.reaction] = row.count;
+    reactionsByComment.set(id, current);
+  });
+  const viewerReactionByComment = new Map(viewerCommentReactions.map((row) => [String(row.parentComment), row.reaction || "LIKE"]));
+  const serialized = comments.reverse().map((item) => serializeMemberComment(item, reactionsByComment, viewerReactionByComment, savedCommentIds));
+  const byId = new Map(serialized.map((item) => [item.id, item]));
+  const topLevelComments = [];
+  serialized.forEach((item) => {
+    const parent = item.parentCommentId && byId.get(item.parentCommentId);
+    if (parent) parent.replies.push(item);
+    else topLevelComments.push(item);
+  });
+  return {
+    commentCount: count.COMMENT || 0,
+    reactionCount: count.REACTION || 0,
+    saveCount: count.SAVE || 0,
+    shareCount: count.SHARE || 0,
+    viewCount: (count.WALKED || 0) + (count.REACTION || 0) + (count.COMMENT || 0) + (count.SHARE || 0) + (count.SAVE || 0),
+    viewerReaction: viewerRows.find((item) => item.type === "REACTION")?.reaction || null,
+    viewerShared: Boolean(viewerRows.find((item) => item.type === "SHARE")),
+    viewerSaved: Boolean(viewerRows.find((item) => item.type === "SAVE")),
+    comments: topLevelComments,
+  };
+}
+async function serializeMemberWorld(publication, user) {
+  const publicationId = publication._id;
+  const ownerId = publication.creator?._id || publication.creator;
+  const isOwner = String(ownerId) === String(user._id) || user.role === "admin";
+  const membership = isOwner ? null : await PremiumMembership.findOne(memberWorldAccessFilter(publicationId, user._id)).select("status currentPeriodStart currentPeriodEnd memberNumber starsPerPeriod cancelAtPeriodEnd").lean();
+  if (!isOwner && !membership) throw new ApiError(403, "Join this World to step inside");
+  const activeFilter = activeMembershipFilter(publicationId);
+  const [memberCount, totalMemberships, engagement, includedExperiences] = await Promise.all([
+    PremiumMembership.countDocuments(activeFilter),
+    PremiumMembership.countDocuments({ premiumPublication: publicationId }),
+    memberWorldEngagement(publicationId, user._id),
+    publication.includedExperienceIds?.length ? Publication.find({ _id: { $in: publication.includedExperienceIds }, creator: publication.creator, kind: "EXPERIENCE", status: { $ne: "REMOVED" } }).lean() : [],
+  ]);
+  const serialized = serializePublication(publication, user, { audienceAllowed: true, entitlement: "ACTIVE_PREMIUM_MEMBER" });
+  if (!serialized) throw new ApiError(404, "World not found");
+  serialized.includedExperiences = includedExperiences.map((item) => ({ id: String(item._id), title: item.title, summary: item.summary, category: item.category, coverMedia: item.coverMedia || null, chapterCount: item.publishedSnapshot?.chapters?.length || item.submittedSnapshot?.chapters?.length || 0, pricing: item.pricing, included: true }));
+  serialized.viewer = { isOwner, isMember: Boolean(isOwner || membership), membershipStatus: membership?.status || (isOwner ? "OWNER" : null), memberNumber: membership?.memberNumber || null, currentPeriodEnd: membership?.currentPeriodEnd || null };
+  serialized.members = { count: memberCount };
+  return {
+    world: serialized,
+    membership: membership ? { id: String(membership._id), status: membership.status, memberNumber: membership.memberNumber, joinedAt: membership.currentPeriodStart, currentPeriodEnd: membership.currentPeriodEnd, starsPerPeriod: membership.starsPerPeriod, cancelAtPeriodEnd: Boolean(membership.cancelAtPeriodEnd) } : { status: isOwner ? "OWNER" : null, active: isOwner },
+    stats: { chapterCount: serialized.chapters?.length || 0, memberCount, commentCount: engagement.commentCount, totalMemberships },
+    engagement,
+  };
+}
 async function serializeWorldManagement(publication, user) {
   const publicationId = publication._id;
   const now = new Date();
@@ -179,6 +262,16 @@ export const getWorldManagement = asyncHandler(async (req, res) => {
   const publication = await ownerWorld(req.user._id, req.params.id);
   await attachEntityMetadata(publication, req.user);
   return sendResponse(res, 200, "World management fetched", await serializeWorldManagement(publication, req.user));
+});
+export const getMemberWorld = asyncHandler(async (req, res) => {
+  ensurePublicationId(req.params.id);
+  const publication = await Publication.findOne({ _id: req.params.id, kind: "PREMIUM_WORLD", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } })
+    .select("+shareToken")
+    .populate("creator", "name username avatar isVerified")
+    .lean();
+  if (!publication) throw new ApiError(404, "World not found");
+  await attachEntityMetadata(publication, req.user);
+  return sendResponse(res, 200, "Member World fetched", await serializeMemberWorld(publication, req.user));
 });
 export const getWorldPricing = asyncHandler(async (req, res) => {
   const publication = await ownerWorld(req.user._id, req.params.id);
@@ -637,6 +730,46 @@ export const getPublishedPublication = asyncHandler(async (req, res) => {
   const audienceAllowed = publication ? await canAccessPublicationAudience(publication, req.user || null, { shareToken: req.query.access || req.query.token }) : false;
   const serialized = publication && serializePublication(publication, req.user || null, { audienceAllowed, entitlement });
   if (!serialized) throw new ApiError(404, "Publication not found");
+
+  if (publication.kind === "PREMIUM_WORLD") {
+    const activeFilter = { premiumPublication: publication._id, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } };
+    const viewerMembershipQuery = req.user?._id ? PremiumMembership.findOne({ ...activeFilter, user: req.user._id }).select("status currentPeriodEnd memberNumber starsPerPeriod firstPeriodStars").lean() : null;
+    const [memberCount, previewMembers, viewerMembership, totalMemberships] = await Promise.all([
+      PremiumMembership.countDocuments(activeFilter),
+      PremiumMembership.find(activeFilter).sort({ createdAt: 1 }).limit(4).populate("user", "name username avatar").lean(),
+      viewerMembershipQuery,
+      PremiumMembership.countDocuments({ premiumPublication: publication._id }),
+    ]);
+    const regularPrice = Number(publication.publishedSnapshot?.metadata?.pricing?.starsAmount || publication.pricing?.starsAmount || 0);
+    const introEnabled = Boolean(publication.publishedSnapshot?.metadata?.firstMonthOfferEnabled ?? publication.firstMonthOfferEnabled);
+    const ownerId = publication.creator?._id || publication.creator;
+    const isOwner = req.user?._id && String(req.user._id) === String(ownerId);
+    serialized.viewer = {
+      isOwner: Boolean(isOwner),
+      isMember: Boolean(viewerMembership),
+      membershipStatus: viewerMembership?.status || null,
+      memberNumber: viewerMembership?.memberNumber || null,
+      currentPeriodEnd: viewerMembership?.currentPeriodEnd || null,
+    };
+    serialized.membershipOffer = {
+      billingPeriod: "MONTHLY",
+      currencyType: "STARS",
+      enabled: Boolean(regularPrice),
+      firstMonthOfferEnabled: introEnabled,
+      introPrice: introEnabled && regularPrice ? Math.max(1, Math.ceil(regularPrice / 2)) : null,
+      nextMemberNumber: totalMemberships + 1,
+      regularPrice,
+    };
+    serialized.members = {
+      count: memberCount,
+      previewAvatars: previewMembers.map((item) => ({
+        avatar: item.user?.avatar || "",
+        displayName: item.user?.name || item.user?.username || "",
+        id: String(item.user?._id || item.user || ""),
+        username: item.user?.username || "",
+      })),
+    };
+  }
 
   if (publication.kind === "SEEN") {
     const creatorId = publication.creator?._id || publication.creator;
