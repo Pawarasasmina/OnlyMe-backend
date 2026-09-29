@@ -31,6 +31,11 @@ export function normalizePublicationDraft(payload = {}, { partial = false, kind 
   if (Object.hasOwn(payload, "experiencePath")) result.experiencePath = text(payload.experiencePath, PUBLICATION_LIMITS.summary, "Experience path");
   if (Object.hasOwn(payload, "experienceLocation")) result.experienceLocation = text(payload.experienceLocation, 120, "Experience location");
   if (Object.hasOwn(payload, "allowDownload")) result.allowDownload = Boolean(payload.allowDownload);
+  if (Object.hasOwn(payload, "taggedPeople")) {
+    if (!Array.isArray(payload.taggedPeople || [])) throw new ApiError(400, "Tagged people must be an array");
+    result.taggedPeople = [...new Set((payload.taggedPeople || []).map((id) => objectId(id, "tagged person")))].filter(Boolean);
+    if (result.taggedPeople.length > 5) throw new ApiError(400, "Choose up to 5 people");
+  }
   if (Object.hasOwn(payload, "planet")) result.planet = { emoji: text(payload.planet?.emoji, 16, "planet emoji"), faceEmoji: text(payload.planet?.faceEmoji, 16, "planet face emoji"), accent: text(payload.planet?.accent, 40, "planet accent") };
   if (Object.hasOwn(payload, "replyToSeenId") || Object.hasOwn(payload, "replyToSeen")) result.replyToSeen = objectId(payload.replyToSeenId || payload.replyToSeen, "replyToSeenId");
   return result;

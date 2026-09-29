@@ -15,6 +15,20 @@ export function parseStoryEditorMetadata(value) {
   }
   if (!input || typeof input !== "object" || Array.isArray(input)) input = {};
   const transform = input.transform || {};
+  const inputSharedCard = input.sharedCard && typeof input.sharedCard === "object" && !Array.isArray(input.sharedCard)
+    ? input.sharedCard
+    : null;
+  const destinationRoute = text(inputSharedCard?.destinationRoute, 180);
+  const sharedCard = inputSharedCard && /^\/(?:seen|posts)\/[a-zA-Z0-9_-]+$/.test(destinationRoute) ? {
+    destinationRoute,
+    ...(text(inputSharedCard.eyebrow, 100) ? { eyebrow: text(inputSharedCard.eyebrow, 100) } : {}),
+    imageUrl: text(inputSharedCard.imageUrl, 2000),
+    kind: text(inputSharedCard.kind, 20) || "post",
+    subtitle: text(inputSharedCard.subtitle, 100),
+    title: text(inputSharedCard.title, 120) || "View post",
+    x: finite(inputSharedCard.x, 50, 16, 84),
+    y: finite(inputSharedCard.y, 50, 20, 78),
+  } : null;
   return {
     transform: {
       scale: finite(transform.scale, 1, 1, 2.2),
@@ -47,6 +61,7 @@ export function parseStoryEditorMetadata(value) {
       size: finite(stroke.size, 1.5, 0.5, 8),
       points: (Array.isArray(stroke.points) ? stroke.points : []).slice(0, 1000).map((point) => ({ x: finite(point.x, 0, 0, 100), y: finite(point.y, 0, 0, 177.777) })),
     })).filter((stroke) => stroke.points.length > 1),
+    ...(sharedCard ? { sharedCard } : {}),
   };
 }
 

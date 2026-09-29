@@ -18,6 +18,7 @@ const schema = new mongoose.Schema({
   series: { type: mongoose.Schema.Types.ObjectId, ref: "PublicationSeries", default: null, index: true },
   visibility: { type: String, enum: PUBLICATION_VISIBILITIES, default: "PUBLIC", index: true },
   isPinned: { type: Boolean, default: false, index: true },
+  seenDraftSlot: { type: Number, default: null, min: 1, max: 3 },
   shareToken: { type: String, default: "", select: false },
   planet: { emoji: { type: String, default: "" }, faceEmoji: { type: String, default: "" }, slot: { type: String, enum: ["WORLD_1", "WORLD_2", "PREMIUM", null], default: null }, accent: { type: String, default: "" } },
   includedInWorld: { type: Boolean, default: false },
@@ -54,6 +55,7 @@ schema.index({ creator: 1, status: 1, updatedAt: -1 });
 schema.index({ status: 1, submittedAt: 1 });
 schema.index({ category: 1, kind: 1, status: 1 });
 schema.index({ kind: 1, status: 1, visibility: 1, publishedAt: -1 });
+schema.index({ creator: 1, kind: 1, seenDraftSlot: 1 }, { unique: true, partialFilterExpression: { kind: "SEEN", status: "DRAFT", seenDraftSlot: { $type: "number" } } });
 schema.index({ shareToken: 1 }, { unique: true, sparse: true, partialFilterExpression: { shareToken: { $type: "string", $ne: "" } } });
 schema.index({ "entityRefs.entityType": 1, "entityRefs.entityId": 1, kind: 1, status: 1 });
 schema.index({ creator: 1, "planet.slot": 1 }, { unique: true, partialFilterExpression: { status: { $in: ACTIVE_PLANET_STATUSES }, "planet.slot": { $type: "string" } } });

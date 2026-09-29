@@ -28,6 +28,41 @@ test("story metadata clamps unsafe visual values and limits collection sizes", (
   assert.equal(metadata.textOverlays[0].color, "#FFFFFF");
 });
 
+test("story metadata preserves safe internal share cards and their position", () => {
+  const metadata = parseStoryEditorMetadata({
+    sharedCard: {
+      destinationRoute: "/seen/66f1234567890abcdef1234",
+      imageUrl: "https://cdn.example.com/cover.jpg",
+      kind: "Seen",
+      subtitle: "Creator · Tap to open",
+      title: "Morning Espresso Ritual",
+      x: 62,
+      y: 44,
+    },
+  });
+  assert.deepEqual(metadata.sharedCard, {
+    destinationRoute: "/seen/66f1234567890abcdef1234",
+    imageUrl: "https://cdn.example.com/cover.jpg",
+    kind: "Seen",
+    subtitle: "Creator · Tap to open",
+    title: "Morning Espresso Ritual",
+    x: 62,
+    y: 44,
+  });
+  assert.equal(parseStoryEditorMetadata({ sharedCard: { destinationRoute: "https://evil.example" } }).sharedCard, undefined);
+  assert.equal(parseStoryEditorMetadata({ sharedCard: { destinationRoute: "/admin/users" } }).sharedCard, undefined);
+  assert.deepEqual(parseStoryEditorMetadata({ sharedCard: { destinationRoute: "/posts/post-123", eyebrow: "Ethan · Right now · Dubai" } }).sharedCard, {
+    destinationRoute: "/posts/post-123",
+    eyebrow: "Ethan · Right now · Dubai",
+    imageUrl: "",
+    kind: "post",
+    subtitle: "",
+    title: "View post",
+    x: 50,
+    y: 50,
+  });
+});
+
 test("story audience and interaction settings are parsed explicitly", () => {
   assert.deepEqual(parseStoryOptions({ audience: "close_circle", allowReactions: "false", allowReplies: "true", allowSharing: "false" }), {
     audience: "close_circle",

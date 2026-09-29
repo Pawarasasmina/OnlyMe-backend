@@ -1,7 +1,7 @@
 export const PUBLICATION_KINDS = ["SEEN", "WORLD", "PREMIUM_WORLD", "EXPERIENCE"];
 export const PUBLICATION_STATUSES = ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED", "REJECTED", "ARCHIVED", "REMOVED"];
 export const PUBLICATION_VISIBILITIES = ["PUBLIC", "FRIENDS", "LINK_ONLY"];
-export const SEEN_CATEGORIES = ["Places", "Moving", "Business", "Growth", "Lifestyle"];
+export const SEEN_CATEGORIES = ["Travel", "Fitness", "Lifestyle", "Business", "Tech", "Psychology", "Fashion", "Beauty", "Wellness", "Food"];
 export const ACTIVE_PLANET_STATUSES = ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"];
 export const EDITABLE_PUBLICATION_STATUSES = ["DRAFT", "CHANGES_REQUESTED"];
 export const PUBLICATION_ACTIONS = ["DRAFT_CREATED", "DRAFT_UPDATED", "REVISION_STARTED", "REVISION_CANCELED", "CHAPTER_ADDED", "CHAPTER_UPDATED", "CHAPTER_REMOVED", "CHAPTERS_REORDERED", "SUBMITTED", "RESUBMITTED", "APPROVED", "CHANGES_REQUESTED", "REJECTED", "ARCHIVED", "REMOVED", "LEGACY_LINKED"];
@@ -21,7 +21,7 @@ export const MAX_MODERATORS_PER_EXPERIENCE = 2;
 export const PLANET_MARKER_COLORS = ["ICE_BLUE", "AMBER", "CORAL", "MINT", "LILAC", "WHITE"];
 export const PUBLICATION_LIMITS = { title: 120, summary: 300, description: 2000, category: 40, tags: 15, tag: 40, chapterTitle: 120, chapterText: 2000, blockLabel: 120, seriesName: 24 };
 export const KIND_RULES = {
-  SEEN: { minChapters: 1, maxChapters: 3, pricingMode: "FREE", previewMin: 1, previewMax: 3, placement: "SEEN" },
+  SEEN: { minChapters: 1, maxChapters: 5, pricingMode: "FREE", previewMin: 1, previewMax: 5, placement: "SEEN" },
   WORLD: { minChapters: 1, maxChapters: 7, pricingMode: "FREE", previewMin: 1, previewMax: 7, placement: "PROFILE_ORBIT" },
   PREMIUM_WORLD: { minChapters: 2, maxChapters: 5, pricingMode: "MONTHLY", previewMin: 1, previewMax: 1, placement: "PROFILE_ORBIT" },
   EXPERIENCE: { minChapters: 2, maxChapters: null, pricingMode: "ONE_TIME", previewMin: 0, previewMax: 0, placement: "PROFILE_EXPERIENCES" },
