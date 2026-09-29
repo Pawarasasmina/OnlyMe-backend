@@ -19,8 +19,9 @@ export function parseStoryEditorMetadata(value) {
     ? input.sharedCard
     : null;
   const destinationRoute = text(inputSharedCard?.destinationRoute, 180);
-  const sharedCard = inputSharedCard && /^\/seen\/[a-zA-Z0-9_-]+$/.test(destinationRoute) ? {
+  const sharedCard = inputSharedCard && /^\/(?:seen|posts)\/[a-zA-Z0-9_-]+$/.test(destinationRoute) ? {
     destinationRoute,
+    ...(text(inputSharedCard.eyebrow, 100) ? { eyebrow: text(inputSharedCard.eyebrow, 100) } : {}),
     imageUrl: text(inputSharedCard.imageUrl, 2000),
     kind: text(inputSharedCard.kind, 20) || "post",
     subtitle: text(inputSharedCard.subtitle, 100),

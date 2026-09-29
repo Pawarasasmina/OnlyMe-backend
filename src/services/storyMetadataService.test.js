@@ -50,7 +50,17 @@ test("story metadata preserves safe internal share cards and their position", ()
     y: 44,
   });
   assert.equal(parseStoryEditorMetadata({ sharedCard: { destinationRoute: "https://evil.example" } }).sharedCard, undefined);
-  assert.equal(parseStoryEditorMetadata({ sharedCard: { destinationRoute: "/posts/post-123" } }).sharedCard, undefined);
+  assert.equal(parseStoryEditorMetadata({ sharedCard: { destinationRoute: "/admin/users" } }).sharedCard, undefined);
+  assert.deepEqual(parseStoryEditorMetadata({ sharedCard: { destinationRoute: "/posts/post-123", eyebrow: "Ethan · Right now · Dubai" } }).sharedCard, {
+    destinationRoute: "/posts/post-123",
+    eyebrow: "Ethan · Right now · Dubai",
+    imageUrl: "",
+    kind: "post",
+    subtitle: "",
+    title: "View post",
+    x: 50,
+    y: 50,
+  });
 });
 
 test("story audience and interaction settings are parsed explicitly", () => {

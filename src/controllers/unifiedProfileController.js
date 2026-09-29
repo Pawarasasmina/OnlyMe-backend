@@ -36,7 +36,7 @@ async function loadProfile(owner, viewer) {
   const Model = profileModelFor(owner);
   const publishedFilter = { creator: owner._id, status: { $in: ["PUBLISHED", "published"] } };
   const profileOwner = Boolean(viewer?._id && String(viewer._id) === String(owner._id));
-  const seenStatus = { $in: ["PUBLISHED", "CHANGES_REQUESTED"] };
+  const seenStatus = { $in: profileOwner ? ["DRAFT", "PUBLISHED", "CHANGES_REQUESTED"] : ["PUBLISHED", "CHANGES_REQUESTED"] };
   const seenAudienceFilter = await seenVisibilityFilter(viewer || null, [owner._id]);
   const planetStatus = profileOwner ? { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } : { $in: ["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED"] };
   const [roleProfile, content, publishedContentCount, seens, seriesDocs, planets, experiences, ownFeedPosts, shares, wallShares, feedSharePosts, followerCount, followingCount, supporterRows, viewerRelationships, viewerSeeSignal, profileMedia] = await Promise.all([
@@ -44,7 +44,7 @@ async function loadProfile(owner, viewer) {
     Content.find(publishedFilter)
       .sort({ publishedAt: -1, _id: -1 }).limit(30).populate("creator", "name username avatar").lean(),
     Content.countDocuments(publishedFilter),
-    Publication.find({ creator: owner._id, kind: "SEEN", status: seenStatus, publishedSnapshot: { $exists: true }, ...seenAudienceFilter }).select("+submittedSnapshot").sort({ isPinned: -1, publishedAt: -1, updatedAt: -1 }).populate("creator", "name username avatar").populate("series", "name").lean(),
+    Publication.find({ creator: owner._id, kind: "SEEN", status: seenStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }), ...seenAudienceFilter }).select("+submittedSnapshot").sort({ isPinned: -1, publishedAt: -1, updatedAt: -1 }).populate("creator", "name username avatar").populate("series", "name").lean(),
     PublicationSeries.find({ creator: owner._id, archivedAt: null }).sort({ isPinned: -1, sortOrder: 1, updatedAt: -1, name: 1 }).lean(),
     Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
     Publication.find({ creator: owner._id, kind: "EXPERIENCE", status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ publishedAt: -1, updatedAt: -1 }).limit(3).populate("creator", "name username avatar").lean(),
