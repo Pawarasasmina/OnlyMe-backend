@@ -17,6 +17,8 @@ const summary = (membership) => ({
   creator: membership.creator,
   status: membership.status,
   starsPerPeriod: membership.starsPerPeriod,
+  firstPeriodStars: membership.firstPeriodStars || membership.starsPerPeriod,
+  memberNumber: membership.memberNumber || null,
   currentPeriodStart: membership.currentPeriodStart,
   currentPeriodEnd: membership.currentPeriodEnd,
   cancelAtPeriodEnd: membership.cancelAtPeriodEnd,
@@ -67,12 +69,15 @@ export async function joinPremium({ user, publicationId, key }) {
           "Premium price is invalid",
           FINANCIAL_ERROR_CODES.PUBLICATION_NOT_PURCHASABLE,
         );
+      const introEnabled = Boolean(publication.publishedSnapshot.metadata?.firstMonthOfferEnabled ?? publication.firstMonthOfferEnabled);
+      const firstPeriodPrice = introEnabled ? Math.max(1, Math.ceil(price / 2)) : price;
+      const memberNumber = await PremiumMembership.countDocuments({ premiumPublication: publication._id }).session(session) + 1;
 
       const moved = await transferStars(
         {
           fromUser: user._id,
           toUser: publication.creator,
-          amount: price,
+          amount: firstPeriodPrice,
           debitType: "PREMIUM_JOIN_DEBIT",
           creditType: "PREMIUM_CREATOR_EARNING",
           referenceType: "PREMIUM_JOIN",
@@ -81,7 +86,7 @@ export async function joinPremium({ user, publicationId, key }) {
           creator: publication.creator,
           command,
           idempotencyKey: key,
-          metadata: { priceSnapshotStars: price, periodDays: PREMIUM_PERIOD_DAYS },
+          metadata: { firstPeriodPriceStars: firstPeriodPrice, introOfferApplied: introEnabled, priceSnapshotStars: price, periodDays: PREMIUM_PERIOD_DAYS },
         },
         session,
       );
@@ -96,6 +101,8 @@ export async function joinPremium({ user, publicationId, key }) {
             activeMembershipKey,
             status: "ACTIVE",
             starsPerPeriod: price,
+            firstPeriodStars: firstPeriodPrice,
+            memberNumber,
             currentPeriodStart: start,
             currentPeriodEnd: end,
             cancelAtPeriodEnd: false,
