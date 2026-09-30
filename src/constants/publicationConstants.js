@@ -23,6 +23,8 @@ export const PUBLICATION_LIMITS = { title: 120, summary: 300, description: 2000,
 export const KIND_RULES = {
   SEEN: { minChapters: 1, maxChapters: 5, pricingMode: "FREE", previewMin: 1, previewMax: 5, placement: "SEEN" },
   WORLD: { minChapters: 1, maxChapters: 7, pricingMode: "FREE", previewMin: 1, previewMax: 7, placement: "PROFILE_ORBIT" },
-  PREMIUM_WORLD: { minChapters: 2, maxChapters: 5, pricingMode: "MONTHLY", previewMin: 1, previewMax: 1, placement: "PROFILE_ORBIT" },
+  // World content is assembled from preview stories and included Experiences.
+  // Chapters remain an internal storage detail for legacy records/story media.
+  PREMIUM_WORLD: { minChapters: 0, maxChapters: 1, pricingMode: "MONTHLY", previewMin: 0, previewMax: 1, placement: "PROFILE_ORBIT" },
   EXPERIENCE: { minChapters: 2, maxChapters: null, pricingMode: "ONE_TIME", previewMin: 0, previewMax: 0, placement: "PROFILE_EXPERIENCES" },
 };

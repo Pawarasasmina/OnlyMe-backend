@@ -345,11 +345,14 @@ export const updateWorldManagement = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "World updated", await serializeWorldManagement(publication, req.user));
 });
 export const uploadWorldCover = asyncHandler(async (req, res) => {
-  if (!req.file) throw new ApiError(400, "Cover image is required");
+  if (!req.file) throw new ApiError(400, "Cover image or video is required");
   const publication = await ownerWorld(req.user._id, req.params.id);
   const mediaType = String(req.file.mimetype || "").startsWith("video/") ? "VIDEO" : "IMAGE";
-  if (mediaType !== "IMAGE") throw new ApiError(400, "World covers must be images");
   const uploaded = await uploadPublicationFile({ file: req.file, creatorId: req.user._id, publicationId: publication._id, chapterId: "root", blockId: "cover", mediaType });
+  if (mediaType === "VIDEO" && Number(uploaded.duration) > 30.1) {
+    await deletePublicationFile(uploaded).catch(() => {});
+    throw new ApiError(400, "World cover videos must be 30 seconds or shorter");
+  }
   const trusted = await verifyPublicationAsset({ assetId: uploaded.assetId, creatorId: req.user._id, publicationId: publication._id, chapterId: "root", blockId: "cover", mediaType });
   publication.coverMedia = trusted;
   publication.statusVersion += 1;
@@ -357,6 +360,17 @@ export const uploadWorldCover = asyncHandler(async (req, res) => {
   await publication.save();
   await attachEntityMetadata(publication, req.user);
   return sendResponse(res, 201, "World cover updated", await serializeWorldManagement(publication, req.user));
+});
+export const removeWorldCover = asyncHandler(async (req, res) => {
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  const media = publication.coverMedia;
+  publication.coverMedia = undefined;
+  publication.statusVersion += 1;
+  updateSnapshotMetadata(publication, { coverMedia: null });
+  await publication.save();
+  if (media) await deletePublicationFile(media).catch(() => {});
+  await attachEntityMetadata(publication, req.user);
+  return sendResponse(res, 200, "World cover removed", await serializeWorldManagement(publication, req.user));
 });
 export const uploadWorldStoryPreview = asyncHandler(async (req, res) => {
   if (!req.file) throw new ApiError(400, "Story image is required");
@@ -384,10 +398,16 @@ export const uploadWorldStoryPreview = asyncHandler(async (req, res) => {
   const blockId = crypto.randomUUID();
   const uploaded = await uploadPublicationFile({ file: req.file, creatorId: req.user._id, publicationId: publication._id, chapterId: chapter.stableChapterId, blockId, mediaType });
   const trusted = await verifyPublicationAsset({ assetId: uploaded.assetId, creatorId: req.user._id, publicationId: publication._id, chapterId: chapter.stableChapterId, blockId, mediaType });
+  let editorMetadata = {};
+  try {
+    editorMetadata = JSON.parse(String(req.body.editorMetadata || "{}"));
+  } catch {
+    throw new ApiError(400, "Story editor data is invalid");
+  }
   chapter.blocks.push({
     id: blockId,
     media: trusted,
-    metadata: { caption: String(req.body.caption || "").slice(0, 300), label: req.body.label || `Story ${existingStoryCount + 1}`, storyPreview: true },
+    metadata: { caption: String(req.body.caption || "").slice(0, 300), editorMetadata, label: String(req.body.label || `Story ${existingStoryCount + 1}`).slice(0, 120), storyPreview: true },
     order: chapter.blocks.length,
     text: "",
     type: "IMAGE",
