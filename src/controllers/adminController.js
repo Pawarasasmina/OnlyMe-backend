@@ -134,7 +134,7 @@ export const listReportedMessageUsers = asyncHandler(async (req, res) => {
     const categoryCounts = group.categories.reduce((counts, category) => ({ ...counts, [category]: (counts[category] || 0) + 1 }), {});
     return [{ ...group, categoryCounts, categories: undefined, user }];
   });
-  const managesAccountRestrictions = req.reportScopes?.some((scope) => ["FEED_POST", "PROFILE", "SEEN"].includes(scope));
+  const managesAccountRestrictions = req.reportScopes?.some((scope) => ["FEED_POST", "PROFILE", "SEEN", "WORLD"].includes(scope));
   const summary = items.reduce((totals, item) => ({
     users: totals.users + 1,
     reports: totals.reports + item.totalReports,
@@ -197,7 +197,7 @@ export const resolveMessageReport = asyncHandler(async (req, res) => {
   const report = await MessageReport.findById(req.params.reportId);
   if (!report) throw new ApiError(404, "Report not found");
   if (req.reportScopes?.length && !req.reportScopes.includes(report.scope)) throw new ApiError(404, "Report not found");
-  const isUserReport = ["FEED_POST", "PROFILE", "SEEN"].includes(report.scope);
+  const isUserReport = ["FEED_POST", "PROFILE", "SEEN", "WORLD"].includes(report.scope);
   if (action === "ACCOUNT_RESTRICTED" && !isUserReport) throw new ApiError(400, "Account restrictions must be applied from User reports");
   if (action === "MESSAGING_RESTRICTED" && isUserReport) throw new ApiError(400, "Messaging restrictions must be applied from Message reports");
   if (["RESOLVED", "CLOSED"].includes(report.status) && action !== "RESTRICTION_LIFTED") throw new ApiError(409, "This report is already resolved");

@@ -9,6 +9,7 @@ import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
 import { canAccessPublicationAudience } from "../services/publicationAccessService.js";
 import { canModeratePublication } from "../services/publicationModeratorService.js";
+import { messageVoiceUrl, uploadMessageVoice } from "../services/messageVoiceStorageService.js";
 import { assertWorldCommentsEnabled } from "../services/worldCommentsService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -88,7 +89,7 @@ const summary = async (publication, viewerId) => {
   const serialized = comments.reverse().map((item) => {
     const breakdown = reactionsByComment.get(String(item._id)) || {};
     const ordered = sortReactionCounts(Object.entries(breakdown).map(([_id, reactionCount]) => ({ _id, count: reactionCount })));
-    return { id: item._id, parentCommentId: item.parentComment ? String(item.parentComment) : null, text: item.text, createdAt: item.createdAt, author: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" }, reactionCount: ordered.reduce((total, row) => total + row.count, 0), reactionBreakdown: breakdown, topReactions: ordered.slice(0, 3).map((row) => row._id), viewerReaction: viewerReactionByComment.get(String(item._id)) || null, viewerSaved: savedCommentIds.has(String(item._id)), replies: [] };
+    return { id: item._id, parentCommentId: item.parentComment ? String(item.parentComment) : null, text: item.text, audio: serializeCommentAudio(item.audio), createdAt: item.createdAt, author: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" }, reactionCount: ordered.reduce((total, row) => total + row.count, 0), reactionBreakdown: breakdown, topReactions: ordered.slice(0, 3).map((row) => row._id), viewerReaction: viewerReactionByComment.get(String(item._id)) || null, viewerSaved: savedCommentIds.has(String(item._id)), replies: [] };
   });
   const byId = new Map(serialized.map((item) => [String(item.id), item]));
   const topLevelComments = [];
@@ -104,6 +105,84 @@ const cleanString = (value, maxLength) => {
   const clean = String(value || "").trim().replace(/\r\n/g, "\n");
   return clean.length > maxLength ? clean.slice(0, maxLength) : clean;
 };
+
+const SPAM_SAFETY_ACTIONS = new Map([
+  ["reportSpam", "Report spam"],
+  ["deleteMessages", "Delete all messages"],
+  ["deleteReactions", "Delete all reactions"],
+  ["banCreator", "Ban creator"],
+  ["removeFromWorld", "Remove from your World"],
+]);
+
+const normalizeSpamSafetyActions = (value) => {
+  const raw = Array.isArray(value) ? value : [];
+  const keys = raw.map((item) => (typeof item === "string" ? item : item?.key)).filter(Boolean);
+  return [...new Set(["reportSpam", ...keys])]
+    .filter((key) => SPAM_SAFETY_ACTIONS.has(key))
+    .map((key) => ({ key, label: SPAM_SAFETY_ACTIONS.get(key) }));
+};
+
+async function applySeenReportSafetyActions({ actions, publication, reporterId }) {
+  const keys = new Set(actions.map((action) => action.key));
+  const applied = [];
+
+  if (keys.has("deleteMessages")) {
+    const creatorComments = await SeenEngagement.find({ publication: publication._id, user: publication.creator, type: "COMMENT" }).select("_id").lean();
+    const commentIds = creatorComments.map((item) => item._id);
+    await SeenEngagement.deleteMany({
+      publication: publication._id,
+      user: publication.creator,
+      type: { $in: ["COMMENT", "SHARE"] },
+    });
+    if (commentIds.length) {
+      await SeenEngagement.deleteMany({
+        publication: publication._id,
+        $or: [
+          { parentComment: { $in: commentIds } },
+          { type: "COMMENT_REACTION", parentComment: { $in: commentIds } },
+        ],
+      });
+    }
+    applied.push({ key: "deleteMessages", label: SPAM_SAFETY_ACTIONS.get("deleteMessages") });
+  }
+
+  if (keys.has("deleteReactions")) {
+    await SeenEngagement.deleteMany({
+      publication: publication._id,
+      user: publication.creator,
+      type: { $in: ["REACTION", "COMMENT_REACTION"] },
+    });
+    applied.push({ key: "deleteReactions", label: SPAM_SAFETY_ACTIONS.get("deleteReactions") });
+  }
+
+  if (keys.has("banCreator")) {
+    await UserBlock.updateOne(
+      { blocker: reporterId, blocked: publication.creator },
+      { $setOnInsert: { blocker: reporterId, blocked: publication.creator } },
+      { upsert: true },
+    );
+    applied.push({ key: "banCreator", label: SPAM_SAFETY_ACTIONS.get("banCreator") });
+  }
+
+  if (keys.has("removeFromWorld")) {
+    applied.push({ key: "removeFromWorld", label: SPAM_SAFETY_ACTIONS.get("removeFromWorld"), status: "queued_for_review" });
+  }
+
+  return applied;
+}
+
+const readWaveform = (value) => {
+  const raw = Array.isArray(value) ? value : (() => {
+    try { return value ? JSON.parse(value) : []; } catch { return []; }
+  })();
+  return Array.isArray(raw) ? raw.map(Number).filter((item) => Number.isFinite(item)).slice(0, 100) : [];
+};
+
+const serializeCommentAudio = (audio) => audio?.assetId ? {
+  url: messageVoiceUrl(audio),
+  duration: audio.duration,
+  waveform: audio.waveform || [],
+} : null;
 
 const notifyCreatorActivity = (req, publication) => {
   if (String(publication.creator) !== String(req.user._id)) {
@@ -178,7 +257,8 @@ export const removeSeenReaction = asyncHandler(async (req, res) => { await publi
 export const commentOnSeen = asyncHandler(async (req, res) => {
   const publication = await publishedCommentable(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const text = String(req.body.text || "").trim();
   assertWorldCommentsEnabled(publication);
-  if (!text || text.length > 500) throw new ApiError(400, "Comment must contain 1 to 500 characters");
+  const hasVoiceFile = Boolean(req.file?.buffer?.length);
+  if ((!text && !hasVoiceFile) || text.length > 500) throw new ApiError(400, hasVoiceFile ? "Voice comment text must not exceed 500 characters" : "Comment must contain 1 to 500 characters");
   let parentComment;
   if (req.body.parentCommentId) {
     if (!mongoose.isValidObjectId(req.body.parentCommentId)) throw new ApiError(400, "Invalid parent comment ID");
@@ -186,7 +266,15 @@ export const commentOnSeen = asyncHandler(async (req, res) => {
     if (!parentComment) throw new ApiError(404, "Parent comment not found");
     if (parentComment.parentComment) parentComment = await SeenEngagement.findById(parentComment.parentComment).select("_id").lean();
   }
-  await SeenEngagement.create({ publication: req.params.id, user: req.user._id, type: "COMMENT", text, parentComment: parentComment?._id });
+  const audio = hasVoiceFile ? await uploadMessageVoice({
+    buffer: req.file.buffer,
+    folder: `onlyme/publications/comments/${req.params.id}`,
+    maxDurationSeconds: 30,
+    purpose: "voice_comment",
+    senderId: req.user._id,
+  }) : null;
+  if (audio) audio.waveform = readWaveform(req.body.waveform);
+  await SeenEngagement.create({ publication: req.params.id, user: req.user._id, type: "COMMENT", text: text || undefined, audio: audio || undefined, parentComment: parentComment?._id });
   notifyCreatorActivity(req, publication);
   return sendResponse(res, 201, "Comment added", { engagement: await summary(req.params.id, req.user._id) });
 });
@@ -298,19 +386,29 @@ export const blockSeenCreator = asyncHandler(async (req, res) => {
 });
 
 export const reportSeen = asyncHandler(async (req, res) => {
-  if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid Seen ID");
-  const publication = await Publication.findOne({ _id: req.params.id, kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("_id creator kind title summary coverMedia publishedAt visibility +shareToken").lean();
-  if (!publication || !await canAccessPublicationAudience(publication, req.user, { shareToken: req.body.accessToken || req.query.access || req.query.token })) throw new ApiError(404, "Published Seen not found");
+  if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid publication ID");
+  const publication = await Publication.findOne({ _id: req.params.id, kind: { $in: ["SEEN", "WORLD", "PREMIUM_WORLD", "EXPERIENCE"] }, status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("_id creator kind title summary coverMedia publishedAt visibility +shareToken").lean();
+  if (!publication) throw new ApiError(404, "Published content not found");
+  const shareToken = req.body.accessToken || req.query.access || req.query.token;
+  const canAccessSeen = publication.kind !== "SEEN" || await canAccessPublicationAudience(publication, req.user, { shareToken });
+  const canAccessWorld = publication.kind !== "PREMIUM_WORLD" || await hasActivePremiumAccess(publication, req.user);
+  if (!canAccessSeen || !canAccessWorld) throw new ApiError(404, "Published content not found");
 
-  if (String(publication.creator) === String(req.user._id)) throw new ApiError(400, "You cannot report your own Seen");
+  if (String(publication.creator) === String(req.user._id)) throw new ApiError(400, "You cannot report your own content");
   const reason = cleanString(req.body.reason || "OTHER", 80).toUpperCase().replaceAll(/[^A-Z0-9]+/g, "_");
   const allowed = new Set(["SPAM", "FALSE_INFORMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "OTHER"]);
   if (!allowed.has(reason)) throw new ApiError(400, "Select a valid report reason");
+  const scope = publication.kind === "SEEN" ? "SEEN" : "WORLD";
+  if (await MessageReport.exists({ reporter: req.user._id, publication: publication._id, scope })) throw new ApiError(409, "You already reported this content");
+  const requestedSafetyActions = reason === "SPAM" ? normalizeSpamSafetyActions(req.body.safetyActions) : [];
+  const appliedSafetyActions = requestedSafetyActions.length
+    ? await applySeenReportSafetyActions({ actions: requestedSafetyActions, publication, reporterId: req.user._id })
+    : [];
 
   const payload = {
     reporter: req.user._id,
     reportedUser: publication.creator,
-    scope: "SEEN",
+    scope,
     publication: publication._id,
     details: cleanString(req.body.details, 1000),
     reason,
@@ -321,14 +419,17 @@ export const reportSeen = asyncHandler(async (req, res) => {
       coverMedia: publication.coverMedia || null,
       creatorId: String(publication.creator || ""),
       publishedAt: publication.publishedAt || null,
+      reportMode: cleanString(req.body.reportMode || "", 80),
+      requestedSafetyActions,
+      appliedSafetyActions,
     },
   };
 
   try {
     const report = await MessageReport.create(payload);
-    return sendResponse(res, 201, "Seen report received", { reportId: String(report._id), status: report.status });
+    return sendResponse(res, 201, "Report received", { reportId: String(report._id), status: report.status });
   } catch (error) {
-    if (error?.code === 11000) throw new ApiError(409, "You already reported this Seen");
+    if (error?.code === 11000) throw new ApiError(409, "You already reported this content");
     throw error;
   }
 });
