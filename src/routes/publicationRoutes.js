@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { addSeenToSeries, addWorldModerator, archive, cancelRevision, createChapter, createDraft, createSeries, decideExperienceAccess, deleteChapter, deleteSeries, editChapter, getExperienceAccessLink, getMine, getPublishedPublication, getSeenInsights, getSeries, getWorldManagement, getWorldPricing, includeWorldExperience, listMine, listMySeries, listPublishedSeens, listSeenCategories, listWorldModeratorCandidates, listWorldModerators, openWorldWave, pinSeen, removeMedia, removePlanet, removeSeen, removeSeenFromSeries, removeWorldExperience, removeWorldModerator, reorder, requestExperienceAccess, restore, resubmit, setCommentsEnabled, startRevision, submit, updateDraft, updateSeries, updateWorldManagement, updateWorldPricing, uploadMedia, uploadWorldCover, uploadWorldStoryPreview } from "../controllers/publicationController.js";
+import { addSeenToSeries, addWorldModerator, archive, cancelRevision, createChapter, createDraft, createSeries, decideExperienceAccess, deleteChapter, deleteSeries, editChapter, getExperienceAccessLink, getMemberWorld, getMine, getPublishedPublication, getSeenInsights, getSeries, getWorldManagement, getWorldPricing, includeWorldExperience, listMine, listMySeries, listPublishedSeens, listSeenCategories, listWorldModeratorCandidates, listWorldModerators, openWorldWave, pinSeen, removeMedia, removePlanet, removeSeen, removeSeenFromSeries, removeWorldExperience, removeWorldModerator, reorder, requestExperienceAccess, restore, resubmit, setCommentsEnabled, startRevision, submit, updateDraft, updateSeries, updateWorldManagement, updateWorldPricing, uploadMedia, uploadWorldCover, uploadWorldStoryPreview } from "../controllers/publicationController.js";
 import { optionalProtect, protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { requireApprovedCreatorOrSeenOwner } from "../middleware/creatorApprovalMiddleware.js";
@@ -8,6 +8,7 @@ import { blockSeenCreator, commentOnSeen, getSeenEngagement, hideSeen, listSeenR
 import { getPublicationPoll, votePublicationPoll } from "../controllers/publicationPollController.js";
 const router = Router(); const creator = [protect, authorize("fan", "creator"), requireApprovedCreatorOrSeenOwner];
 router.post("/:id/walked", protect, authorize("fan", "creator"), markWorldWalked);
+router.get("/:id/member-world", protect, authorize("fan", "creator"), getMemberWorld);
 router.get("/:id/walkers", protect, authorize("fan", "creator"), listWorldWalkers);
 router.get("/:id/chapters/:chapterId/polls/:blockId", optionalProtect, getPublicationPoll);
 router.put("/:id/chapters/:chapterId/polls/:blockId", protect, authorize("fan", "creator"), votePublicationPoll);

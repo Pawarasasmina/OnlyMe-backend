@@ -16,7 +16,11 @@ export function derivedPublicationPolicy(kind) {
 export function normalizePublicationDraft(payload = {}, { partial = false, kind = "" } = {}) {
   for (const field of ["status", "creator", "submittedSnapshot", "publishedSnapshot", "submittedVersion", "publishedVersion", "reviewedBy", "internalModerationNote", "placement", "shareToken"]) if (Object.hasOwn(payload, field)) throw new ApiError(400, `${field} cannot be changed`);
   const result = {};
-  if (!partial || Object.hasOwn(payload, "kind")) { if (!PUBLICATION_KINDS.includes(payload.kind)) throw new ApiError(400, "Unsupported publication kind"); result.kind = payload.kind; }
+  if (!partial || Object.hasOwn(payload, "kind")) {
+    if (!PUBLICATION_KINDS.includes(payload.kind)) throw new ApiError(400, "Unsupported publication kind");
+    if (!partial && payload.kind === "WORLD") throw new ApiError(400, "New Worlds use monthly subscriptions. Create a Premium World instead.");
+    result.kind = payload.kind;
+  }
   for (const [field, max] of [["title", PUBLICATION_LIMITS.title], ["summary", PUBLICATION_LIMITS.summary], ["description", PUBLICATION_LIMITS.description]]) if (!partial || Object.hasOwn(payload, field)) result[field] = text(payload[field], max, field);
   if (!partial || Object.hasOwn(payload, "category")) result.category = (payload.kind || result.kind || kind) === "SEEN" ? seenCategory(payload.category) : text(payload.category, PUBLICATION_LIMITS.category, "Category");
   if (!partial || Object.hasOwn(payload, "visibility")) result.visibility = visibility(payload.visibility);
