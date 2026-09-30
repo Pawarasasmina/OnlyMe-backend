@@ -27,6 +27,14 @@ const seenEngagementSchema = new mongoose.Schema({
   parentComment: { type: mongoose.Schema.Types.ObjectId, ref: "SeenEngagement", default: undefined, index: true },
   reaction: { type: String, enum: SEEN_REACTIONS, default: undefined },
   text: { type: String, trim: true, maxlength: 500, default: undefined },
+  audio: {
+    assetId: String,
+    resourceType: String,
+    format: String,
+    bytes: Number,
+    duration: Number,
+    waveform: [Number],
+  },
 }, { timestamps: true });
 
 seenEngagementSchema.index({ publication: 1, user: 1, type: 1 }, { name: "unique_seen_reaction_per_user", unique: true, partialFilterExpression: { type: "REACTION" } });
