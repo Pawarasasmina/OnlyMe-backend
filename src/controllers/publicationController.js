@@ -297,7 +297,10 @@ export const updateWorldManagement = asyncHandler(async (req, res) => {
     if (!title || title.length > 30) throw new ApiError(400, "World name must be between 1 and 30 characters");
     updates.title = title;
   }
-  if (Object.hasOwn(req.body, "description")) updates.description = String(req.body.description || "").trim().slice(0, PUBLICATION_LIMITS.description);
+  if (Object.hasOwn(req.body, "description")) {
+    updates.description = String(req.body.description || "").trim().slice(0, PUBLICATION_LIMITS.description);
+    updates.summary = updates.description.slice(0, PUBLICATION_LIMITS.summary);
+  }
   if (Object.hasOwn(req.body, "planetFaceEmoji") || Object.hasOwn(req.body, "planetEmoji")) {
     const emoji = String(req.body.planetFaceEmoji ?? req.body.planetEmoji ?? "").trim();
     if (!emoji || emoji.length > 16) throw new ApiError(400, "Choose one planet face emoji");
@@ -596,7 +599,7 @@ async function enforcePremiumExperienceCapacity(creatorId, publicationId) {
   const active = await Publication.countDocuments({ _id: { $ne: publication._id }, creator: creatorId, kind: "EXPERIENCE", "pricing.mode": "ONE_TIME", status: { $in: ["PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } });
   if (active >= 3) throw new ApiError(409, "A creator may have at most three active Premium Experiences");
 }
-export const submit = asyncHandler(async (req, res) => { await enforcePremiumExperienceCapacity(req.user._id, req.params.id); const publication = await submitPublication(req.user._id, req.params.id, req.body); return sendResponse(res, 200, publication.kind === "EXPERIENCE" ? "Experience published" : "Publication submitted", { publication: serializePublication(publication, req.user) }); });
+export const submit = asyncHandler(async (req, res) => { await enforcePremiumExperienceCapacity(req.user._id, req.params.id); const publication = await submitPublication(req.user._id, req.params.id, req.body); return sendResponse(res, 200, ["WORLD", "PREMIUM_WORLD", "EXPERIENCE"].includes(publication.kind) ? `${publication.kind === "EXPERIENCE" ? "Experience" : "World"} published` : "Publication submitted", { publication: serializePublication(publication, req.user) }); });
 export const resubmit = asyncHandler(async (req, res) => { await enforcePremiumExperienceCapacity(req.user._id, req.params.id); const publication = await resubmitPublication(req.user._id, req.params.id, req.body); return sendResponse(res, 200, publication.kind === "EXPERIENCE" ? "Experience updated and published" : "Publication resubmitted", { publication: serializePublication(publication, req.user) }); });
 export const startRevision = asyncHandler(async (req, res) => sendResponse(res, 200, "Published revision started", { publication: serializePublication(await startPublishedRevision(req.user._id, req.params.id, req.body), req.user) }));
 export const cancelRevision = asyncHandler(async (req, res) => sendResponse(res, 200, "Published revision canceled", { publication: serializePublication(await cancelPublishedRevision(req.user._id, req.params.id, req.body), req.user) }));

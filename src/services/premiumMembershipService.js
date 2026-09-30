@@ -11,6 +11,11 @@ export const PREMIUM_PERIOD_DAYS = 30;
 export const nextPremiumPeriod = (value) =>
   new Date(new Date(value).getTime() + PREMIUM_PERIOD_DAYS * 24 * 60 * 60 * 1000);
 
+export const firstPremiumPeriodPrice = (regularPrice, introEnabled) => {
+  const price = Number(regularPrice);
+  return introEnabled ? Math.max(1, Math.ceil(price / 2)) : price;
+};
+
 const summary = (membership) => ({
   id: membership._id,
   publication: membership.premiumPublication,
@@ -70,7 +75,7 @@ export async function joinPremium({ user, publicationId, key }) {
           FINANCIAL_ERROR_CODES.PUBLICATION_NOT_PURCHASABLE,
         );
       const introEnabled = Boolean(publication.publishedSnapshot.metadata?.firstMonthOfferEnabled ?? publication.firstMonthOfferEnabled);
-      const firstPeriodPrice = introEnabled ? Math.max(1, Math.ceil(price / 2)) : price;
+      const firstPeriodPrice = firstPremiumPeriodPrice(price, introEnabled);
       const memberNumber = await PremiumMembership.countDocuments({ premiumPublication: publication._id }).session(session) + 1;
 
       const moved = await transferStars(
