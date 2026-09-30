@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { addSeenToSeries, addWorldModerator, archive, cancelRevision, createChapter, createDraft, createSeries, decideExperienceAccess, deleteChapter, deleteSeries, editChapter, getExperienceAccessLink, getMemberWorld, getMine, getPublishedPublication, getSeenInsights, getSeries, getWorldManagement, getWorldPricing, includeWorldExperience, listMine, listMySeries, listPublishedSeens, listSeenCategories, listWorldModeratorCandidates, listWorldModerators, openWorldWave, pinSeen, removeMedia, removePlanet, removeSeen, removeSeenFromSeries, removeWorldExperience, removeWorldModerator, reorder, requestExperienceAccess, restore, resubmit, setCommentsEnabled, startRevision, submit, updateDraft, updateSeries, updateWorldManagement, updateWorldPricing, uploadMedia, uploadWorldCover, uploadWorldStoryPreview } from "../controllers/publicationController.js";
+import { addSeenToSeries, addWorldModerator, archive, cancelRevision, createChapter, createDraft, createSeries, decideExperienceAccess, deleteChapter, deleteSeries, editChapter, getExperienceAccessLink, getMemberWorld, getMine, getPublishedPublication, getSeenInsights, getSeries, getWorldManagement, getWorldPricing, includeWorldExperience, listMine, listMySeries, listPublishedSeens, listSeenCategories, listWorldModeratorCandidates, listWorldModerators, openWorldWave, pinSeen, removeMedia, removePlanet, removeSeen, removeSeenFromSeries, removeWorldExperience, removeWorldModerator, removeWorldStoryPreview, reorder, requestExperienceAccess, restore, resubmit, setCommentsEnabled, startRevision, submit, updateDraft, updateSeries, updateWorldManagement, updateWorldPricing, uploadMedia, uploadWorldCover, uploadWorldStoryPreview } from "../controllers/publicationController.js";
 import { optionalProtect, protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { requireApprovedCreatorOrSeenOwner } from "../middleware/creatorApprovalMiddleware.js";
@@ -35,6 +35,7 @@ router.get("/mine/:id/world-pricing", ...creator, getWorldPricing);
 router.patch("/mine/:id/world-pricing", ...creator, updateWorldPricing);
 router.post("/mine/:id/world-management/cover", ...creator, uploadContentMedia.single("file"), uploadWorldCover);
 router.post("/mine/:id/world-management/stories", ...creator, uploadContentMedia.single("file"), uploadWorldStoryPreview);
+router.delete("/mine/:id/world-management/stories/:chapterId/:blockId", ...creator, removeWorldStoryPreview);
 router.post("/mine/:id/world-management/experiences/:experienceId", ...creator, includeWorldExperience);
 router.delete("/mine/:id/world-management/experiences/:experienceId", ...creator, removeWorldExperience);
 router.post("/mine/:id/world-management/waves", ...creator, openWorldWave);

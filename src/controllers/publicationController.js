@@ -4,6 +4,7 @@ import AnalyticsEvent from "../models/AnalyticsEvent.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import DAWindow from "../models/DAWindow.js";
 import mongoose from "mongoose";
+import Notification from "../models/Notification.js";
 import PremiumMembership from "../models/PremiumMembership.js";
 import Publication from "../models/Publication.js";
 import PublicationPreference from "../models/PublicationPreference.js";
@@ -401,6 +402,26 @@ export const uploadWorldStoryPreview = asyncHandler(async (req, res) => {
   await attachEntityMetadata(publication, req.user);
   return sendResponse(res, 201, "World story added", await serializeWorldManagement(publication, req.user));
 });
+export const removeWorldStoryPreview = asyncHandler(async (req, res) => {
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  const chapter = await Chapter.findOne({ publication: publication._id, stableChapterId: req.params.chapterId });
+  if (!chapter) throw new ApiError(404, "World story chapter not found");
+  const blockIndex = (chapter.blocks || []).findIndex((block) => String(block.id) === String(req.params.blockId) && block.metadata?.storyPreview);
+  if (blockIndex < 0) throw new ApiError(404, "World story not found");
+
+  const [removed] = chapter.blocks.splice(blockIndex, 1);
+  chapter.blocks.forEach((block, order) => { block.order = order; });
+  chapter.draftVersion += 1;
+  await chapter.save();
+
+  publication.statusVersion += 1;
+  publication.draftVersion += 1;
+  upsertSnapshotChapter(publication, chapter);
+  await publication.save();
+  await deletePublicationFile(removed.media).catch(() => {});
+  await attachEntityMetadata(publication, req.user);
+  return sendResponse(res, 200, "World story removed", await serializeWorldManagement(publication, req.user));
+});
 export const includeWorldExperience = asyncHandler(async (req, res) => {
   const publication = await ownerWorld(req.user._id, req.params.id);
   ensurePublicationId(req.params.experienceId);
@@ -508,6 +529,15 @@ export const addWorldModerator = asyncHandler(async (req, res) => {
   }
   updateSnapshotMetadata(updated, { worldModerators: updated.worldModerators });
   await updated.save();
+  const productLabel = updated.kind === "EXPERIENCE" ? "Experience" : "World";
+  await Notification.create({
+    user: moderator._id,
+    type: "publication_moderator_added",
+    title: `You were added as a moderator for ${updated.title}`,
+    message: `You can now remove spam and comments from this ${productLabel}.`,
+    dedupeKey: `publication-moderator-added:${updated._id}:${moderator._id}:${updated.statusVersion}`,
+  });
+  req.app.get("io")?.to(`user:${moderator._id}`).emit("activity:updated");
   return sendResponse(res, 200, "Moderator added", await serializeWorldManagement(updated, req.user));
 });
 export const removeWorldModerator = asyncHandler(async (req, res) => {

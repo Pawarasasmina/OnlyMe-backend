@@ -49,9 +49,9 @@ const sortReactionCounts = (rows = []) => rows.sort((first, second) => second.co
 
 const publishedCommentable = async (id, viewer, shareToken = "") => {
   if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid publication ID");
-  const publication = await Publication.findOne({ _id: id, kind: { $in: ["SEEN", "WORLD", "PREMIUM_WORLD", "EXPERIENCE"] }, status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("_id creator kind visibility commentsEnabled +shareToken").lean();
+  const publication = await Publication.findOne({ _id: id, kind: { $in: ["SEEN", "WORLD", "PREMIUM_WORLD", "EXPERIENCE"] }, status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("_id creator kind visibility commentsEnabled worldModerators +shareToken").lean();
   if (!publication || (publication.kind === "SEEN" && !await canAccessPublicationAudience(publication, viewer, { shareToken }))) throw new ApiError(404, "Published content not found");
-  if (publication.kind === "PREMIUM_WORLD" && !await hasActivePremiumAccess(publication, viewer)) throw new ApiError(403, "Join this World to access member activity");
+  if (publication.kind === "PREMIUM_WORLD" && !canModeratePublication(viewer?._id, publication) && !await hasActivePremiumAccess(publication, viewer)) throw new ApiError(403, "Join this World to access member activity");
   return publication;
 };
 
@@ -190,7 +190,11 @@ const notifyCreatorActivity = (req, publication) => {
   }
 };
 
-export const getSeenEngagement = asyncHandler(async (req, res) => { await publishedCommentable(req.params.id, req.user || null, req.query.access || req.query.token); return sendResponse(res, 200, "Publication engagement fetched", { engagement: await summary(req.params.id, req.user?._id) }); });
+export const getSeenEngagement = asyncHandler(async (req, res) => {
+  const publication = await publishedCommentable(req.params.id, req.user || null, req.query.access || req.query.token);
+  const engagement = await summary(req.params.id, req.user?._id);
+  return sendResponse(res, 200, "Publication engagement fetched", { engagement: { ...engagement, viewerCanModerate: canModeratePublication(req.user?._id, publication) } });
+});
 
 export const listSeenReactors = asyncHandler(async (req, res) => {
   await publishedSeen(req.params.id, req.user || null, req.query.access || req.query.token);
