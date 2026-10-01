@@ -16,6 +16,7 @@ import StarsLedgerEntry from "../models/StarsLedgerEntry.js";
 import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
 import WorldEntitlement from "../models/WorldEntitlement.js";
+import WorldWaitlist from "../models/WorldWaitlist.js";
 import ExperienceAccessRequest from "../models/ExperienceAccessRequest.js";
 import { attachEntityMetadata } from "../services/contentEntityService.js";
 import { canAccessPublicationAudience, seenVisibilityFilter, serializePublication } from "../services/publicationAccessService.js";
@@ -31,6 +32,7 @@ import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { getStarExchangeRate } from "../services/starExchangeService.js";
+import { admitWorldWaitlist } from "../services/premiumMembershipService.js";
 
 const page = (req) => ({ page: Math.max(1, Number(req.query.page) || 1), limit: Math.min(50, Math.max(1, Number(req.query.limit) || 20)) });
 const shareUrlFor = (item) => item.visibility === "LINK_ONLY" && item.shareToken ? `${String(env.clientUrl || "").replace(/\/+$/u, "")}/seen/${item._id}?access=${encodeURIComponent(item.shareToken)}` : null;
@@ -190,17 +192,21 @@ async function serializeWorldManagement(publication, user) {
   const publicationId = publication._id;
   const now = new Date();
   const sinceWeek = weekAgo();
-  const [chapters, residentCount, membershipRows, directAccessWaiting, engagementRows, dailyEngagementRows, ledgerRows, analyticsRows, includedExperiences, moderators] = await Promise.all([
+  const sincePreviousWeek = new Date(sinceWeek.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const [chapters, residentCount, membershipRows, directAccessWaiting, engagementRows, dailyEngagementRows, ledgerRows, analyticsRows, includedExperiences, moderators, waitingListCount, ownerCount, starsPerUsd] = await Promise.all([
     Chapter.find({ publication: publicationId }).sort({ order: 1 }).lean(),
     PremiumMembership.countDocuments(activeMembershipFilter(publicationId)),
     PremiumMembership.aggregate([{ $match: activeMembershipFilter(publicationId) }, { $group: { _id: null, recurringStars: { $sum: "$starsPerPeriod" } } }]),
     DAWindow.countDocuments({ creator: publication.creator, settlementStatus: "HELD", status: { $in: ["OPEN", "ANSWERED", "CLOSED"] } }),
     SeenEngagement.aggregate([{ $match: { publication: publicationId } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
-    SeenEngagement.aggregate([{ $match: { publication: publicationId, createdAt: { $gte: sinceWeek } } }, { $group: { _id: { type: "$type", day: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } } }, count: { $sum: 1 } } }]),
+    SeenEngagement.aggregate([{ $match: { publication: publicationId, createdAt: { $gte: sincePreviousWeek } } }, { $group: { _id: { type: "$type", day: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } } }, count: { $sum: 1 } } }]),
     StarsLedgerEntry.aggregate([{ $match: { accountUser: publication.creator, publication: publicationId, direction: "CREDIT", entryType: { $in: ["PREMIUM_CREATOR_EARNING", "WORLD_CREATOR_EARNING"] }, createdAt: { $gte: monthAgo() } } }, { $group: { _id: "$entryType", stars: { $sum: "$starsAmount" } } }]),
-    AnalyticsEvent.aggregate([{ $match: { entityId: String(publicationId), entityType: { $in: ["world", "publication", "seen"] }, createdAt: { $gte: sinceWeek } } }, { $group: { _id: { eventType: "$eventType", day: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } } }, count: { $sum: 1 }, users: { $addToSet: "$userId" } } }]),
+    AnalyticsEvent.aggregate([{ $match: { entityId: String(publicationId), entityType: { $in: ["world", "publication", "seen"] }, createdAt: { $gte: sincePreviousWeek } } }, { $group: { _id: { eventType: "$eventType", day: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } } }, count: { $sum: 1 }, users: { $addToSet: "$userId" } } }]),
     publication.includedExperienceIds?.length ? Publication.find({ _id: { $in: publication.includedExperienceIds }, creator: publication.creator, kind: "EXPERIENCE", status: { $ne: "REMOVED" } }).lean() : [],
     publication.worldModerators?.length ? User.find({ _id: { $in: publication.worldModerators.map((item) => item.user) } }).select("name username avatar isVerified").lean() : [],
+    WorldWaitlist.countDocuments({ publication: publicationId, status: "WAITING" }),
+    WorldEntitlement.countDocuments({ publication: publicationId, status: "ACTIVE" }),
+    getStarExchangeRate(),
   ]);
   const engagement = Object.fromEntries(engagementRows.map((row) => [row._id, row.count]));
   const ledger = Object.fromEntries(ledgerRows.map((row) => [row._id, row.stars]));
@@ -215,6 +221,15 @@ async function serializeWorldManagement(publication, user) {
   const serialized = ownerView(publication, chapters, user);
   const capacity = publication.worldSeatCapacity ?? PREMIUM_WORLD_DEFAULT_CAPACITY;
   const recurringStars = membershipRows[0]?.recurringStars || 0;
+  const viewTypes = new Set(["WALKED", "SHARE", "COMMENT", "SAVE", "REACTION"]);
+  const analyticsViewTypes = new Set(["CONTENT_IMPRESSION", "CONTENT_OPENED", "CONTENT_VIEW", "SEEN_VIEW"]);
+  const weekBoundary = sinceWeek.toISOString().slice(0, 10);
+  const weeklyEngagementViews = (current) => dailyEngagementRows.filter((row) => viewTypes.has(row._id.type) && (current ? row._id.day >= weekBoundary : row._id.day < weekBoundary)).reduce((sum, row) => sum + Number(row.count || 0), 0);
+  const weeklyAnalyticsViews = (current) => analyticsRows.filter((row) => analyticsViewTypes.has(row._id.eventType) && (current ? row._id.day >= weekBoundary : row._id.day < weekBoundary)).reduce((sum, row) => sum + Number(row.count || 0), 0);
+  const currentWeekViews = weeklyEngagementViews(true) + weeklyAnalyticsViews(true);
+  const previousWeekViews = weeklyEngagementViews(false) + weeklyAnalyticsViews(false);
+  const weekChangePercent = previousWeekViews > 0 ? Math.round(((currentWeekViews - previousWeekViews) / previousWeekViews) * 100) : null;
+  const creatorEarningsStars30d = (ledger.PREMIUM_CREATOR_EARNING || 0) + (ledger.WORLD_CREATOR_EARNING || 0);
   return {
     publication: serialized,
     management: {
@@ -223,8 +238,8 @@ async function serializeWorldManagement(publication, user) {
         occupiedSeats: residentCount,
         capacity,
         unlimited: publication.worldSeatCapacity === null,
-        waitingListCount: 0,
-        waitingListAvailable: false,
+        waitingListCount,
+        waitingListAvailable: residentCount >= capacity || waitingListCount > 0,
         waveSize: publication.worldWaveSize || PREMIUM_WORLD_WAVE_SIZE,
       },
       subscription: {
@@ -249,9 +264,12 @@ async function serializeWorldManagement(publication, user) {
         residents: residentCount,
         shares: engagement.SHARE || 0,
         comments: engagement.COMMENT || 0,
-        grossRevenueStars30d: (ledger.PREMIUM_CREATOR_EARNING || 0) + (ledger.WORLD_CREATOR_EARNING || 0),
-        creatorEarningsStars30d: (ledger.PREMIUM_CREATOR_EARNING || 0) + (ledger.WORLD_CREATOR_EARNING || 0),
+        grossRevenueStars30d: creatorEarningsStars30d,
+        creatorEarningsStars30d,
+        creatorEarningsUsd30d: creatorEarningsStars30d / Number(starsPerUsd || 10),
         estimatedRecurringStars: recurringStars,
+        owners: publication.kind === "EXPERIENCE" ? ownerCount : residentCount,
+        weekChangePercent,
         readToEnd: null,
         stayOnRate: null,
       },
@@ -381,6 +399,10 @@ export const uploadWorldStoryPreview = asyncHandler(async (req, res) => {
   const mediaType = String(req.file.mimetype || "").startsWith("video/") ? "VIDEO" : "IMAGE";
   if (mediaType !== "IMAGE") throw new ApiError(400, "World stories currently support images");
 
+  const storyChapters = await Chapter.find({ publication: publication._id }).select("blocks").lean();
+  const existingStoryCount = storyChapters.reduce((total, item) => total + (item.blocks || []).filter((block) => block.metadata?.storyPreview && block.media?.secureUrl).length, 0);
+  if (existingStoryCount >= 3) throw new ApiError(409, "Worlds can show up to 3 preview stories");
+
   let chapter = await Chapter.findOne({ publication: publication._id, isPreview: true }).sort({ order: 1 });
   if (!chapter) {
     const count = await Chapter.countDocuments({ publication: publication._id });
@@ -394,9 +416,6 @@ export const uploadWorldStoryPreview = asyncHandler(async (req, res) => {
       blocks: [],
     });
   }
-
-  const existingStoryCount = (chapter.blocks || []).filter((block) => block.metadata?.storyPreview && block.media?.secureUrl).length;
-  if (existingStoryCount >= 3) throw new ApiError(409, "Worlds can show up to 3 preview stories");
 
   const blockId = crypto.randomUUID();
   const uploaded = await uploadPublicationFile({ file: req.file, creatorId: req.user._id, publicationId: publication._id, chapterId: chapter.stableChapterId, blockId, mediaType });
@@ -487,7 +506,8 @@ export const openWorldWave = asyncHandler(async (req, res) => {
   publication.statusVersion += 1;
   updateSnapshotMetadata(publication, { worldSeatCapacity: nextCapacity, worldWaveSize: waveSize });
   await publication.save();
-  return sendResponse(res, 200, "World wave opened", await serializeWorldManagement(publication, req.user));
+  const admission = await admitWorldWaitlist(publication._id);
+  return sendResponse(res, 200, "World wave opened", { ...(await serializeWorldManagement(publication, req.user)), admission });
 });
 
 export const listWorldModerators = asyncHandler(async (req, res) => {
@@ -593,18 +613,12 @@ export const deleteChapter = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Chapter removed", { publication: await removeChapter(req.user._id, req.params.id, req.params.chapterId, req.body) });
 });
 export const reorder = asyncHandler(async (req, res) => sendResponse(res, 200, "Chapters reordered", { publication: await reorderChapters(req.user._id, req.params.id, req.body) }));
-async function enforcePremiumExperienceCapacity(creatorId, publicationId) {
-  const publication = await Publication.findOne({ _id: publicationId, creator: creatorId }).select("kind pricing").lean();
-  if (publication?.kind !== "EXPERIENCE" || publication.pricing?.mode !== "ONE_TIME") return;
-  const active = await Publication.countDocuments({ _id: { $ne: publication._id }, creator: creatorId, kind: "EXPERIENCE", "pricing.mode": "ONE_TIME", status: { $in: ["PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } });
-  if (active >= 3) throw new ApiError(409, "A creator may have at most three active Premium Experiences");
-}
-export const submit = asyncHandler(async (req, res) => { await enforcePremiumExperienceCapacity(req.user._id, req.params.id); const publication = await submitPublication(req.user._id, req.params.id, req.body); return sendResponse(res, 200, ["WORLD", "PREMIUM_WORLD", "EXPERIENCE"].includes(publication.kind) ? `${publication.kind === "EXPERIENCE" ? "Experience" : "World"} published` : "Publication submitted", { publication: serializePublication(publication, req.user) }); });
-export const resubmit = asyncHandler(async (req, res) => { await enforcePremiumExperienceCapacity(req.user._id, req.params.id); const publication = await resubmitPublication(req.user._id, req.params.id, req.body); return sendResponse(res, 200, publication.kind === "EXPERIENCE" ? "Experience updated and published" : "Publication resubmitted", { publication: serializePublication(publication, req.user) }); });
+export const submit = asyncHandler(async (req, res) => { const publication = await submitPublication(req.user._id, req.params.id, req.body); return sendResponse(res, 200, ["WORLD", "PREMIUM_WORLD", "EXPERIENCE"].includes(publication.kind) ? `${publication.kind === "EXPERIENCE" ? "Experience" : "World"} published` : "Publication submitted", { publication: serializePublication(publication, req.user) }); });
+export const resubmit = asyncHandler(async (req, res) => { const publication = await resubmitPublication(req.user._id, req.params.id, req.body); return sendResponse(res, 200, publication.kind === "EXPERIENCE" ? "Experience updated and published" : "Publication resubmitted", { publication: serializePublication(publication, req.user) }); });
 export const startRevision = asyncHandler(async (req, res) => sendResponse(res, 200, "Published revision started", { publication: serializePublication(await startPublishedRevision(req.user._id, req.params.id, req.body), req.user) }));
 export const cancelRevision = asyncHandler(async (req, res) => sendResponse(res, 200, "Published revision canceled", { publication: serializePublication(await cancelPublishedRevision(req.user._id, req.params.id, req.body), req.user) }));
 export const archive = asyncHandler(async (req, res) => sendResponse(res, 200, "Publication archived", { publication: serializePublication(await archivePublication(req.user._id, req.params.id, req.body), req.user) }));
-export const restore = asyncHandler(async (req, res) => { await enforcePremiumExperienceCapacity(req.user._id, req.params.id); return sendResponse(res, 200, "Experience is back on sale", { publication: serializePublication(await restorePublication(req.user._id, req.params.id, req.body), req.user) }); });
+export const restore = asyncHandler(async (req, res) => sendResponse(res, 200, "Experience is back on sale", { publication: serializePublication(await restorePublication(req.user._id, req.params.id, req.body), req.user) }));
 export const getExperienceAccessLink = asyncHandler(async (req, res) => { const publication = await ownerWorld(req.user._id, req.params.id); if (publication.kind !== "EXPERIENCE") throw new ApiError(400, "Access links are only available for Experiences"); if (!publication.shareToken) { publication.shareToken = crypto.randomBytes(24).toString("base64url"); await publication.save(); } const requests = await ExperienceAccessRequest.find({ publication: publication._id }).sort({ createdAt: -1 }).populate("requester", "name username avatar isVerified").lean(); return sendResponse(res, 200, "Experience access link fetched", { url: `${String(env.clientUrl || "").replace(/\/+$/u, "")}/experience/${publication._id}?access=${encodeURIComponent(publication.shareToken)}`, requests: requests.map((item) => ({ id: String(item._id), status: item.status, createdAt: item.createdAt, requester: safeUserProfile(item.requester) })) }); });
 export const requestExperienceAccess = asyncHandler(async (req, res) => { const publication = await Publication.findOne({ _id: req.params.id, kind: "EXPERIENCE", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("+shareToken"); if (!publication || !req.body.token || String(publication.shareToken) !== String(req.body.token)) throw new ApiError(404, "Access link is invalid"); if (String(publication.creator) === String(req.user._id)) throw new ApiError(400, "You own this Experience"); const existing = await ExperienceAccessRequest.findOne({ publication: publication._id, requester: req.user._id }); if (existing?.status === "APPROVED") return sendResponse(res, 200, "You already have permanent access", { request: { id: String(existing._id), status: existing.status } }); if (existing?.status === "PENDING") return sendResponse(res, 200, "Access request is already pending", { request: { id: String(existing._id), status: existing.status } }); const request = await ExperienceAccessRequest.findOneAndUpdate({ publication: publication._id, requester: req.user._id }, { $setOnInsert: { creator: publication.creator }, $set: { status: "PENDING", decidedAt: null } }, { upsert: true, new: true, runValidators: true }); return sendResponse(res, 200, "Access request sent", { request: { id: String(request._id), status: request.status } }); });
 export const decideExperienceAccess = asyncHandler(async (req, res) => { const publication = await ownerWorld(req.user._id, req.params.id); if (publication.kind !== "EXPERIENCE") throw new ApiError(400, "Access requests are only available for Experiences"); const status = req.body.approved === true ? "APPROVED" : "REJECTED"; const request = await ExperienceAccessRequest.findOneAndUpdate({ _id: req.params.requestId, publication: publication._id, creator: req.user._id }, { $set: { status, decidedAt: new Date() } }, { new: true }); if (!request) throw new ApiError(404, "Access request not found"); return sendResponse(res, 200, status === "APPROVED" ? "Permanent Experience access granted" : "Access request declined", { request: { id: String(request._id), status } }); });

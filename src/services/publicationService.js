@@ -55,8 +55,6 @@ export async function createPublicationDraft(creatorId, payload) {
     throw new ApiError(409, "You can save up to 3 Seen drafts. Publish or remove one before saving another.");
   }
   if (normalized.kind === "EXPERIENCE") {
-    const active = await Publication.countDocuments({ creator: creatorId, kind: "EXPERIENCE", "pricing.mode": "ONE_TIME", status: { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } });
-    if (active >= 3) throw new ApiError(409, "A creator may have at most three active Premium Experiences");
     return createWithSlot(creatorId, normalized, null);
   }
   const slots = normalized.kind === "PREMIUM_WORLD" ? ["PREMIUM"] : ["WORLD_1", "WORLD_2"];
