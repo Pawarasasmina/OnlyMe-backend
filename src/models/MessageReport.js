@@ -3,12 +3,13 @@ import mongoose from "mongoose";
 const messageReportSchema = new mongoose.Schema({
   reporter: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   reportedUser: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
-  scope: { type: String, enum: ["MESSAGE", "GROUP_MESSAGE", "CONVERSATION", "FEED_POST", "PROFILE", "PROFILE_MEDIA", "SEEN", "WORLD"], required: true },
+  scope: { type: String, enum: ["MESSAGE", "GROUP_MESSAGE", "CONVERSATION", "FEED_POST", "PROFILE", "PROFILE_MEDIA", "SEEN", "WORLD", "STORY"], required: true },
   message: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
   groupMessage: { type: mongoose.Schema.Types.ObjectId, ref: "GroupMessage", default: null },
   feedPost: { type: mongoose.Schema.Types.ObjectId, ref: "FeedPost", default: null },
   publication: { type: mongoose.Schema.Types.ObjectId, ref: "Publication", default: null },
   profileMedia: { type: mongoose.Schema.Types.ObjectId, ref: "ProfileMedia", default: null },
+  story: { type: mongoose.Schema.Types.ObjectId, ref: "Story", default: null },
   reason: {
     type: String,
     enum: ["SPAM", "FALSE_INFORMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "OTHER"],
@@ -41,5 +42,6 @@ messageReportSchema.index({ reporter: 1, reportedUser: 1, scope: 1 }, { unique: 
 messageReportSchema.index({ reporter: 1, profileMedia: 1 }, { unique: true, partialFilterExpression: { scope: "PROFILE_MEDIA" } });
 messageReportSchema.index({ reporter: 1, publication: 1 }, { unique: true, partialFilterExpression: { scope: "SEEN" } });
 messageReportSchema.index({ reporter: 1, publication: 1 }, { unique: true, partialFilterExpression: { scope: "WORLD" }, name: "reporter_publication_world_unique" });
+messageReportSchema.index({ reporter: 1, story: 1 }, { unique: true, partialFilterExpression: { scope: "STORY" } });
 
 export default mongoose.model("MessageReport", messageReportSchema);

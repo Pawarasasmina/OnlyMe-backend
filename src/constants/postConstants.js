@@ -11,6 +11,7 @@ export const POST_CONTEXTS = [
   "Travel",
   "Business",
   "Fitness",
+  "Beauty",
   "Coffee",
   "Restaurant",
   "Other",
