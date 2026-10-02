@@ -2,11 +2,13 @@ import mongoose from "mongoose";
 import Publication from "../models/Publication.js";
 import PublicationPreference from "../models/PublicationPreference.js";
 import MessageReport from "../models/MessageReport.js";
+import Message from "../models/Message.js";
 import PremiumMembership from "../models/PremiumMembership.js";
 import SavedItem from "../models/SavedItem.js";
 import SeenEngagement, { SEEN_REACTIONS } from "../models/SeenEngagement.js";
 import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
+import WorldEntitlement from "../models/WorldEntitlement.js";
 import { canAccessPublicationAudience } from "../services/publicationAccessService.js";
 import { canModeratePublication } from "../services/publicationModeratorService.js";
 import { messageVoiceUrl, uploadMessageVoice } from "../services/messageVoiceStorageService.js";
@@ -49,9 +51,9 @@ const sortReactionCounts = (rows = []) => rows.sort((first, second) => second.co
 
 const publishedCommentable = async (id, viewer, shareToken = "") => {
   if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid publication ID");
-  const publication = await Publication.findOne({ _id: id, kind: { $in: ["SEEN", "WORLD", "PREMIUM_WORLD", "EXPERIENCE"] }, status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("_id creator kind visibility commentsEnabled +shareToken").lean();
+  const publication = await Publication.findOne({ _id: id, kind: { $in: ["SEEN", "WORLD", "PREMIUM_WORLD", "EXPERIENCE"] }, status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("_id creator kind visibility commentsEnabled worldModerators +shareToken").lean();
   if (!publication || (publication.kind === "SEEN" && !await canAccessPublicationAudience(publication, viewer, { shareToken }))) throw new ApiError(404, "Published content not found");
-  if (publication.kind === "PREMIUM_WORLD" && !await hasActivePremiumAccess(publication, viewer)) throw new ApiError(403, "Join this World to access member activity");
+  if (publication.kind === "PREMIUM_WORLD" && !canModeratePublication(viewer?._id, publication) && !await hasActivePremiumAccess(publication, viewer)) throw new ApiError(403, "Join this World to access member activity");
   return publication;
 };
 
@@ -125,34 +127,46 @@ const normalizeSpamSafetyActions = (value) => {
 async function applySeenReportSafetyActions({ actions, publication, reporterId }) {
   const keys = new Set(actions.map((action) => action.key));
   const applied = [];
+  const creatorId = publication.creator;
+  const conversationFilter = {
+    $or: [
+      { sender: reporterId, recipient: creatorId },
+      { sender: creatorId, recipient: reporterId },
+    ],
+  };
+  const needsReporterContent = keys.has("deleteMessages") || keys.has("deleteReactions");
+  const reporterPublicationIds = needsReporterContent
+    ? await Publication.distinct("_id", { creator: reporterId })
+    : [];
 
   if (keys.has("deleteMessages")) {
-    const creatorComments = await SeenEngagement.find({ publication: publication._id, user: publication.creator, type: "COMMENT" }).select("_id").lean();
+    const hiddenMessages = await Message.updateMany(conversationFilter, { $addToSet: { deletedFor: reporterId } });
+    const creatorComments = reporterPublicationIds.length
+      ? await SeenEngagement.find({ publication: { $in: reporterPublicationIds }, user: creatorId, type: "COMMENT" }).select("_id").lean()
+      : [];
     const commentIds = creatorComments.map((item) => item._id);
-    await SeenEngagement.deleteMany({
-      publication: publication._id,
-      user: publication.creator,
-      type: { $in: ["COMMENT", "SHARE"] },
-    });
+    let removedActivity = { deletedCount: 0 };
+    if (reporterPublicationIds.length) {
+      removedActivity = await SeenEngagement.deleteMany({ publication: { $in: reporterPublicationIds }, user: creatorId, type: { $in: ["COMMENT", "SHARE"] } });
+    }
     if (commentIds.length) {
       await SeenEngagement.deleteMany({
-        publication: publication._id,
+        publication: { $in: reporterPublicationIds },
         $or: [
           { parentComment: { $in: commentIds } },
           { type: "COMMENT_REACTION", parentComment: { $in: commentIds } },
         ],
       });
     }
-    applied.push({ key: "deleteMessages", label: SPAM_SAFETY_ACTIONS.get("deleteMessages") });
+    applied.push({ key: "deleteMessages", label: SPAM_SAFETY_ACTIONS.get("deleteMessages"), hiddenMessages: hiddenMessages.modifiedCount || 0, removedActivity: removedActivity.deletedCount || 0 });
   }
 
   if (keys.has("deleteReactions")) {
-    await SeenEngagement.deleteMany({
-      publication: publication._id,
-      user: publication.creator,
-      type: { $in: ["REACTION", "COMMENT_REACTION"] },
-    });
-    applied.push({ key: "deleteReactions", label: SPAM_SAFETY_ACTIONS.get("deleteReactions") });
+    const messageResult = await Message.updateMany(conversationFilter, { $pull: { reactions: { user: creatorId } } });
+    const publicationResult = reporterPublicationIds.length
+      ? await SeenEngagement.deleteMany({ publication: { $in: reporterPublicationIds }, user: creatorId, type: { $in: ["REACTION", "COMMENT_REACTION"] } })
+      : { deletedCount: 0 };
+    applied.push({ key: "deleteReactions", label: SPAM_SAFETY_ACTIONS.get("deleteReactions"), updatedMessages: messageResult.modifiedCount || 0, removedReactions: publicationResult.deletedCount || 0 });
   }
 
   if (keys.has("banCreator")) {
@@ -165,7 +179,20 @@ async function applySeenReportSafetyActions({ actions, publication, reporterId }
   }
 
   if (keys.has("removeFromWorld")) {
-    applied.push({ key: "removeFromWorld", label: SPAM_SAFETY_ACTIONS.get("removeFromWorld"), status: "queued_for_review" });
+    const now = new Date();
+    const [membership, entitlement] = await Promise.all([
+      PremiumMembership.findOneAndUpdate(
+        { user: reporterId, premiumPublication: publication._id, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] } },
+        { $set: { status: "CANCELED", cancelAtPeriodEnd: false, canceledAt: now, endedAt: now }, $unset: { activeMembershipKey: 1 }, $inc: { membershipVersion: 1 } },
+        { new: true },
+      ).select("_id status"),
+      WorldEntitlement.findOneAndUpdate(
+        { user: reporterId, publication: publication._id, status: "ACTIVE" },
+        { $set: { status: "REVOKED", revokedAt: now } },
+        { new: true },
+      ).select("_id status"),
+    ]);
+    applied.push({ key: "removeFromWorld", label: SPAM_SAFETY_ACTIONS.get("removeFromWorld"), status: membership || entitlement ? "applied" : "not_active", membershipId: membership?._id || null, entitlementId: entitlement?._id || null });
   }
 
   return applied;
@@ -190,7 +217,19 @@ const notifyCreatorActivity = (req, publication) => {
   }
 };
 
-export const getSeenEngagement = asyncHandler(async (req, res) => { await publishedCommentable(req.params.id, req.user || null, req.query.access || req.query.token); return sendResponse(res, 200, "Publication engagement fetched", { engagement: await summary(req.params.id, req.user?._id) }); });
+export const getSeenEngagement = asyncHandler(async (req, res) => {
+  const publication = await publishedCommentable(req.params.id, req.user || null, req.query.access || req.query.token);
+  const engagement = await summary(req.params.id, req.user?._id);
+  const viewerId = String(req.user?._id || req.user?.id || "");
+  const creatorId = String(publication.creator?._id || publication.creator?.id || publication.creator || "");
+  return sendResponse(res, 200, "Publication engagement fetched", {
+    engagement: {
+      ...engagement,
+      viewerCanModerate: canModeratePublication(req.user?._id, publication),
+      viewerIsCreator: Boolean(viewerId && creatorId && viewerId === creatorId),
+    },
+  });
+});
 
 export const listSeenReactors = asyncHandler(async (req, res) => {
   await publishedSeen(req.params.id, req.user || null, req.query.access || req.query.token);

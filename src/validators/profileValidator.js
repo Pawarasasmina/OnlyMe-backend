@@ -119,13 +119,26 @@ function validateNotificationPreferences(value, allowedKeys) {
   }, {});
 }
 
+const stringPrivacyChoices = {
+  savedPlacesVisibility: ["everyone", "followers", "only_me"],
+  showMemberBadge: ["everyone", "only_me"],
+  orbitVisibility: ["everyone", "followers", "only_me"],
+};
+
 export function validatePrivacySettings(value, allowedKeys) {
   if (value === undefined || !value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
 
   return allowedKeys.reduce((settings, key) => {
-    if (value[key] !== undefined) settings[key] = Boolean(value[key]);
+    if (value[key] !== undefined) {
+      if (stringPrivacyChoices[key]) {
+        const val = String(value[key]).toLowerCase();
+        settings[key] = stringPrivacyChoices[key].includes(val) ? val : stringPrivacyChoices[key][0];
+      } else {
+        settings[key] = Boolean(value[key]);
+      }
+    }
     return settings;
   }, {});
 }
@@ -135,12 +148,14 @@ function privacyKeysFor(role) {
     return [
       "showOnlineStatus", "showActivityStatus", "showLocation", "allowDiscovery",
       "allowDirectMessages", "allowMentions", "allowTags", "showFollowers",
+      "savedPlacesVisibility", "showMemberBadge", "orbitVisibility",
     ];
   }
   if (role === "fan") {
     return [
       "showOnlineStatus", "showActivityStatus", "showLocation", "allowDiscovery",
       "allowDirectMessages", "allowMentions",
+      "savedPlacesVisibility", "showMemberBadge", "orbitVisibility",
     ];
   }
   return ["showOnlineStatus", "showActivityStatus", "allowDirectMessages"];
@@ -159,9 +174,13 @@ export function validateSettingsPayload(role, type, payload = {}) {
     : validateTimezone(payload.timezone);
 
   if (type === "privacy") {
+    const privacySettings = validatePrivacySettings(payload.privacySettings || payload, privacyKeysFor(role));
+    if (privacySettings && privacySettings.orbitVisibility && privacySettings.allowDiscovery === undefined) {
+      privacySettings.allowDiscovery = privacySettings.orbitVisibility !== "only_me";
+    }
     return {
       profileVisibility: role === "admin" ? undefined : validateVisibility(payload.profileVisibility),
-      privacySettings: validatePrivacySettings(payload.privacySettings || payload, privacyKeysFor(role)),
+      privacySettings,
     };
   }
 

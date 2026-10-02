@@ -498,10 +498,11 @@ export const markFeedPostViewed = asyncHandler(async (req, res) => {
 
 export const listMyPosts = asyncHandler(async (req, res) => {
   const { page, limit } = pageOptions(req);
-  const status = req.query.status === "draft" ? "draft" : "published";
+  const requestedStatus = String(req.query.status || "published").toLowerCase();
+  const status = ["draft", "published", "archived"].includes(requestedStatus) ? requestedStatus : "published";
   const [items, total] = await Promise.all([
     FeedPost.find({ author: req.user._id, status, deletedAt: null })
-      .sort(status === "draft" ? { updatedAt: -1 } : { publishedAt: -1, createdAt: -1 })
+      .sort(status === "draft" ? { updatedAt: -1 } : status === "archived" ? { archivedAt: -1, updatedAt: -1 } : { publishedAt: -1, createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit)
       .populate([
@@ -514,7 +515,7 @@ export const listMyPosts = asyncHandler(async (req, res) => {
 
   await attachSavedCommentState(items, req.user?._id);
   await attachEntityMetadata(items, req.user || null);
-  return sendResponse(res, 200, status === "draft" ? "Draft posts fetched" : "Creator posts fetched", {
+  return sendResponse(res, 200, status === "draft" ? "Draft posts fetched" : status === "archived" ? "Archived posts fetched" : "Creator posts fetched", {
     items: items.map((item) => serializePost(item, req.user)),
     pagination: { page, limit, total, pages: Math.ceil(total / limit) },
   });

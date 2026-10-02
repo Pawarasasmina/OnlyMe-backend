@@ -31,6 +31,8 @@ export function normalizePublicationDraft(payload = {}, { partial = false, kind 
     if (publicationKind === "EXPERIENCE" && (payload.pricing?.mode !== "ONE_TIME" || !Number.isSafeInteger(payload.pricing?.starsAmount) || payload.pricing.starsAmount < 10)) throw new ApiError(400, "Experience price must be at least 10 Stars");
     result.pricing = payload.pricing;
   }
+  if (Object.hasOwn(payload, "commentsEnabled")) result.commentsEnabled = payload.commentsEnabled !== false;
+  if (Object.hasOwn(payload, "firstMonthOfferEnabled")) result.firstMonthOfferEnabled = payload.firstMonthOfferEnabled === true;
   if (Object.hasOwn(payload, "includedInWorld")) result.includedInWorld = Boolean(payload.includedInWorld);
   if (Object.hasOwn(payload, "experiencePath")) result.experiencePath = text(payload.experiencePath, PUBLICATION_LIMITS.summary, "Experience path");
   if (Object.hasOwn(payload, "experienceLocation")) result.experienceLocation = text(payload.experienceLocation, 120, "Experience location");
@@ -108,7 +110,7 @@ export function normalizeChapter(payload = {}) { return { title: text(payload.ti
 
 export function assertCompletePublication(publication, chapters) {
   const policy = derivedPublicationPolicy(publication.kind); const rules = KIND_RULES[publication.kind];
-  text(publication.title, PUBLICATION_LIMITS.title, "Title", true); text(publication.summary, PUBLICATION_LIMITS.summary, "Summary", true); text(publication.category, PUBLICATION_LIMITS.category, "Category", true);
+  text(publication.title, PUBLICATION_LIMITS.title, "Title", true); text(publication.summary || publication.description, PUBLICATION_LIMITS.summary, "Description", true); if (!["WORLD", "PREMIUM_WORLD"].includes(publication.kind)) text(publication.category, PUBLICATION_LIMITS.category, "Category", true);
   if (publication.kind === "SEEN") { seenCategory(publication.category); visibility(publication.visibility); }
   if (!publication.coverMedia?.assetId) throw new ApiError(400, "A verified cover image is required");
   if (chapters.length < rules.minChapters || (rules.maxChapters && chapters.length > rules.maxChapters)) throw new ApiError(400, rules.maxChapters ? `${publication.kind} requires ${rules.minChapters}-${rules.maxChapters} chapters` : `${publication.kind} requires at least ${rules.minChapters} chapters`);
@@ -116,7 +118,7 @@ export function assertCompletePublication(publication, chapters) {
   const previews = chapters.filter((chapter) => chapter.isPreview).length;
   if (publication.kind === "SEEN") { if (publication.pricing?.mode !== "FREE" || publication.pricing?.starsAmount != null) throw new ApiError(400, "Seen must be free"); if (previews !== chapters.length) throw new ApiError(400, "Every Seen chapter must be public"); }
   if (publication.kind === "WORLD") { if (publication.pricing?.mode !== "FREE" || publication.pricing?.starsAmount != null) throw new ApiError(400, "Free Worlds cannot charge Stars"); if (previews !== chapters.length) throw new ApiError(400, "Every free World chapter must be open"); }
-  if (publication.kind === "PREMIUM_WORLD") { if (publication.pricing?.mode !== "MONTHLY" || !PREMIUM_PRICE_PRESETS.includes(publication.pricing?.starsAmount)) throw new ApiError(400, "Choose a supported creator residency price"); if (previews !== 1 || !chapters[0]?.isPreview) throw new ApiError(400, "Premium Planet Chapter 1 must be the only free chapter"); }
+  if (publication.kind === "PREMIUM_WORLD") { if (publication.pricing?.mode !== "MONTHLY" || !PREMIUM_PRICE_PRESETS.includes(publication.pricing?.starsAmount)) throw new ApiError(400, "Choose a supported creator residency price"); if (chapters.length && (previews !== chapters.length || !chapters[0]?.isPreview)) throw new ApiError(400, "World story previews must remain visible before subscription"); }
   if (publication.kind === "EXPERIENCE") { if (publication.pricing?.mode !== "ONE_TIME" || !Number.isSafeInteger(publication.pricing?.starsAmount) || publication.pricing.starsAmount < 10) throw new ApiError(400, "Experience price must be at least 10 Stars"); if (previews !== 0) throw new ApiError(400, "Premium Experience chapters unlock only after purchase"); }
   return policy;
 }

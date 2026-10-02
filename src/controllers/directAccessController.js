@@ -30,7 +30,9 @@ export const getDirectAccessOffer = asyncHandler(async (req, res) => {
     || String(membership.directAccessAllowancePeriodStart) !== String(membership.currentPeriodStart)
   ));
   return sendResponse(res, 200, "Direct Access offer fetched", {
-    enabled: Boolean(profile.directAccessEnabled),
+    // An active Premium membership includes one Direct Access window for the
+    // current period even when the creator is not selling paid windows.
+    enabled: Boolean(profile.directAccessEnabled || allowanceAvailable),
     priceStars: profile.directAccessPriceStars || 100,
     callEnabled: Boolean(profile.directCallEnabled),
     callPriceStars: profile.directCallPriceStars || 500,
