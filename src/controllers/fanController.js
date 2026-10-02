@@ -1062,6 +1062,52 @@ export const acknowledgeFanActivity = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Activity acknowledged", { acknowledged: true, acknowledgedAt });
 });
 
+export const acknowledgeAllFanActivity = asyncHandler(async (req, res) => {
+  const acknowledgedAt = new Date();
+  const wallet = await Wallet.findOne({ user: req.user._id }).lean();
+  const activity = await applyAcknowledgements(await getActivity(req.user._id, wallet, 100));
+  const unread = activity.filter((item) => item.direction === "received" && item.canAcknowledge && !item.acknowledged && !item.read);
+  const keys = [...new Set(unread.map((item) => acknowledgementKey(item.id)))];
+
+  if (keys.length) {
+    await ActivityAcknowledgement.bulkWrite(keys.map((eventKey) => ({
+      updateOne: {
+        filter: { eventKey },
+        update: { $set: { acknowledgedBy: req.user._id, acknowledgedAt } },
+        upsert: true,
+      },
+    })));
+  }
+
+  const notificationIds = unread
+    .map((item) => String(item.id || ""))
+    .filter((id) => id.startsWith("notification-"))
+    .map((id) => id.replace("notification-", ""));
+  if (notificationIds.length) {
+    await Notification.updateMany(
+      { _id: { $in: notificationIds }, user: req.user._id },
+      { $set: { acknowledgedAt, readAt: acknowledgedAt } },
+    );
+  }
+
+  const signalIds = unread
+    .map((item) => String(item.id || ""))
+    .filter((id) => id.startsWith("profile-see-received-"))
+    .map((id) => id.replace("profile-see-received-", ""));
+  if (signalIds.length) {
+    await OrbitSignal.updateMany(
+      { _id: { $in: signalIds }, targetUser: req.user._id, type: "SEE_YOU", status: "active" },
+      { $set: { acknowledgedAt } },
+    );
+  }
+
+  return sendResponse(res, 200, "Activity acknowledged", {
+    acknowledged: keys.length,
+    acknowledgedAt,
+    unreadCount: 0,
+  });
+});
+
 export const getFanContentAccess = asyncHandler(async (req, res) => {
   const content = await Content.findOne({ _id: req.params.contentId, status: "published" }).select("_id").lean();
 

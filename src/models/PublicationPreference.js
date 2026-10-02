@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-export const PUBLICATION_PREFERENCE_TYPES = ["HIDDEN_SEEN", "MUTED_CREATOR"];
+export const PUBLICATION_PREFERENCE_TYPES = ["HIDDEN_SEEN", "MUTED_CREATOR", "HIDDEN_STORY_CREATOR"];
 
 const publicationPreferenceSchema = new mongoose.Schema(
   {
@@ -20,6 +20,10 @@ publicationPreferenceSchema.index(
 publicationPreferenceSchema.index(
   { user: 1, creator: 1, type: 1 },
   { unique: true, partialFilterExpression: { type: "MUTED_CREATOR" } }
+);
+publicationPreferenceSchema.index(
+  { user: 1, creator: 1, type: 1 },
+  { unique: true, partialFilterExpression: { type: "HIDDEN_STORY_CREATOR" }, name: "user_hidden_story_creator_unique" }
 );
 
 export default mongoose.model("PublicationPreference", publicationPreferenceSchema);

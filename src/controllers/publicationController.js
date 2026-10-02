@@ -571,7 +571,7 @@ export const getSeenInsights = asyncHandler(async (req, res) => {
   const fourteenDaysAgo = new Date(sevenDaysAgo);
   fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 7);
   const viewEventTypes = ["CONTENT_OPENED", "CONTENT_VIEW", "SEEN_VIEW"];
-  const [engagementRows, uniqueViewers, analyticsRows, dailyViews, comparisonRows, sourceRows, revenueRows, ownerCount, starsPerUsd] = await Promise.all([
+  const [engagementRows, uniqueViewers, analyticsRows, dailyViews, engagementDailyViews, comparisonRows, engagementComparisonRows, sourceRows, revenueRows, ownerCount, starsPerUsd] = await Promise.all([
     SeenEngagement.aggregate([{ $match: { publication: publication._id } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
     SeenEngagement.distinct("user", { publication: publication._id }),
     AnalyticsEvent.aggregate([
@@ -579,7 +579,9 @@ export const getSeenInsights = asyncHandler(async (req, res) => {
       { $group: { _id: "$eventType", count: { $sum: 1 }, users: { $addToSet: "$userId" } } },
     ]),
     AnalyticsEvent.aggregate([{ $match: { entityId: String(publication._id), eventType: { $in: viewEventTypes }, createdAt: { $gte: sevenDaysAgo } } }, { $group: { _id: { $dateToString: { date: "$createdAt", format: "%Y-%m-%d" } }, value: { $sum: 1 } } }, { $sort: { _id: 1 } }]),
+    SeenEngagement.aggregate([{ $match: { publication: publication._id, createdAt: { $gte: sevenDaysAgo } } }, { $group: { _id: { $dateToString: { date: "$createdAt", format: "%Y-%m-%d" } }, value: { $sum: 1 } } }, { $sort: { _id: 1 } }]),
     AnalyticsEvent.aggregate([{ $match: { entityId: String(publication._id), eventType: { $in: viewEventTypes }, createdAt: { $gte: fourteenDaysAgo } } }, { $group: { _id: { $cond: [{ $gte: ["$createdAt", sevenDaysAgo] }, "current", "previous"] }, value: { $sum: 1 } } }]),
+    SeenEngagement.aggregate([{ $match: { publication: publication._id, createdAt: { $gte: fourteenDaysAgo } } }, { $group: { _id: { $cond: [{ $gte: ["$createdAt", sevenDaysAgo] }, "current", "previous"] }, value: { $sum: 1 } } }]),
     AnalyticsEvent.aggregate([{ $match: { entityId: String(publication._id), eventType: { $in: viewEventTypes } } }, { $group: { _id: { $toLower: { $ifNull: ["$source", ""] } }, value: { $sum: 1 } } }]),
     StarsLedgerEntry.aggregate([{ $match: { accountUser: req.user._id, publication: publication._id, entryType: { $in: ["WORLD_CREATOR_EARNING", "CREATOR_EARNING_REVERSAL"] } } }, { $group: { _id: null, stars: { $sum: "$signedAmount" } } }]),
     WorldEntitlement.countDocuments({ publication: publication._id, status: "ACTIVE" }),
@@ -589,18 +591,27 @@ export const getSeenInsights = asyncHandler(async (req, res) => {
   const analytics = Object.fromEntries(analyticsRows.map((row) => [row._id, { count: row.count, uniqueUsers: row.users.length }]));
   const opens = (analytics.CONTENT_OPENED?.count || 0) + (analytics.CONTENT_VIEW?.count || 0) + (analytics.SEEN_VIEW?.count || 0);
   const engagementViews = (engagement.WALKED || 0) + (engagement.REACTION || 0) + (engagement.COMMENT || 0) + (engagement.SHARE || 0) + (engagement.SAVE || 0);
-  const comparison = Object.fromEntries(comparisonRows.map((row) => [row._id, row.value]));
+  const comparisonSource = opens ? comparisonRows : engagementComparisonRows;
+  const comparison = Object.fromEntries(comparisonSource.map((row) => [row._id, row.value]));
   const currentWeekViews = Number(comparison.current || 0);
   const previousWeekViews = Number(comparison.previous || 0);
   const weekChangePercent = previousWeekViews > 0 ? Math.round(((currentWeekViews - previousWeekViews) / previousWeekViews) * 100) : null;
-  const sourceCounts = sourceRows.reduce((result, row) => {
+  const analyticsSourceCounts = sourceRows.reduce((result, row) => {
     const source = String(row._id || "");
     const bucket = source === "profile" ? "profile" : source.includes("repost") ? "reposts" : "feed";
     result[bucket] += Number(row.value || 0);
     return result;
   }, { feed: 0, profile: 0, reposts: 0 });
+  const analyticsSourceTotal = Object.values(analyticsSourceCounts).reduce((sum, value) => sum + value, 0);
+  const sourceCounts = analyticsSourceTotal ? analyticsSourceCounts : {
+    feed: Math.max(0, engagementViews - Number(engagement.WALKED || 0) - Number(engagement.SHARE || 0)),
+    profile: Number(engagement.WALKED || 0),
+    reposts: Number(engagement.SHARE || 0),
+  };
   const sourceTotal = Object.values(sourceCounts).reduce((sum, value) => sum + value, 0);
   const trafficSources = Object.entries(sourceCounts).map(([source, count]) => ({ source, count, percent: sourceTotal ? Math.round((count / sourceTotal) * 100) : 0 }));
+  const resolvedDailyViews = opens ? dailyViews : engagementDailyViews;
+  const todayKey = new Date().toISOString().slice(0, 10);
   return sendResponse(res, 200, "Seen insights fetched", {
     insights: {
       seenId: String(publication._id),
@@ -614,12 +625,12 @@ export const getSeenInsights = asyncHandler(async (req, res) => {
       impressions: analytics.CONTENT_IMPRESSION?.count || 0,
       opens,
       totalViews: opens || engagementViews,
-      todayViews: Number(dailyViews.find((row) => row._id === new Date().toISOString().slice(0, 10))?.value || 0),
+      todayViews: Number(resolvedDailyViews.find((row) => row._id === todayKey)?.value || 0),
       weekChangePercent,
-      readToEndPercent: 0,
+      readToEndPercent: null,
       trafficSources,
       uniqueImpressionViewers: analytics.CONTENT_IMPRESSION?.uniqueUsers || 0,
-      dailyViews,
+      dailyViews: resolvedDailyViews,
       ownerCount,
       revenueStars: Number(revenueRows[0]?.stars || 0),
       revenueUsd: Number(revenueRows[0]?.stars || 0) / starsPerUsd,

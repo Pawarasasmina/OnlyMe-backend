@@ -1,5 +1,6 @@
 import { Router } from "express";
 import {
+  acknowledgeAllFanActivity,
   acknowledgeFanActivity,
   getFanActivity,
   getFanDashboard,
@@ -21,6 +22,7 @@ router.get("/wallet", getFanWallet);
 router.get("/purchases", getFanPurchases);
 router.get("/messages", getFanMessages);
 router.get("/activity", getFanActivity);
+router.post("/activity/acknowledge-all", acknowledgeAllFanActivity);
 router.post("/activity/:activityId/acknowledge", acknowledgeFanActivity);
 
 export default router;

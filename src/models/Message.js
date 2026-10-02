@@ -74,6 +74,7 @@ const messageSchema = new mongoose.Schema(
       story: { type: mongoose.Schema.Types.ObjectId, ref: "Story", default: null },
       imageUrl: { type: String, default: "" },
       caption: { type: String, default: "", maxlength: 300 },
+      questionPrompt: { type: String, default: "", maxlength: 60 },
       expiresAt: { type: Date, default: null },
     },
     sharedContent: {

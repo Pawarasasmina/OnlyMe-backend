@@ -12,6 +12,13 @@ test("feed filter query maps Home chips to existing post contexts", () => {
   assert.deepEqual(feedFilterQuery({ filter: "events" }), { context: "Events" });
   assert.deepEqual(feedFilterQuery({ filter: "things_to_do" }), { context: "Things to do" });
   assert.deepEqual(feedFilterQuery({ filter: "food" }), { context: { $in: ["Coffee", "Restaurant"] } });
+  assert.deepEqual(feedFilterQuery({ filter: "travel" }), { context: "Travel" });
+  assert.deepEqual(feedFilterQuery({ filter: "business" }), { context: "Business" });
+  assert.deepEqual(feedFilterQuery({ filter: "fitness" }), { context: "Fitness" });
+  assert.deepEqual(feedFilterQuery({ filter: "beauty" }), { context: "Beauty" });
+  assert.deepEqual(feedFilterQuery({ filter: "family" }), { context: "Family" });
+  assert.deepEqual(feedFilterQuery({ filter: "shopping" }), { context: "Shopping" });
+  assert.deepEqual(feedFilterQuery({ filter: "advice" }), { context: "Advice" });
 });
 
 test("feed filter query combines places with a safe location matcher", () => {

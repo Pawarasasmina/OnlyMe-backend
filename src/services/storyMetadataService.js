@@ -1,9 +1,10 @@
 import ApiError from "../utils/ApiError.js";
 
-const colors = new Set(["#FFFFFF", "#8AB8FF", "#6ECF97", "#F17878", "#FACC15"]);
+const colors = new Set(["#FFFFFF", "#D6EAFF", "#9CCBFF", "#8AB8FF", "#6ECF97", "#F17878", "#FACC15", "#0A0C0F"]);
 const alignments = new Set(["left", "center", "right"]);
 const backgrounds = new Set(["none", "pill", "solid", "translucent"]);
 const audiences = new Set(["everyone", "followers", "close_circle", "only_me"]);
+const cardVariants = new Set(["compact", "long"]);
 const finite = (value, fallback, min, max) => Math.max(min, Math.min(max, Number.isFinite(Number(value)) ? Number(value) : fallback));
 const text = (value, max) => String(value || "").trim().slice(0, max);
 
@@ -15,6 +16,10 @@ export function parseStoryEditorMetadata(value) {
   }
   if (!input || typeof input !== "object" || Array.isArray(input)) input = {};
   const transform = input.transform || {};
+  const inputQuestionSticker = input.questionSticker && typeof input.questionSticker === "object" && !Array.isArray(input.questionSticker)
+    ? input.questionSticker
+    : null;
+  const questionPrompt = text(inputQuestionSticker?.prompt, 60) || "Ask me anything";
   const inputSharedCard = input.sharedCard && typeof input.sharedCard === "object" && !Array.isArray(input.sharedCard)
     ? input.sharedCard
     : null;
@@ -22,10 +27,15 @@ export function parseStoryEditorMetadata(value) {
   const sharedCard = inputSharedCard && /^\/(?:seen|posts)\/[a-zA-Z0-9_-]+$/.test(destinationRoute) ? {
     destinationRoute,
     ...(text(inputSharedCard.eyebrow, 100) ? { eyebrow: text(inputSharedCard.eyebrow, 100) } : {}),
+    ...(colors.has(String(inputSharedCard.cardBackgroundColor).toUpperCase()) ? { cardBackgroundColor: String(inputSharedCard.cardBackgroundColor).toUpperCase() } : {}),
+    ...(colors.has(String(inputSharedCard.cardTextColor).toUpperCase()) ? { cardTextColor: String(inputSharedCard.cardTextColor).toUpperCase() } : {}),
+    ...(text(inputSharedCard.excerpt, 280) ? { excerpt: text(inputSharedCard.excerpt, 280) } : {}),
     imageUrl: text(inputSharedCard.imageUrl, 2000),
     kind: text(inputSharedCard.kind, 20) || "post",
+    points: (Array.isArray(inputSharedCard.points) ? inputSharedCard.points : []).slice(0, 2).map((item) => text(item, 60)).filter(Boolean),
     subtitle: text(inputSharedCard.subtitle, 100),
     title: text(inputSharedCard.title, 120) || "View post",
+    variant: cardVariants.has(inputSharedCard.variant) ? inputSharedCard.variant : "compact",
     x: finite(inputSharedCard.x, 50, 16, 84),
     y: finite(inputSharedCard.y, 50, 20, 78),
   } : null;
@@ -61,6 +71,14 @@ export function parseStoryEditorMetadata(value) {
       size: finite(stroke.size, 1.5, 0.5, 8),
       points: (Array.isArray(stroke.points) ? stroke.points : []).slice(0, 1000).map((point) => ({ x: finite(point.x, 0, 0, 100), y: finite(point.y, 0, 0, 177.777) })),
     })).filter((stroke) => stroke.points.length > 1),
+    ...(inputQuestionSticker ? {
+      questionSticker: {
+        id: text(inputQuestionSticker.id, 100) || "question",
+        prompt: questionPrompt,
+        x: finite(inputQuestionSticker.x, 50, 10, 90),
+        y: finite(inputQuestionSticker.y, 63, 12, 88),
+      },
+    } : {}),
     ...(sharedCard ? { sharedCard } : {}),
   };
 }
