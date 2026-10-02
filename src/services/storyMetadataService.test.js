@@ -44,8 +44,10 @@ test("story metadata preserves safe internal share cards and their position", ()
     destinationRoute: "/seen/66f1234567890abcdef1234",
     imageUrl: "https://cdn.example.com/cover.jpg",
     kind: "Seen",
+    points: [],
     subtitle: "Creator · Tap to open",
     title: "Morning Espresso Ritual",
+    variant: "compact",
     x: 62,
     y: 44,
   });
@@ -56,11 +58,33 @@ test("story metadata preserves safe internal share cards and their position", ()
     eyebrow: "Ethan · Right now · Dubai",
     imageUrl: "",
     kind: "post",
+    points: [],
     subtitle: "",
     title: "View post",
+    variant: "compact",
     x: 50,
     y: 50,
   });
+});
+
+test("story metadata preserves question stickers for story replies", () => {
+  const metadata = parseStoryEditorMetadata({
+    questionSticker: {
+      id: "question-main",
+      prompt: "What should I cover next?",
+      x: 50,
+      y: 63,
+    },
+  });
+  assert.deepEqual(metadata.questionSticker, {
+    id: "question-main",
+    prompt: "What should I cover next?",
+    x: 50,
+    y: 63,
+  });
+  assert.equal(parseStoryEditorMetadata({ questionSticker: { prompt: "x".repeat(100), x: 200, y: -20 } }).questionSticker.prompt.length, 60);
+  assert.equal(parseStoryEditorMetadata({ questionSticker: { prompt: "x".repeat(100), x: 200, y: -20 } }).questionSticker.x, 90);
+  assert.equal(parseStoryEditorMetadata({ questionSticker: { prompt: "x".repeat(100), x: 200, y: -20 } }).questionSticker.y, 12);
 });
 
 test("story audience and interaction settings are parsed explicitly", () => {

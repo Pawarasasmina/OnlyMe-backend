@@ -360,6 +360,7 @@ function buildSlide(profile, index, meta) {
   const user = profile.user;
   const creatorId = String(user._id);
   const featuredWorld = meta.publicationByCreator.get(creatorId) || null;
+  const featuredSeen = meta.seenByCreator.get(creatorId) || null;
   const reason = reasonDetailsFor(profile, index, meta.viewerProfile, featuredWorld);
   const tags = creatorTags(profile);
   const media = mediaForSlide(profile, creatorId, featuredWorld, meta.previewByCreator);
@@ -402,6 +403,7 @@ function buildSlide(profile, index, meta) {
     reason,
     quote: cleanText(profile.orbitQuote, 180),
     dream: serializeDream(meta.dreamByCreator.get(creatorId)),
+    featuredSeen,
     featuredOffer: serializeOffer(featuredWorld, {
       viewerId: meta.viewerId,
       entitledPublicationIds: meta.entitledPublicationIds,
@@ -840,6 +842,11 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const sharedWalkRows = walkedPublicationIds.length ? await SeenEngagement.find({ publication: { $in: walkedPublicationIds }, user: { $in: creatorIds }, type: "WALKED" }).populate("publication", "title planet").populate("user", "name username avatar").limit(12).lean() : [];
   const sharedWalks = sharedWalkRows.map((item) => ({ id: item._id, world: { id: item.publication?._id, title: item.publication?.title, emoji: item.publication?.planet?.emoji || "🌍" }, person: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" } }));
   const discoverSeens = visibleSeens.map((publication) => serializeDiscoverSeen(publication, seenEngagementCounts));
+  const seenByCreator = new Map();
+  for (const seen of discoverSeens) {
+    const key = String(seen.creator?.id || "");
+    if (key && !seenByCreator.has(key)) seenByCreator.set(key, seen);
+  }
   const trendingSeen = [...discoverSeens]
     .sort((left, right) => right.viewCount - left.viewCount || new Date(right.publishedAt || 0) - new Date(left.publishedAt || 0))[0] || null;
   const freshWithoutTrending = discoverSeens
@@ -860,6 +867,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
     publicationMemberCounts: worldsByPublication,
     previewByCreator,
     savedPublicationIds,
+    seenByCreator,
     signalTargetIds,
     subscriberCounts,
     settings,

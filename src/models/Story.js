@@ -4,11 +4,13 @@ const storySchema = new mongoose.Schema({
   creator: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   caption: { type: String, trim: true, maxlength: 300, default: "" },
   image: {
-    assetId: { type: String, required: true },
-    url: { type: String, required: true },
+    assetId: { type: String, default: "" },
+    url: { type: String, default: "" },
     resourceType: { type: String, enum: ["image", "video", "raw"], default: "image" },
   },
   mediaType: { type: String, enum: ["image", "video"], default: "image" },
+  sourceType: { type: String, enum: ["original", "seen"], default: "original", index: true },
+  sourceSeen: { type: mongoose.Schema.Types.ObjectId, ref: "Publication", default: null, index: true },
   duration: { type: Number, min: 1, max: 60, default: 5 },
   editorMetadata: {
     type: mongoose.Schema.Types.Mixed,
