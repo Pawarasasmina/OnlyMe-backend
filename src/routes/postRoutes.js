@@ -9,6 +9,7 @@ import {
   getFeedPost,
   hideFeedPost,
   listFeedPosts,
+  listPostReactors,
   listMyPosts,
   markFeedPostViewed,
   reportFeedPost,
@@ -19,7 +20,7 @@ import {
 } from "../controllers/postController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
-import { uploadFeedPostImages, uploadFeedPostMedia } from "../middleware/uploadMiddleware.js";
+import { uploadFeedPostImages, uploadFeedPostMedia, uploadVoiceMessage } from "../middleware/uploadMiddleware.js";
 
 const router = Router();
 const consumerOnly = [protect, authorize("fan", "creator")];
@@ -33,6 +34,7 @@ router.get("/drafts", ...consumerOnly, (req, res, next) => {
 router.post("/", ...consumerOnly, uploadFeedPostMedia.fields([{ name: "media", maxCount: 4 }, { name: "voice", maxCount: 1 }]), createFeedPost);
 router.post("/drafts", ...consumerOnly, uploadFeedPostImages.array("media", 4), createDraftPost);
 router.get("/:id", protect, getFeedPost);
+router.get("/:id/reactions", protect, listPostReactors);
 router.post("/:id/views", protect, markFeedPostViewed);
 router.put("/:id/reaction", protect, updatePostReaction);
 router.put("/:id/save", protect, togglePostSave);
@@ -41,7 +43,7 @@ router.post("/:id/hide", protect, hideFeedPost);
 router.post("/:id/report", protect, reportFeedPost);
 router.post("/:id/archive", ...consumerOnly, archiveFeedPost);
 router.put("/:id/block-author", protect, blockPostAuthor);
-router.post("/:id/comments", protect, createPostComment);
+router.post("/:id/comments", protect, uploadVoiceMessage.single("voice"), createPostComment);
 router.put("/:id", ...consumerOnly, updateFeedPost);
 router.delete("/:id", ...consumerOnly, deleteFeedPost);
 

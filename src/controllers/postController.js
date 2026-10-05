@@ -19,6 +19,7 @@ import { attachEntityMetadata, validateEntityRefs } from "../services/contentEnt
 import { recordChecklistEvent } from "../services/onboardingService.js";
 import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyticsEventService.js";
 import { listSupportedTranslationLanguages } from "../services/translationService.js";
+import { messageVoiceUrl, uploadMessageVoice } from "../services/messageVoiceStorageService.js";
 import { getVoiceLanguageName, normalizeVoiceLanguageCode, resolveSupportedVoiceLanguage } from "../constants/voiceTranslationLanguages.js";
 
 function pageOptions(req) {
@@ -140,6 +141,7 @@ function serializeComment(comment, savedCommentIds = new Set()) {
   return {
     id: String(comment._id),
     text: comment.text || "",
+    audio: comment.audio?.assetId ? { url: messageVoiceUrl(comment.audio), duration: comment.audio.duration, waveform: comment.audio.waveform || [] } : null,
     createdAt: comment.createdAt,
     author: authorPayload(user),
     viewerSaved: savedCommentIds.has(String(comment._id)),
@@ -160,6 +162,30 @@ function reactionSummary(reactions = []) {
 export function serializePost(post, viewer = null, activity = {}) {
   return serializePostFeedItem(post, viewer, activity);
 }
+
+export const listPostReactors = asyncHandler(async (req, res) => {
+  const post = await findPublishedPost(req.params.id);
+  await post.populate("reactions.user", "name username avatar isVerified status");
+
+  const reactions = (post.reactions || [])
+    .filter((item) => item.user && String(item.user.status || "active") === "active")
+    .sort((left, right) => new Date(right.updatedAt || right.createdAt) - new Date(left.updatedAt || left.createdAt))
+    .map((item) => ({
+      id: String(item._id),
+      reactedAt: item.updatedAt || item.createdAt,
+      reaction: item.reaction,
+      user: {
+        id: String(item.user._id),
+        avatar: item.user.avatar || "",
+        name: item.user.name || item.user.username || "Atseen user",
+        username: item.user.username || "",
+        verified: Boolean(item.user.isVerified),
+      },
+    }));
+  const counts = Object.fromEntries(reactionSummary(post.reactions).map((item) => [item.reaction, item.count]));
+
+  return sendResponse(res, 200, "Post reactions fetched", { counts, reactions, total: reactions.length });
+});
 
 function serializePostFeedItem(post, viewer = null, activity = {}) {
   const author = post.author || {};
@@ -693,7 +719,14 @@ export const blockPostAuthor = asyncHandler(async (req, res) => {
 
 export const createPostComment = asyncHandler(async (req, res) => {
   const post = await findPublishedPost(req.params.id);
-  post.comments.push({ user: req.user._id, text: readCommentText(req.body.text) });
+  const hasVoiceFile = Boolean(req.file?.buffer?.length);
+  const text = String(req.body.text || "").trim();
+  if ((!text && !hasVoiceFile) || text.length > 500) throw new ApiError(400, hasVoiceFile ? "Voice comment text must not exceed 500 characters" : "Comment must contain 1 to 500 characters");
+  const audio = hasVoiceFile ? await uploadMessageVoice({ buffer: req.file.buffer, folder: `onlyme/posts/comments/${post._id}`, maxDurationSeconds: 30, purpose: "voice_comment", senderId: req.user._id }) : null;
+  if (audio) {
+    try { audio.waveform = JSON.parse(req.body.waveform || "[]").map(Number).filter(Number.isFinite).slice(0, 100); } catch { audio.waveform = []; }
+  }
+  post.comments.push({ user: req.user._id, text: text || "Voice comment", audio: audio || undefined });
   post.commentCount = post.comments.filter((comment) => !comment.deletedAt).length;
   await post.save();
   await trackPostEvent(req, "COMMENT", post._id);
