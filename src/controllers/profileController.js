@@ -38,6 +38,32 @@ function stripUndefined(value) {
   }, {});
 }
 
+function normalizeNotificationPreferences(role, preferences = {}) {
+  const inAppDefault = preferences.inApp ?? true;
+  if (role === "admin") {
+    return {
+      email: preferences.email ?? true,
+      inApp: inAppDefault,
+      comments: preferences.comments ?? inAppDefault,
+      reactions: preferences.reactions ?? inAppDefault,
+      security: true,
+    };
+  }
+
+  return {
+    email: preferences.email ?? true,
+    inApp: inAppDefault,
+    comments: preferences.comments ?? inAppDefault,
+    reactions: preferences.reactions ?? inAppDefault,
+    followers: preferences.followers ?? inAppDefault,
+    saves: preferences.saves ?? inAppDefault,
+    reposts: preferences.reposts ?? inAppDefault,
+    marketing: preferences.marketing ?? false,
+    messages: preferences.messages ?? true,
+    directAccess: preferences.directAccess ?? true,
+  };
+}
+
 function accountDetails(user) {
   return {
     id: user._id,
@@ -342,15 +368,17 @@ export const showHiddenSeenAgain = asyncHandler(async (req, res) => {
 
 export const getMyNotificationSettings = asyncHandler(async (req, res) => {
   const profile = await ensureRoleProfile(req.user);
+  const role = effectiveProfileRole(req.user);
   return sendResponse(res, 200, "Notification settings fetched", {
-    role: req.user.role,
-    notificationPreferences: profile.notificationPreferences || {},
+    role,
+    notificationPreferences: normalizeNotificationPreferences(role, profile.notificationPreferences || {}),
   });
 });
 
 export const updateMyNotificationSettings = asyncHandler(async (req, res) => {
-  const updates = stripUndefined(validateSettingsPayload(req.user.role, "notifications", req.body));
-  const Model = profileModels[req.user.role];
+  const role = effectiveProfileRole(req.user);
+  const updates = stripUndefined(validateSettingsPayload(role, "notifications", req.body));
+  const Model = profileModels[role];
   await Model.updateOne(
     { user: req.user._id },
     { $set: updates, $setOnInsert: { user: req.user._id } },
@@ -358,8 +386,8 @@ export const updateMyNotificationSettings = asyncHandler(async (req, res) => {
   );
   const profile = await ensureRoleProfile(req.user);
   return sendResponse(res, 200, "Notification settings updated", {
-    role: req.user.role,
-    notificationPreferences: profile.notificationPreferences || {},
+    role,
+    notificationPreferences: normalizeNotificationPreferences(role, profile.notificationPreferences || {}),
   });
 });
 
