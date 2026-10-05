@@ -9,6 +9,8 @@ const adminProfileSchema = new mongoose.Schema(
     notificationPreferences: {
       email: { type: Boolean, default: true },
       inApp: { type: Boolean, default: true },
+      comments: { type: Boolean, default: true },
+      reactions: { type: Boolean, default: true },
       security: { type: Boolean, default: true },
     },
     lastLoginAt: { type: Date, default: null },
