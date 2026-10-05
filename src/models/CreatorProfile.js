@@ -74,6 +74,11 @@ const creatorProfileSchema = new mongoose.Schema(
     notificationPreferences: {
       email: { type: Boolean, default: true },
       inApp: { type: Boolean, default: true },
+      comments: { type: Boolean, default: true },
+      reactions: { type: Boolean, default: true },
+      followers: { type: Boolean, default: true },
+      saves: { type: Boolean, default: true },
+      reposts: { type: Boolean, default: true },
       marketing: { type: Boolean, default: false },
       messages: { type: Boolean, default: true },
       directAccess: { type: Boolean, default: true },
