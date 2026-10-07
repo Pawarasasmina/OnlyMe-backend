@@ -3,9 +3,11 @@ import mongoose from "mongoose";
 const messageReportSchema = new mongoose.Schema({
   reporter: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   reportedUser: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
-  scope: { type: String, enum: ["MESSAGE", "GROUP_MESSAGE", "CONVERSATION", "FEED_POST", "PROFILE", "PROFILE_MEDIA", "SEEN", "WORLD", "STORY"], required: true },
+  scope: { type: String, enum: ["MESSAGE", "GROUP_MESSAGE", "CONVERSATION", "FEED_POST", "PROFILE", "PROFILE_MEDIA", "SEEN", "WORLD", "STORY", "GIFT"], required: true },
   message: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
   groupMessage: { type: mongoose.Schema.Types.ObjectId, ref: "GroupMessage", default: null },
+  chatGift: { type: mongoose.Schema.Types.ObjectId, ref: "ChatGift", default: null },
+  dreamGift: { type: mongoose.Schema.Types.ObjectId, ref: "DreamGift", default: null },
   feedPost: { type: mongoose.Schema.Types.ObjectId, ref: "FeedPost", default: null },
   publication: { type: mongoose.Schema.Types.ObjectId, ref: "Publication", default: null },
   profileMedia: { type: mongoose.Schema.Types.ObjectId, ref: "ProfileMedia", default: null },
@@ -43,5 +45,7 @@ messageReportSchema.index({ reporter: 1, profileMedia: 1 }, { unique: true, part
 messageReportSchema.index({ reporter: 1, publication: 1 }, { unique: true, partialFilterExpression: { scope: "SEEN" } });
 messageReportSchema.index({ reporter: 1, publication: 1 }, { unique: true, partialFilterExpression: { scope: "WORLD" }, name: "reporter_publication_world_unique" });
 messageReportSchema.index({ reporter: 1, story: 1 }, { unique: true, partialFilterExpression: { scope: "STORY" } });
+messageReportSchema.index({ reporter: 1, chatGift: 1 }, { unique: true, partialFilterExpression: { scope: "GIFT", chatGift: { $type: "objectId" } } });
+messageReportSchema.index({ reporter: 1, dreamGift: 1 }, { unique: true, partialFilterExpression: { scope: "GIFT", dreamGift: { $type: "objectId" } } });
 
 export default mongoose.model("MessageReport", messageReportSchema);
