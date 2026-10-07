@@ -13,6 +13,7 @@ const schema = new mongoose.Schema({
   debitLedgerEntry: { type: mongoose.Schema.Types.ObjectId, ref: "StarsLedgerEntry", required: true },
   creditLedgerEntry: { type: mongoose.Schema.Types.ObjectId, ref: "StarsLedgerEntry", required: true },
   idempotencyKey: { type: String, required: true, maxlength: 200 },
+  thankedAt: { type: Date, default: null },
 }, { timestamps: true });
 
 schema.index({ supporter: 1, idempotencyKey: 1 }, { unique: true });

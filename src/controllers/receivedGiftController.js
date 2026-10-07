@@ -1,6 +1,8 @@
 import ChatGift from "../models/ChatGift.js";
 import DreamGift from "../models/DreamGift.js";
+import Notification from "../models/Notification.js";
 import User from "../models/User.js";
+import mongoose from "mongoose";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -19,10 +21,35 @@ export const getMyReceivedGifts = asyncHandler(async (req, res) => {
     DreamGift.find({ creator: req.user._id }).sort({ createdAt: -1 }).limit(limit).populate("supporter", "name username avatar").lean(),
   ]);
   const gifts = [
-    ...chatGifts.map((gift) => ({ id: `chat-${gift._id}`, name: gift.giftName, imageUrl: gift.giftImageUrl, stars: gift.starsAmount, source: gift.sourceType === "STORY" ? "Story" : "Direct", message: gift.messageText || "", visibility: gift.visibility || "EVERYONE", sender: sender(gift.sender), createdAt: gift.createdAt })),
-    ...dreamGifts.map((gift) => ({ id: `dream-${gift._id}`, name: gift.giftName, imageUrl: gift.giftImageUrl, stars: gift.starsAmount, source: "Dream", sender: sender(gift.supporter, gift.privateSupport), createdAt: gift.createdAt })),
+    ...chatGifts.map((gift) => ({ id: `chat-${gift._id}`, name: gift.giftName, imageUrl: gift.giftImageUrl, stars: gift.starsAmount, source: gift.sourceType === "STORY" ? "Story" : "Direct", message: gift.messageText || "", visibility: gift.visibility || "EVERYONE", sender: sender(gift.sender), thankedAt: gift.thankedAt || null, createdAt: gift.createdAt })),
+    ...dreamGifts.map((gift) => ({ id: `dream-${gift._id}`, name: gift.giftName, imageUrl: gift.giftImageUrl, stars: gift.starsAmount, source: "Dream", sender: sender(gift.supporter, gift.privateSupport), thankedAt: gift.thankedAt || null, createdAt: gift.createdAt })),
   ].sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt)).slice(0, limit);
   return sendResponse(res, 200, "Received gifts fetched", { gifts, total: chatGifts.length + dreamGifts.length });
+});
+
+export const thankReceivedGift = asyncHandler(async (req, res) => {
+  const [kind, giftId] = String(req.params.giftId || "").split("-");
+  const config = kind === "chat"
+    ? { model: ChatGift, ownerField: "recipient", senderField: "sender", privateFilter: {} }
+    : kind === "dream"
+      ? { model: DreamGift, ownerField: "creator", senderField: "supporter", privateFilter: { privateSupport: false } }
+      : null;
+  if (!config || !mongoose.isValidObjectId(giftId)) throw new ApiError(400, "Invalid gift id");
+
+  const thankedAt = new Date();
+  const gift = await config.model.findOneAndUpdate(
+    { _id: giftId, [config.ownerField]: req.user._id, ...config.privateFilter },
+    { $set: { thankedAt } },
+    { new: true },
+  ).lean();
+  if (!gift) throw new ApiError(404, "Received gift not found");
+
+  await Notification.updateOne(
+    { dedupeKey: `gift-thanks:${kind}:${giftId}` },
+    { $setOnInsert: { user: gift[config.senderField], type: "gift_thanks", title: `${req.user.name || req.user.username || "Someone"} thanked you for ${gift.giftName}`, dedupeKey: `gift-thanks:${kind}:${giftId}` } },
+    { upsert: true },
+  );
+  return sendResponse(res, 200, "Gift sender thanked", { thankedAt: gift.thankedAt });
 });
 
 export const getPublicReceivedGifts = asyncHandler(async (req, res) => {
