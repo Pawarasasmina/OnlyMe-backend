@@ -3,7 +3,7 @@ import { getOrbitCreators, getOwnProfileConnections, getOwnProfileViewers, getOw
 import { addOwnProfileMedia, addOwnProfileMediaFromSeen, addOwnProfileMediaFromStory, deleteOwnProfileMedia, getOwnProfileMedia, getProfileMediaByUsername, likeProfileMediaByUsername, reportProfileMediaByUsername } from "../controllers/profileMediaController.js";
 import { optionalProtect, protect } from "../middleware/authMiddleware.js";
 import { uploadProfileMedia } from "../middleware/uploadMiddleware.js";
-import { getMyReceivedGifts, getPublicReceivedGifts, thankReceivedGift } from "../controllers/receivedGiftController.js";
+import { getMyReceivedGifts, getPublicReceivedGifts, reportReceivedGift, thankReceivedGift, updateReceivedGiftProfileState } from "../controllers/receivedGiftController.js";
 
 const router = Router();
 router.get("/me", protect, getOwnUnifiedProfile);
@@ -13,6 +13,8 @@ router.get("/me/viewers", protect, getOwnProfileViewers);
 router.get("/me/media", protect, getOwnProfileMedia);
 router.get("/me/gifts", protect, getMyReceivedGifts);
 router.post("/me/gifts/:giftId/thank", protect, thankReceivedGift);
+router.patch("/me/gifts/:giftId/profile-state", protect, updateReceivedGiftProfileState);
+router.post("/me/gifts/:giftId/report", protect, reportReceivedGift);
 router.post("/me/media", protect, uploadProfileMedia.single("media"), addOwnProfileMedia);
 router.post("/me/media/from-story", protect, addOwnProfileMediaFromStory);
 router.post("/me/media/from-seen", protect, addOwnProfileMediaFromSeen);

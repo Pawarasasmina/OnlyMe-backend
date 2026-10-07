@@ -15,6 +15,8 @@ const schema = new mongoose.Schema({
   creditLedgerEntry: { type: mongoose.Schema.Types.ObjectId, ref: "StarsLedgerEntry", required: true },
   idempotencyKey: { type: String, required: true, maxlength: 200 },
   thankedAt: { type: Date, default: null },
+  hiddenFromProfile: { type: Boolean, default: false, index: true },
+  featuredOnProfile: { type: Boolean, default: false, index: true },
 }, { timestamps: true });
 
 schema.index({ sender: 1, idempotencyKey: 1 }, { unique: true });

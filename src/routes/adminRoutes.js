@@ -22,7 +22,7 @@ import { getWelcomeEmailTemplate, updateWelcomeEmailTemplate } from "../controll
 const router = Router();
 const messageReportScope = (req, _res, next) => { req.reportScopes = ["MESSAGE", "GROUP_MESSAGE", "CONVERSATION"]; next(); };
 const userReportScope = (req, _res, next) => { req.reportScopes = ["PROFILE"]; next(); };
-const postReportScope = (req, _res, next) => { req.reportScopes = ["FEED_POST", "SEEN", "WORLD", "STORY"]; next(); };
+const postReportScope = (req, _res, next) => { req.reportScopes = ["FEED_POST", "SEEN", "WORLD", "STORY", "GIFT"]; next(); };
 
 router.use(protect, authorize("admin"));
 router.get("/dashboard", getAdminDashboard);
