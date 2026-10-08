@@ -2,6 +2,8 @@ import Wallet from "../models/Wallet.js";
 import StarsLedgerEntry from "../models/StarsLedgerEntry.js";
 import WorldEntitlement from "../models/WorldEntitlement.js";
 import PremiumMembership from "../models/PremiumMembership.js";
+import ChatGift from "../models/ChatGift.js";
+import DreamGift from "../models/DreamGift.js";
 import { getStarExchangeRate } from "../services/starExchangeService.js";
 import { executeFinancialCommand } from "../services/financialCommandService.js";
 import { creditWallet, rebuildWalletBuckets, safeWallet } from "../services/walletLedgerService.js";
@@ -123,7 +125,17 @@ export const getLedger = asyncHandler(async (req, res) => {
   const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
   const filter = { accountUser: req.user._id };
   const [rows, total] = await Promise.all([StarsLedgerEntry.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).populate("counterpartyUser", "name username avatar isVerified role").populate("publication", "title kind planet publishedSnapshot.metadata.title").lean(), StarsLedgerEntry.countDocuments(filter)]);
-  return sendResponse(res, 200, "Ledger fetched", { items: rows.map((item) => ({ id: item._id, event: item.entryType, starsChange: item.signedAmount, reference: { type: item.referenceType, id: item.referenceId }, publication: safePublication(item.publication), metadata: item.metadata?.giftName ? { giftName: item.metadata.giftName } : undefined, counterparty: item.counterpartyUser ? { id: item.counterpartyUser._id, name: item.counterpartyUser.name, username: item.counterpartyUser.username, avatar: item.counterpartyUser.avatar || "", verified: Boolean(item.counterpartyUser.isVerified), role: item.counterpartyUser.role } : null, createdAt: item.createdAt })), pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) } });
+  const chatGiftIds = rows.filter((item) => item.referenceType === "CHAT_GIFT" && item.referenceId).map((item) => item.referenceId);
+  const dreamGiftIds = rows.filter((item) => item.referenceType === "DREAM_GIFT" && item.referenceId).map((item) => item.referenceId);
+  const [chatGifts, dreamGifts] = await Promise.all([
+    chatGiftIds.length ? ChatGift.find({ _id: { $in: chatGiftIds } }).select("giftName giftImageUrl sourceType").lean() : [],
+    dreamGiftIds.length ? DreamGift.find({ _id: { $in: dreamGiftIds } }).select("giftName giftImageUrl").lean() : [],
+  ]);
+  const giftsByReference = new Map([
+    ...chatGifts.map((gift) => [`CHAT_GIFT:${gift._id}`, { giftName: gift.giftName, giftImageUrl: gift.giftImageUrl, giftSource: gift.sourceType || "Direct" }]),
+    ...dreamGifts.map((gift) => [`DREAM_GIFT:${gift._id}`, { giftName: gift.giftName, giftImageUrl: gift.giftImageUrl, giftSource: "Dream" }]),
+  ]);
+  return sendResponse(res, 200, "Ledger fetched", { items: rows.map((item) => { const storedGift = giftsByReference.get(`${item.referenceType}:${item.referenceId}`); const metadata = item.metadata?.giftName || storedGift ? { giftName: item.metadata?.giftName || storedGift?.giftName || "a gift", giftImageUrl: item.metadata?.giftImageUrl || storedGift?.giftImageUrl || "", giftSource: item.metadata?.giftSource || storedGift?.giftSource || "" } : undefined; return { id: item._id, event: item.entryType, starsChange: item.signedAmount, reference: { type: item.referenceType, id: item.referenceId }, publication: safePublication(item.publication), metadata, counterparty: item.counterpartyUser ? { id: item.counterpartyUser._id, name: item.counterpartyUser.name, username: item.counterpartyUser.username, avatar: item.counterpartyUser.avatar || "", verified: Boolean(item.counterpartyUser.isVerified), role: item.counterpartyUser.role } : null, createdAt: item.createdAt }; }), pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) } });
 });
 
 export const getWorldEntitlements = asyncHandler(async (req, res) => {
