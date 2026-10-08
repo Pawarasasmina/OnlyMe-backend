@@ -26,5 +26,5 @@ export const KIND_RULES = {
   // World content is assembled from preview stories and included Experiences.
   // Chapters remain an internal storage detail for legacy records/story media.
   PREMIUM_WORLD: { minChapters: 0, maxChapters: 1, pricingMode: "MONTHLY", previewMin: 0, previewMax: 1, placement: "PROFILE_ORBIT" },
-  EXPERIENCE: { minChapters: 2, maxChapters: null, pricingMode: "ONE_TIME", previewMin: 0, previewMax: 0, placement: "PROFILE_EXPERIENCES" },
+  EXPERIENCE: { minChapters: 1, maxChapters: null, pricingMode: "ONE_TIME", previewMin: 0, previewMax: 0, placement: "PROFILE_EXPERIENCES" },
 };
