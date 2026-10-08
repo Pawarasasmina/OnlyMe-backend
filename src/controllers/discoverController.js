@@ -445,7 +445,7 @@ function publicSlide(slide) {
 
 function serializeStory(story) {
   const owner = story.creator || {};
-  const mediaUrl = story.image?.url || "";
+  const mediaUrl = story.image?.url || story.editorMetadata?.sharedCard?.imageUrl || "";
   return {
     id: String(story._id),
     owner: {
@@ -602,7 +602,6 @@ async function discoverConnections({ blockedIds, previewByCreator, viewerId }) {
     target: { $nin: blockedObjectIds },
   })
     .sort({ createdAt: -1, _id: -1 })
-    .limit(80)
     .populate({
       path: "target",
       match: {
@@ -622,7 +621,7 @@ async function discoverConnections({ blockedIds, previewByCreator, viewerId }) {
 
   const users = relationships
     .map((relationship) => relationship.target)
-    .filter((user) => user && (user.role !== "creator" || user.creatorApprovalStatus === "approved"));
+    .filter(Boolean);
   const uniqueUsers = Array.from(new Map(users.map((user) => [String(user?._id || ""), user])).values()).filter((user) => user?._id);
   const profilesById = await profilesByUser(uniqueUsers, { publicOnly: false });
   const visibleUsers = uniqueUsers;
@@ -632,9 +631,9 @@ async function discoverConnections({ blockedIds, previewByCreator, viewerId }) {
   const [storyRows, premiumRows, followerCounts] = await Promise.all([
     ids.length ? Story.find({
       expiresAt: { $gt: new Date() },
-      "image.url": { $ne: "" },
       $or: [
         { creator: { $in: ids }, audience: { $in: ["everyone", "followers"] } },
+        { creator: { $in: ids }, audience: { $exists: false } },
         { creator: { $in: mutualObjectIds }, audience: "close_circle" },
       ],
     }).sort({ createdAt: 1, _id: 1 }).populate("creator", "name username avatar isVerified role").lean() : [],
@@ -680,7 +679,7 @@ async function discoverConnections({ blockedIds, previewByCreator, viewerId }) {
     .filter((person) => (person?.id || person?.username) && String(person.id || "") !== String(viewerId || ""));
   return {
     friends: sortDiscoverFriends(uniquePeople.filter((person) => person.isMutualFollow)).slice(0, 12),
-    following: uniquePeople.slice(0, 12),
+    following: uniquePeople,
   };
 }
 

@@ -31,7 +31,7 @@ export function mutualFollowIds(followingRows = [], followerRows = [], viewerId,
 export function serializeDiscoverStory(story = {}, viewerId, engagement = null) {
   const owner = story.creator || {};
   const ownerId = idFor(owner);
-  const mediaUrl = story.image?.url || "";
+  const mediaUrl = story.image?.url || story.editorMetadata?.sharedCard?.imageUrl || "";
   return {
     id: idFor(story),
     ownerId,
