@@ -17,6 +17,7 @@ import PremiumMembership from "../models/PremiumMembership.js";
 import WorldEntitlement from "../models/WorldEntitlement.js";
 import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
 import { activeIncludedExperienceIds } from "../services/publicationEntitlementService.js";
+import { attachEntityMetadata } from "../services/contentEntityService.js";
 import { listProfileMediaForUser } from "../services/profileMediaService.js";
 import { toggleFollowRelationship } from "../services/profileRelationshipService.js";
 import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyticsEventService.js";
@@ -28,7 +29,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { normalizeUsername } from "../validators/profileValidator.js";
 import { serializePost } from "./postController.js";
-import { engagementForWallPost, engagementForWallShare } from "./wallController.js";
+import { engagementForWallPost, engagementForWallShare, serializeWallPost } from "./wallController.js";
 
 const profileModelFor = (owner) => owner.creatorApprovalStatus === "approved" || owner.role === "creator" ? CreatorProfile : FanProfile;
 
@@ -39,7 +40,7 @@ async function loadProfile(owner, viewer) {
   const seenStatus = { $in: profileOwner ? ["DRAFT", "PUBLISHED", "CHANGES_REQUESTED"] : ["PUBLISHED", "CHANGES_REQUESTED"] };
   const seenAudienceFilter = await seenVisibilityFilter(viewer || null, [owner._id]);
   const planetStatus = profileOwner ? { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } : { $in: ["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED"] };
-  const [roleProfile, content, publishedContentCount, seens, seriesDocs, planets, experiences, ownFeedPosts, shares, wallShares, feedSharePosts, followerCount, followingCount, seenByCount, supporterRows, viewerRelationships, viewerSeeSignal, profileMedia] = await Promise.all([
+  const [roleProfile, content, publishedContentCount, seens, seriesDocs, planets, experiences, ownFeedPosts, ownCurrentWallPosts, shares, wallShares, feedSharePosts, followerCount, followingCount, seenByCount, supporterRows, viewerRelationships, viewerSeeSignal, profileMedia] = await Promise.all([
     Model.findOne({ user: owner._id }).lean(),
     Content.find(publishedFilter)
       .sort({ publishedAt: -1, _id: -1 }).limit(30).populate("creator", "name username avatar").lean(),
@@ -49,13 +50,14 @@ async function loadProfile(owner, viewer) {
     Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
     Publication.find({ creator: owner._id, kind: "EXPERIENCE", status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ publishedAt: -1, updatedAt: -1 }).limit(3).populate("creator", "name username avatar").lean(),
     FeedPost.find({ author: owner._id, status: "published", visibility: "public", deletedAt: null }).sort({ publishedAt: -1, createdAt: -1 }).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }]).lean(),
+    WallPost.find({ creator: owner._id, status: "PUBLISHED" }).sort({ createdAt: -1 }).populate("creator", "name username avatar isVerified").lean(),
     SeenEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("publication text createdAt").lean(),
     WallEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("post text createdAt").lean(),
     FeedPost.find({ status: "published", deletedAt: null, "shares.user": owner._id }).sort({ "shares.createdAt": -1 }).limit(30).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }, { path: "shares.user", select: "name username avatar isVerified role status" }]).lean(),
     ProfileRelationship.countDocuments({ target: owner._id, type: "FOLLOW" }),
     ProfileRelationship.countDocuments({ actor: owner._id, type: "FOLLOW" }),
     OrbitSignal.countDocuments({ targetUser: owner._id, type: "SEE_YOU", status: "active" }),
-    owner.role === "creator" ? DreamGift.distinct("supporter", { creator: owner._id }) : [],
+    owner.creatorApprovalStatus === "approved" || owner.role === "creator" ? DreamGift.distinct("supporter", { creator: owner._id }) : [],
     viewer?._id && String(viewer._id) !== String(owner._id) ? ProfileRelationship.find({ actor: viewer._id, target: owner._id }).select("type").lean() : [],
     viewer?._id && String(viewer._id) !== String(owner._id) ? OrbitSignal.findOne({ sender: viewer._id, targetUser: owner._id, type: "SEE_YOU", status: "active" }).select("_id").lean() : null,
     listProfileMediaForUser(owner._id, { limit: 12 }),
@@ -143,7 +145,10 @@ async function loadProfile(owner, viewer) {
     { $group: { _id: "$publication", ownerCount: { $sum: 1 } } },
   ]) : [];
   const experienceOwnerCounts = new Map(experienceOwnerRows.map((item) => [String(item._id), Number(item.ownerCount) || 0]));
-  const ownWallPosts = ownFeedPosts.map((post) => serializePost(post, viewer));
+  if (ownCurrentWallPosts.length) await attachEntityMetadata(ownCurrentWallPosts, viewer || null);
+  const currentWallPosts = await Promise.all(ownCurrentWallPosts.map(async (post) => serializeWallPost(post, await engagementForWallPost(post._id, viewer?._id))));
+  const ownWallPosts = [...ownFeedPosts.map((post) => serializePost(post, viewer)), ...currentWallPosts]
+    .sort((left, right) => new Date(right.feedCreatedAt || right.publishedAt || right.createdAt) - new Date(left.feedCreatedAt || left.publishedAt || left.createdAt));
   return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, membershipIncludedExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, seenByCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal) });
 }
 

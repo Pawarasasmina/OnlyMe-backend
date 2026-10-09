@@ -6,6 +6,7 @@
   "scripts": {
     "seed:seen-flow": "node src/scripts/seedSeenFlowSamples.js",
     "seed:creator-demos": "node src/scripts/seedCreatorDemoContent.js",
+    "seed:client-showcase": "node src/scripts/seedClientShowcase.js",
     "dev": "nodemon --watch src --watch .env --watch src/controllers/.env --ext js,mjs,cjs,json,env src/server.js",
     "start": "node src/server.js",
     "lint": "eslint .",
