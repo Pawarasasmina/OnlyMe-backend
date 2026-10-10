@@ -61,6 +61,34 @@ const wallCopy = [
   (c) => ({ context: "COFFEE", text: `Coffee, notes, and a fresh outline for this week's ${c.world} session. What should we explore together?` }),
 ];
 
+const creatorStatuses = [
+  { label: "📚 Reading", color: "#B092FF" },
+  { label: "🌅 Morning person", color: "#F6D365" },
+  { label: "✍️ New Seen soon", color: "#F472B6" },
+  { label: "🎧 Deep work", color: "#9CCBFF" },
+  { label: "💬 Replying to everyone", color: "#6ECF97" },
+  { label: "💪 At the gym", color: "#F3A85E" },
+  { label: "📖 Writing a chapter", color: "#A7D8C4" },
+  { label: "✍️ New Seen soon", color: "#FB923C" },
+  { label: "🌍 My World is open", color: "#4ADE80" },
+  { label: "🎾 Tennis?", color: "#6ECF97" },
+  { label: "👁 At seen", color: "#9CCBFF" },
+  { label: "☕ Coffee walk", color: "#C8A27A" },
+  { label: "📖 Writing a chapter", color: "#FB7185" },
+  { label: "🎧 Deep work", color: "#F6D365" },
+  { label: "📞 Open for calls", color: "#60A5FA" },
+  { label: "💪 At the gym", color: "#F87171" },
+  { label: "💬 Replying to everyone", color: "#C084FC" },
+  { label: "✈️ Traveling", color: "#B092FF" },
+  { label: "✍️ New Seen soon", color: "#FDA4AF" },
+  { label: "🌍 My World is open", color: "#93C5FD" },
+];
+
+function activeStatusFor(index) {
+  const creatorStatus = creatorStatuses[index];
+  return { emoji: "", label: creatorStatus.label, presetKey: "custom", isCustom: true, color: creatorStatus.color, startedAt: at(index / 4), expiresAt: null, isActive: true };
+}
+
 function objectId(key) {
   return new mongoose.Types.ObjectId(crypto.createHash("sha1").update(`${SOURCE}:${key}`).digest("hex").slice(0, 24));
 }
@@ -95,6 +123,7 @@ async function seedUser(c, index, passwordHash) {
   await User.findOneAndUpdate({ _id: id }, { $set: {
     name: `${c.first} ${c.last}`, username: c.username, email: `${c.first.toLowerCase()}@gmail.com`, password: passwordHash,
     role: "fan", creatorApprovalStatus: "approved", avatar, isVerified: true, status: "active", lastSeenAt: at(index / 2),
+    activeStatus: activeStatusFor(index),
     onboarding: { version: 1, status: "completed", currentStep: "completed", startedAt: at(24 * 60), welcomeCompleted: true, interestsCompleted: true, instinctsCompleted: true, peopleCompleted: true, checklistAcknowledged: true, skippedSteps: [], completedAt: at(24 * 58), skippedAt: null },
     onboardingChecklist: { watchedIntro: true, openedOrbit: true, openedStudio: true, createdFirstPost: true, sharedFirstStory: true, createdFirstWorld: true, followedFirstPeople: true, reactedToStory: true, visitedWorld: true, completedProfile: true, dismissedAt: now, completedAt: now, rewardGrantedAt: now },
   } }, { upsert: true, setDefaultsOnInsert: true });
@@ -367,4 +396,16 @@ async function seed() {
   console.log(`Seeded ${rows.length} approved unified creators, ${rows.length * (rows.length - 1)} mutual follow edges, ${rows.length * 3} Wall posts, ${rows.length * 2} Seens, ${rows.length} Premium Worlds, ${rows.length * 2} Experiences, ${rows.length} Dreams, ${rows.length * 2} active Stories, ${giftCounts.dreamGiftCount} Dream gifts, ${giftCounts.directGiftCount} Direct gifts, ${giftCounts.storyGiftCount} Story gifts, ${purchaseCounts.experiencePurchases} Experience purchases, ${purchaseCounts.premiumMemberships} Premium World memberships, profile media, access requests, reactions, comments, saves, reposts, views, and Activity records.`);
 }
 
-seed().catch((error) => { console.error(error); process.exitCode = 1; }).finally(async () => mongoose.disconnect());
+async function seedStatusesOnly() {
+  if (env.nodeEnv === "production") throw new Error("Refusing to seed client showcase data while NODE_ENV=production.");
+  await connectDb();
+  for (const [index, creator] of creators.entries()) {
+    await User.updateOne({ _id: objectId(`user:${creator.username}`) }, { $set: { activeStatus: activeStatusFor(index) } });
+  }
+  console.table(creators.map((creator, index) => ({ creator: `${creator.first} ${creator.last}`, status: creatorStatuses[index].label })));
+  console.log(`Updated profile statuses for ${creators.length} showcase creators.`);
+}
+
+(process.argv.includes("--statuses-only") ? seedStatusesOnly() : seed())
+  .catch((error) => { console.error(error); process.exitCode = 1; })
+  .finally(async () => mongoose.disconnect());
