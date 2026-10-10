@@ -13,6 +13,7 @@
     "test": "node --test --test-concurrency=1",
     "seed:discover-friends": "node src/scripts/seedDiscoverFriendsData.js",
     "seed:prototype-feed": "node src/scripts/seedPrototypeFeed.js",
+    "seed:message-requests": "node src/scripts/seedMessageRequests.js",
     "seed:orbit": "node src/scripts/seedOrbitData.js",
     "migrate:creator-verification": "node src/scripts/migrateCreatorVerification.js",
     "migrate:accounts:dry-run": "node src/scripts/migrateUnifiedAccounts.js",

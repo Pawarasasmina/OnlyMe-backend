@@ -120,6 +120,45 @@ export const convertIncomeToCoins = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Creator income converted to Coins", result);
 });
 
+export const withdrawCreatorIncome = asyncHandler(async (req, res) => {
+  const key = idempotencyKey(req.body.idempotencyKey);
+  const amount = positiveStars(req.body.starsAmount);
+  const starsPerUsd = await getStarExchangeRate();
+  const minimumStars = Math.ceil(20 * starsPerUsd);
+  if (amount < minimumStars) throw new ApiError(422, "The minimum withdrawal is $20", "WITHDRAWAL_BELOW_MINIMUM");
+  const result = await executeFinancialCommand(
+    { user: req.user._id, commandType: "WITHDRAW_CREATOR_INCOME", idempotencyKey: key, requestFingerprint: fingerprint({ starsAmount: amount, starsPerUsd }) },
+    async (session, command) => {
+      const wallet = await Wallet.findOne({ user: req.user._id }).session(session);
+      if (!wallet) throw new ApiError(422, "Wallet is unavailable", "WALLET_UNAVAILABLE");
+      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const recentRows = await StarsLedgerEntry.aggregate([
+        { $match: { accountUser: req.user._id, entryType: { $in: CREATOR_EVENTS }, createdAt: { $gt: cutoff } } },
+        { $lookup: { from: StarsLedgerEntry.collection.name, localField: "_id", foreignField: "reversalOf", as: "reversals" } },
+        { $match: { reversals: { $size: 0 } } },
+        { $group: { _id: null, stars: { $sum: "$signedAmount" } } },
+      ]).session(session);
+      const { availableIncomeStars } = withdrawalBalances(wallet.earnedBalance, recentRows[0]?.stars);
+      if (amount > availableIncomeStars) throw new ApiError(422, "Available creator income is too low or still in the 24-hour hold", "INSUFFICIENT_WITHDRAWABLE_INCOME");
+      const updated = await Wallet.findOneAndUpdate(
+        { _id: wallet._id, balance: { $gte: amount }, earnedBalance: { $gte: amount } },
+        { $inc: { balance: -amount, earnedBalance: -amount, version: 1 } },
+        { new: true, session, runValidators: true },
+      );
+      if (!updated) throw new ApiError(422, "Available creator income is too low", "INSUFFICIENT_WITHDRAWABLE_INCOME");
+      const [entry] = await StarsLedgerEntry.create([{
+        accountUser: req.user._id, entryType: "CREATOR_WITHDRAWAL_DEBIT", entryRole: "CREATOR_PAYOUT", direction: "DEBIT",
+        starsAmount: amount, signedAmount: -amount, balanceAfter: updated.balance, referenceType: "CREATOR_WITHDRAWAL",
+        referenceId: String(command._id), commandId: command._id, idempotencyKey: key,
+        metadata: { bankLast4: "4832", bucketSpend: { bonus: 0, purchased: 0, earned: amount }, prototype: true, starsPerUsd, usdAmount: amount / starsPerUsd },
+      }], { session });
+      await Wallet.updateOne({ _id: updated._id }, { $set: { lastLedgerEntry: entry._id } }, { session });
+      return { resultReference: entry._id, wallet: safeWallet(updated), withdrawal: { id: entry._id, starsAmount: amount, usdAmount: amount / starsPerUsd, status: "PROCESSING", bankLast4: "4832", estimatedArrival: "3–5 business days" } };
+    },
+  );
+  return sendResponse(res, 200, "Withdrawal submitted", result);
+});
+
 export const getLedger = asyncHandler(async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));

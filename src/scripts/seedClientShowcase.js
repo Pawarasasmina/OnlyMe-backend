@@ -9,6 +9,7 @@ import Dream from "../models/Dream.js";
 import ExperienceAccessRequest from "../models/ExperienceAccessRequest.js";
 import FanProfile from "../models/FanProfile.js";
 import FeedPost from "../models/FeedPost.js";
+import FinancialCommand from "../models/FinancialCommand.js";
 import Notification from "../models/Notification.js";
 import OrbitDream from "../models/OrbitDream.js";
 import ProfileMedia from "../models/ProfileMedia.js";
@@ -17,6 +18,7 @@ import Publication from "../models/Publication.js";
 import SeenEngagement from "../models/SeenEngagement.js";
 import Story from "../models/Story.js";
 import StoryEngagement from "../models/StoryEngagement.js";
+import StarsLedgerEntry from "../models/StarsLedgerEntry.js";
 import User from "../models/User.js";
 import WallEngagement from "../models/WallEngagement.js";
 import WallPost from "../models/WallPost.js";
@@ -26,6 +28,7 @@ import { sendDreamGift } from "../services/dreamService.js";
 import { giftsForRecipient } from "../services/giftPreferenceService.js";
 import { joinPremium } from "../services/premiumMembershipService.js";
 import { purchaseWorld } from "../services/worldPurchaseService.js";
+import { getStarExchangeRate } from "../services/starExchangeService.js";
 
 const SOURCE = "client-showcase-v1";
 const PASSWORD = "12341234";
@@ -111,9 +114,22 @@ const coverIds = [
   "1518770660439-4636190af475", "1517836357463-d25dfeac3438", "1506126613408-eca07ce68773", "1513364776144-60967b0f800f",
   "1556761175-b413da4baf72", "1571019613454-1cb2f99b2d8b",
 ];
+const seenCoverVideos = [
+  "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
+  "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
+  "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4",
+  "https://storage.googleapis.com/coverr-main/mp4/Mt_Baker.mp4",
+];
 
 function media(key, url, mediaType = "IMAGE") {
   return { assetId: `${SOURCE}-${key}`, resourceType: mediaType === "VIDEO" ? "video" : "image", mediaType, secureUrl: url, format: mediaType === "VIDEO" ? "mp4" : "jpg" };
+}
+
+function seenCoverFor(c, creatorIndex, seenIndex) {
+  if ((creatorIndex + seenIndex) % 4 === 0) {
+    return { ...media(`${c.username}-seen-${seenIndex}-cover`, seenCoverVideos[(creatorIndex + seenIndex) % seenCoverVideos.length], "VIDEO"), duration: 15, width: 1280, height: 720 };
+  }
+  return media(`${c.username}-seen-${seenIndex}-cover`, imageUrl(c, coverIds[(creatorIndex + seenIndex + 2) % coverIds.length]));
 }
 
 async function seedUser(c, index, passwordHash) {
@@ -185,7 +201,7 @@ async function seedContent(c, index) {
   const seenIds = [];
   for (let i = 0; i < c.seen.length; i += 1) {
     const title = c.seen[i];
-    const cover = media(`${c.username}-seen-${i}-cover`, imageUrl(c, coverIds[(index + i + 2) % coverIds.length]));
+    const cover = seenCoverFor(c, index, i);
     seenIds.push(await seedPublication(c, `${c.username}-seen-${i}`, { kind: "SEEN", title, summary: `A clear, practical guide from ${c.first} with ideas you can use today.`, description: `${c.first} breaks ${title.toLowerCase()} into approachable steps, honest context, and a useful experiment.`, tags: [c.category.toLowerCase(), "practical", "showcase"], coverMedia: cover, pricing: { mode: "FREE", starsAmount: null, presetId: null }, planet: { slot: null, emoji: "", accent: `#${c.color}` }, chapters: seenChapters(c, i) }, at(index * 6 + i * 24 + 18)));
   }
 
@@ -406,6 +422,128 @@ async function seedStatusesOnly() {
   console.log(`Updated profile statuses for ${creators.length} showcase creators.`);
 }
 
-(process.argv.includes("--statuses-only") ? seedStatusesOnly() : seed())
+async function seedSeenCoversOnly() {
+  if (env.nodeEnv === "production") throw new Error("Refusing to seed client showcase data while NODE_ENV=production.");
+  await connectDb();
+  let videoCount = 0;
+  for (const [creatorIndex, creator] of creators.entries()) {
+    for (let seenIndex = 0; seenIndex < creator.seen.length; seenIndex += 1) {
+      const coverMedia = seenCoverFor(creator, creatorIndex, seenIndex);
+      if (coverMedia.mediaType === "VIDEO") videoCount += 1;
+      await Publication.updateOne(
+        { _id: objectId(`publication:${creator.username}-seen-${seenIndex}`), kind: "SEEN" },
+        { $set: { coverMedia, "submittedSnapshot.metadata.coverMedia": coverMedia, "publishedSnapshot.metadata.coverMedia": coverMedia } },
+      );
+    }
+  }
+  console.log(`Updated 40 showcase Seen covers: ${videoCount} videos and ${40 - videoCount} images.`);
+}
+
+async function seedGroupedActivitiesOnly() {
+  if (env.nodeEnv === "production") throw new Error("Refusing to seed client showcase data while NODE_ENV=production.");
+  await connectDb();
+  const rows = creators.map((creator) => ({
+    ...creator,
+    id: objectId(`user:${creator.username}`),
+    seenId: objectId(`publication:${creator.username}-seen-0`),
+    wallId: objectId(`wall:${creator.username}:0`),
+  }));
+
+  for (const [ownerIndex, owner] of rows.entries()) {
+    const actors = Array.from({ length: 4 }, (_, offset) => rows[(ownerIndex + offset + 1) % rows.length]);
+    for (const [actorIndex, actor] of actors.entries()) {
+      const stamp = new Date(Date.now() - (ownerIndex * 4 + actorIndex) * 30_000);
+      await SeenEngagement.findOneAndUpdate(
+        { publication: owner.seenId, user: actor.id, type: "REACTION" },
+        { $set: { publication: owner.seenId, user: actor.id, type: "REACTION", reaction: ["LOVE", "FIRE", "CLAP", "WOW"][actorIndex], createdAt: stamp, updatedAt: stamp } },
+        { upsert: true, timestamps: false },
+      );
+      await SeenEngagement.findOneAndUpdate(
+        { publication: owner.seenId, user: actor.id, type: "SAVE" },
+        { $set: { publication: owner.seenId, user: actor.id, type: "SAVE", createdAt: stamp, updatedAt: stamp } },
+        { upsert: true, timestamps: false },
+      );
+      await SeenEngagement.findOneAndUpdate(
+        { publication: owner.seenId, user: actor.id, type: "SHARE", reaction: "LIKE" },
+        { $set: { publication: owner.seenId, user: actor.id, type: "SHARE", reaction: "LIKE", text: `Sharing ${owner.first}'s Seen with my community.`, createdAt: stamp, updatedAt: stamp } },
+        { upsert: true, timestamps: false },
+      );
+      await SeenEngagement.findOneAndUpdate(
+        { _id: objectId(`grouped-seen-comment:${owner.seenId}:${actor.id}`) },
+        { $set: { publication: owner.seenId, user: actor.id, type: "COMMENT", text: comments[(ownerIndex + actorIndex) % comments.length], createdAt: stamp, updatedAt: stamp } },
+        { upsert: true, timestamps: false },
+      );
+    }
+
+    const post = await FeedPost.findById(owner.wallId).lean();
+    if (!post) continue;
+    const actorIds = new Set(actors.map((actor) => String(actor.id)));
+    const reactions = (post.reactions || []).filter((row) => !actorIds.has(String(row.user)));
+    const wallComments = (post.comments || []).filter((row) => !actorIds.has(String(row.user)));
+    const saves = (post.saves || []).filter((row) => !actorIds.has(String(row.user)));
+    actors.forEach((actor, actorIndex) => {
+      const stamp = new Date(Date.now() - (ownerIndex * 4 + actorIndex) * 30_000);
+      reactions.push({ user: actor.id, reaction: ["love", "fire", "clap", "wow"][actorIndex], createdAt: stamp, updatedAt: stamp });
+      wallComments.push({ _id: objectId(`grouped-wall-comment:${owner.wallId}:${actor.id}`), user: actor.id, text: comments[(ownerIndex + actorIndex + 1) % comments.length], deletedAt: null, archivedAt: null, createdAt: stamp, updatedAt: stamp });
+      saves.push({ user: actor.id, createdAt: stamp, updatedAt: stamp });
+    });
+    await FeedPost.updateOne(
+      { _id: owner.wallId },
+      { $set: { reactions, comments: wallComments, saves, supportCount: reactions.length, commentCount: wallComments.filter((row) => !row.deletedAt).length, saveCount: saves.length, updatedAt: new Date() } },
+      { timestamps: false },
+    );
+  }
+  console.log(`Added fresh grouped Seen and note activities for ${rows.length} showcase creators using four actors per target.`);
+}
+
+async function seedWithdrawalBalancesOnly() {
+  if (env.nodeEnv === "production") throw new Error("Refusing to seed client showcase data while NODE_ENV=production.");
+  await connectDb();
+  const starsPerUsd = await getStarExchangeRate();
+  const amount = 35 * starsPerUsd;
+  let credited = 0;
+  for (const [index, creator] of creators.entries()) {
+    const userId = objectId(`user:${creator.username}`);
+    const commandId = objectId(`withdrawal-demo-v2-command:${creator.username}`);
+    const entryId = objectId(`withdrawal-demo-v2-entry:${creator.username}`);
+    if (await StarsLedgerEntry.exists({ _id: entryId })) continue;
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const wallet = await Wallet.findOneAndUpdate(
+          { user: userId },
+          { $inc: { balance: amount, earnedBalance: amount, version: 1 }, $set: { reconciliationStatus: "MATCHED" } },
+          { new: true, session, runValidators: true },
+        );
+        if (!wallet) throw new Error(`Wallet missing for ${creator.username}`);
+        await FinancialCommand.create([{
+          _id: commandId, user: userId, commandType: "ADMIN_CREDIT", idempotencyKey: `${SOURCE}-withdrawal-demo-v2-${creator.username}`,
+          requestFingerprint: crypto.createHash("sha256").update(`${SOURCE}:withdrawal:v2:${creator.username}:${amount}`).digest("hex"),
+          status: "SUCCEEDED", processingLeaseExpiresAt: at(70 + index), resultReference: String(entryId), responseSnapshot: { seeded: true, starsAmount: amount }, completedAt: at(70 + index),
+        }], { session });
+        await StarsLedgerEntry.create([{
+          _id: entryId, accountUser: userId, entryType: "MANUAL_ADJUSTMENT", entryRole: "SHOWCASE_CREATOR_INCOME", direction: "CREDIT",
+          starsAmount: amount, signedAmount: amount, balanceAfter: wallet.balance, referenceType: "SHOWCASE_CREATOR_INCOME",
+          referenceId: `${SOURCE}:withdrawal-v2:${creator.username}`, commandId, idempotencyKey: `${SOURCE}-withdrawal-demo-v2-${creator.username}`,
+          metadata: { seeded: true, bucketCredit: { bonus: 0, purchased: 0, earned: amount }, starsPerUsd, usdAmount: 35 }, createdAt: at(72 + index),
+        }], { session });
+      });
+      credited += 1;
+    } finally {
+      await session.endSession();
+    }
+  }
+  console.log(`Added $35.00 (${amount} Stars at ${starsPerUsd} Stars/USD) of settled prototype withdrawal income to ${credited} new showcase wallets; all 20 remain idempotently funded.`);
+}
+
+(process.argv.includes("--statuses-only")
+  ? seedStatusesOnly()
+  : process.argv.includes("--seen-covers-only")
+    ? seedSeenCoversOnly()
+    : process.argv.includes("--grouped-activities-only")
+      ? seedGroupedActivitiesOnly()
+      : process.argv.includes("--withdrawal-balances-only")
+        ? seedWithdrawalBalancesOnly()
+      : seed())
   .catch((error) => { console.error(error); process.exitCode = 1; })
   .finally(async () => mongoose.disconnect());

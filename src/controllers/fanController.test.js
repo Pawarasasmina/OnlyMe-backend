@@ -75,7 +75,7 @@ test("activity helpers aggregate received saves by target without inventing acto
   const publication = { _id: "seen1", title: "Morning Espresso Ritual", kind: "SEEN", summary: "Counter seats halve the wait." };
   const rows = [
     { _id: "save1", type: "SAVE", publication, user: { _id: "fan1", name: "Fan One" }, createdAt: new Date("2026-09-01T10:00:00.000Z") },
-    { _id: "save2", type: "SAVE", publication, user: { _id: "fan2", name: "Fan Two" }, createdAt: new Date("2026-09-01T11:00:00.000Z") },
+    { _id: "save2", type: "SAVE", publication, user: { _id: "fan2", name: "Fan Two" }, createdAt: new Date("2026-09-01T11:00:00.000Z"), updatedAt: new Date("2026-09-02T11:00:00.000Z") },
   ];
 
   const [activity] = fanDashboardTestUtils.groupedSaveActivities(rows, { source: "seen" });
@@ -85,6 +85,7 @@ test("activity helpers aggregate received saves by target without inventing acto
   assert.equal(activity.filter, "saves");
   assert.equal(activity.title, "2 people saved your Seen");
   assert.deepEqual(activity.aggregate, { count: 2 });
+  assert.equal(activity.createdAt.toISOString(), "2026-09-02T11:00:00.000Z");
   assert.equal(activity.relatedCreator, null);
   assert.equal(activity.actionPath, "/seen/seen1");
 });
