@@ -164,7 +164,7 @@ function privacyKeysFor(role) {
 function notificationKeysFor(role) {
   return role === "admin"
     ? ["email", "inApp", "comments", "reactions", "security"]
-    : ["email", "inApp", "comments", "reactions", "followers", "saves", "reposts", "marketing", "messages", "directAccess"];
+    : ["email", "inApp", "comments", "reactions", "followers", "saves", "reposts", "marketing", "messages", "directAccess", "gifts"];
 }
 
 export function validateSettingsPayload(role, type, payload = {}) {
@@ -314,7 +314,15 @@ export function validateRoleProfilePayload(role, payload, user) {
         notificationPreferences: validateNotificationPreferences(payload.notificationPreferences, [
           "email",
           "inApp",
+          "comments",
+          "reactions",
+          "followers",
+          "saves",
+          "reposts",
           "marketing",
+          "messages",
+          "directAccess",
+          "gifts",
         ]),
       },
     };
@@ -335,7 +343,15 @@ export function validateRoleProfilePayload(role, payload, user) {
         notificationPreferences: validateNotificationPreferences(payload.notificationPreferences, [
           "email",
           "inApp",
+          "comments",
+          "reactions",
+          "followers",
+          "saves",
+          "reposts",
           "marketing",
+          "messages",
+          "directAccess",
+          "gifts",
         ]),
       },
     };

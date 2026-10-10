@@ -380,7 +380,7 @@ function groupedSaveActivities(rows, { source }) {
     const key = String(entity._id);
     const current = groups.get(key) || { rows: [], latest: row };
     current.rows.push(row);
-    if (new Date(row.createdAt) > new Date(current.latest.createdAt)) current.latest = row;
+    if (new Date(engagementTime(row)) > new Date(engagementTime(current.latest))) current.latest = row;
     groups.set(key, current);
   }
 
@@ -396,7 +396,7 @@ function groupedSaveActivities(rows, { source }) {
       filterKeys: ["saves"],
       title: `${group.rows.length} people saved your ${targetLabel}`,
       preview: target.preview,
-      createdAt: group.latest.createdAt,
+      createdAt: engagementTime(group.latest),
       target,
       aggregate: { count: group.rows.length },
       actionPath: source === "seen" ? publicationRoute(group.latest.publication) : `/posts/${group.latest.post._id}`,
@@ -998,7 +998,10 @@ export const getFanActivity = asyncHandler(async (req, res) => {
   const filter = normalizeActivityFilter(req.query.filter || req.query.type);
   const requestedLimit = limitFromQuery(req.query.limit, 30);
   const page = Math.max(1, Number(req.query.page) || 1);
-  const queryLimit = Math.min(100, Math.max(requestedLimit * page + 1, requestedLimit + 1));
+  // Activity is assembled from several independently queried sources and only
+  // then filtered by direction/category. A small pre-filter limit can be filled
+  // entirely by Sent rows, making a valid Received page appear empty.
+  const queryLimit = 100;
   const allActivity = await applyAcknowledgements(await getActivity(req.user._id, wallet, queryLimit));
   const filteredActivity = filterActivityItems(allActivity, { direction, filter });
   const activity = filteredActivity.slice(0, requestedLimit * page);

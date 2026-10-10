@@ -82,6 +82,7 @@ const creatorProfileSchema = new mongoose.Schema(
       marketing: { type: Boolean, default: false },
       messages: { type: Boolean, default: true },
       directAccess: { type: Boolean, default: true },
+      gifts: { type: Boolean, default: true },
     },
     verificationStatus: {
       type: String,

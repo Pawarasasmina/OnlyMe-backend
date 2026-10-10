@@ -61,6 +61,7 @@ function normalizeNotificationPreferences(role, preferences = {}) {
     marketing: preferences.marketing ?? false,
     messages: preferences.messages ?? true,
     directAccess: preferences.directAccess ?? true,
+    gifts: preferences.gifts ?? true,
   };
 }
 
