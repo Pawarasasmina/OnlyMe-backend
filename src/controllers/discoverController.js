@@ -21,6 +21,7 @@ import {
   sortDiscoverFriends,
 } from "../services/discoverFriendsService.js";
 import { canAccessPublicationAudience, seenVisibilityFilter } from "../services/publicationAccessService.js";
+import { publicationDeliveryUrl } from "../services/publicationMediaStorageService.js";
 import { getWallSawYouToday } from "../services/wallSeenTodayService.js";
 import { serializeProfileStatus } from "../services/statusService.js";
 import ApiError from "../utils/ApiError.js";
@@ -180,7 +181,8 @@ function serializeCreator(profile, meta = {}) {
 
 function publicationCover(publication = {}) {
   const safePublication = publication || {};
-  return safePublication.coverMedia?.secureUrl || safePublication.introMedia?.secureUrl || "";
+  const media = safePublication.coverMedia?.secureUrl ? safePublication.coverMedia : safePublication.introMedia;
+  return publicationDeliveryUrl(media) || media?.secureUrl || "";
 }
 
 function firstChapterMedia(publication = {}) {
@@ -683,16 +685,17 @@ async function discoverConnections({ blockedIds, previewByCreator, viewerId }) {
   };
 }
 
-function serializeDiscoverSeen(publication, engagementCounts = new Map()) {
+export function serializeDiscoverSeen(publication, engagementCounts = new Map()) {
   const owner = publication.creator || {};
   const metadata = publication.publishedSnapshot?.metadata || {};
   const chapters = publication.publishedSnapshot?.chapters || [];
+  const media = publication.coverMedia?.secureUrl ? publication.coverMedia : publication.introMedia;
   return {
     id: String(publication._id),
     title: cleanText(publication.title || metadata.title || "Untitled Seen", 120),
     cover: publicationCover(publication),
     coverImage: publicationCover(publication),
-    coverMedia: publication.coverMedia?.secureUrl ? publication.coverMedia : publication.introMedia || null,
+    coverMedia: media ? { ...media, secureUrl: publicationCover(publication) } : null,
     category: publication.category || metadata.category || "Seen",
     route: `/seen/${publication._id}`,
     engagementCount: engagementCounts.get(String(publication._id)) || 0,
