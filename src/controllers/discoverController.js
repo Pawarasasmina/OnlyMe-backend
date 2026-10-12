@@ -692,6 +692,7 @@ function serializeDiscoverSeen(publication, engagementCounts = new Map()) {
     title: cleanText(publication.title || metadata.title || "Untitled Seen", 120),
     cover: publicationCover(publication),
     coverImage: publicationCover(publication),
+    coverMedia: publication.coverMedia?.secureUrl ? publication.coverMedia : publication.introMedia || null,
     category: publication.category || metadata.category || "Seen",
     route: `/seen/${publication._id}`,
     engagementCount: engagementCounts.get(String(publication._id)) || 0,
