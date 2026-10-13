@@ -12,7 +12,7 @@ export const getAdminDashboard = asyncHandler(async (_req, res) => {
   const [totalUsers, fans, creators, admins, activeUsers, pendingCreators, publishedContent, draftContent, activeSubscriptions] =
     await Promise.all([
       User.countDocuments(),
-      User.countDocuments({ role: "fan" }),
+      User.countDocuments({ role: { $in: ["fan", "creator"] }, creatorApprovalStatus: { $ne: "approved" } }),
       User.countDocuments({ role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved" }),
       User.countDocuments({ role: "admin" }),
       User.countDocuments({ status: "active" }),
@@ -29,7 +29,15 @@ export const getAdminDashboard = asyncHandler(async (_req, res) => {
 
 export const listUsers = asyncHandler(async (req, res) => {
   const filter = {};
-  if (["fan", "creator", "admin"].includes(req.query.role)) filter.role = req.query.role;
+  if (req.query.role === "creator") {
+    filter.role = { $in: ["fan", "creator"] };
+    filter.creatorApprovalStatus = "approved";
+  } else if (req.query.role === "fan") {
+    filter.role = { $in: ["fan", "creator"] };
+    filter.creatorApprovalStatus = { $ne: "approved" };
+  } else if (req.query.role === "admin") {
+    filter.role = "admin";
+  }
   if (["active", "suspended"].includes(req.query.status)) filter.status = req.query.status;
 
   const users = await User.find(filter)
