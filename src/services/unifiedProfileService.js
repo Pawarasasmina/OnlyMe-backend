@@ -76,6 +76,7 @@ export function serializeUnifiedProfile({ content = [], entitledExperienceIds = 
   };
 
   if (capabilities.isOwner) {
+    profile.email = owner.email || "";
     profile.creatorApprovalStatus = owner.creatorApprovalStatus;
     profile.creatorApplicationStatus = roleProfile?.verificationStatus || "not_submitted";
   }
