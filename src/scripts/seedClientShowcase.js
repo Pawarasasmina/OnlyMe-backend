@@ -58,6 +58,28 @@ const creators = [
 ];
 
 const comments = ["This made the idea click for me.", "Exactly what I needed today.", "Saving this for my weekly reset.", "Clear, practical, and beautifully explained.", "I tried this and noticed a difference immediately."];
+const additionalVideoSeenTitles = [
+  "A 60-Second Reset for an Anxious Moment",
+  "An Evening Reset for a Better Tomorrow",
+  "Walk Into the Frame With Confidence",
+  "Build an Emergency Fund Without Panic",
+  "Three AI Tools That Save Real Time",
+  "Fix Your Squat With Three Simple Cues",
+  "Breathe With Your Nervous System",
+  "Direct a Portrait That Feels Natural",
+  "Set a Freelance Rate That Supports You",
+  "Morning Mobility for a Stiff Body",
+  "Catch a Stress Spiral Before It Grows",
+  "Pack Light for a Meaningful City Break",
+  "Style One Statement Piece Three Ways",
+  "Read an ETF Before You Invest",
+  "Build a Useful AI Assistant From Scratch",
+  "Warm Up for Strength and Endurance",
+  "Pause Before a Difficult Conversation",
+  "Plan a Creative Day Without Overloading It",
+  "Create Movement With Fabric and Light",
+  "Automate a Repetitive Founder Task",
+];
 const wallCopy = [
   (c) => ({ context: "RIGHT_NOW", text: `A small reminder from ${c.first}: consistency is allowed to look quiet. What is one promise you can keep today?` }),
   (c) => ({ context: c.category === "Fitness" ? "FITNESS" : c.category === "Lifestyle" ? "LIFESTYLE" : "WELLNESS", text: `Today in ${c.city}: testing a new idea for the community and keeping the useful parts simple. More soon.` }),
@@ -115,11 +137,15 @@ const coverIds = [
   "1556761175-b413da4baf72", "1571019613454-1cb2f99b2d8b",
 ];
 const seenCoverVideos = [
-  "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
-  "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
-  "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4",
-  "https://storage.googleapis.com/coverr-main/mp4/Mt_Baker.mp4",
+  { url: "https://res.cloudinary.com/demo/video/upload/dog.mp4", duration: 13.413, width: 854, height: 480 },
+  { url: "https://res.cloudinary.com/demo/video/upload/cld-sample-video.mp4", duration: 15.215, width: 1920, height: 1080 },
+  { url: "https://res.cloudinary.com/demo/video/upload/elephants.mp4", duration: 52.519, width: 1920, height: 1080 },
+  { url: "https://res.cloudinary.com/demo/video/upload/snow_deer.mp4", duration: 29.76, width: 1920, height: 1080 },
 ];
+
+function seenVideoFor(index) {
+  return seenCoverVideos[index % seenCoverVideos.length];
+}
 
 function media(key, url, mediaType = "IMAGE") {
   return { assetId: `${SOURCE}-${key}`, resourceType: mediaType === "VIDEO" ? "video" : "image", mediaType, secureUrl: url, format: mediaType === "VIDEO" ? "mp4" : "jpg" };
@@ -127,7 +153,8 @@ function media(key, url, mediaType = "IMAGE") {
 
 function seenCoverFor(c, creatorIndex, seenIndex) {
   if ((creatorIndex + seenIndex) % 4 === 0) {
-    return { ...media(`${c.username}-seen-${seenIndex}-cover`, seenCoverVideos[(creatorIndex + seenIndex) % seenCoverVideos.length], "VIDEO"), duration: 15, width: 1280, height: 720 };
+    const video = seenVideoFor(creatorIndex + seenIndex);
+    return { ...media(`${c.username}-seen-${seenIndex}-cover`, video.url, "VIDEO"), duration: video.duration, width: video.width, height: video.height };
   }
   return media(`${c.username}-seen-${seenIndex}-cover`, imageUrl(c, coverIds[(creatorIndex + seenIndex + 2) % coverIds.length]));
 }
@@ -151,11 +178,11 @@ async function seedUser(c, index, passwordHash) {
   return { ...c, id, avatar };
 }
 
-function seenChapters(c, seenIndex) {
-  const topic = c.seen[seenIndex];
+function seenChapters(c, seenIndex, topic = c.seen[seenIndex], insideVideo = null) {
   return [
     { title: "Start here", isPreview: true, blocks: [
       { type: "HIGHLIGHT", text: `${topic} starts with one honest observation, not a perfect plan.` },
+      ...(insideVideo?.url ? [{ type: "VIDEO", media: { ...media(`${c.username}-seen-${seenIndex}-inside-video`, insideVideo.url, "VIDEO"), duration: insideVideo.duration, width: insideVideo.width, height: insideVideo.height }, metadata: { label: "Watch the practical demonstration" } }] : []),
       { type: "TEXT", text: `Notice what is happening without judging it. ${c.first} explains a simple way to turn awareness into a useful next step.` },
     ] },
     { title: "Try this today", isPreview: true, blocks: [
@@ -439,6 +466,43 @@ async function seedSeenCoversOnly() {
   console.log(`Updated 40 showcase Seen covers: ${videoCount} videos and ${40 - videoCount} images.`);
 }
 
+async function seedAdditionalVideoSeensOnly() {
+  if (env.nodeEnv === "production") throw new Error("Refusing to seed client showcase data while NODE_ENV=production.");
+  await connectDb();
+  const rows = creators.map((creator) => ({ ...creator, id: objectId(`user:${creator.username}`) }));
+
+  for (const [ownerIndex, owner] of rows.entries()) {
+    const title = additionalVideoSeenTitles[ownerIndex];
+    const video = seenVideoFor(ownerIndex);
+    const publicationId = await seedPublication(owner, `${owner.username}-video-seen-0`, {
+      kind: "SEEN",
+      title,
+      summary: `A concise video-led ${owner.category.toLowerCase()} guide from ${owner.first} that you can put into practice today.`,
+      description: `${owner.first} demonstrates ${title.toLowerCase()} with clear context, a practical example, and a small next step.`,
+      tags: [owner.category.toLowerCase(), "video", "practical"],
+      coverMedia: { ...media(`${owner.username}-video-seen-0-cover`, video.url, "VIDEO"), duration: video.duration, width: video.width, height: video.height },
+      pricing: { mode: "FREE", starsAmount: null, presetId: null },
+      planet: { slot: null, emoji: "", accent: `#${owner.color}` },
+      chapters: seenChapters(owner, 2, title, video),
+    }, at(ownerIndex / 3 + 0.5));
+
+    const actors = rows.filter((row) => String(row.id) !== String(owner.id));
+    await SeenEngagement.deleteMany({ publication: publicationId, user: { $in: rows.map((row) => row.id) } });
+    const engagements = [];
+    actors.forEach((actor, actorIndex) => {
+      const stamp = at(ownerIndex / 3 + actorIndex / 20 + 0.25);
+      engagements.push({ publication: publicationId, user: actor.id, type: "REACTION", reaction: ["LOVE", "INSIGHTFUL", "CLAP", "FIRE", "WOW", "HUNDRED", "SPARKLES", "STRONG", "PRAY"][(ownerIndex + actorIndex) % 9], createdAt: stamp, updatedAt: stamp });
+      if (actorIndex < 8) engagements.push({ _id: objectId(`video-seen-comment:${publicationId}:${actor.id}`), publication: publicationId, user: actor.id, type: "COMMENT", text: comments[(ownerIndex + actorIndex) % comments.length], createdAt: stamp, updatedAt: stamp });
+      if (actorIndex < 6) engagements.push({ publication: publicationId, user: actor.id, type: "SAVE", createdAt: stamp, updatedAt: stamp });
+      if (actorIndex < 3) engagements.push({ publication: publicationId, user: actor.id, type: "SHARE", reaction: "LIKE", text: ["This video makes the idea easy to use.", "Sharing this practical walkthrough.", "A clear guide worth revisiting."][actorIndex], createdAt: stamp, updatedAt: stamp });
+    });
+    await SeenEngagement.insertMany(engagements);
+  }
+
+  console.table(rows.map((creator, index) => ({ creator: `${creator.first} ${creator.last}`, category: creator.category, seen: additionalVideoSeenTitles[index], cover: "VIDEO" })));
+  console.log(`Added ${rows.length} category-matched Seens with video covers, chapters, reactions, comments, saves, and reposts.`);
+}
+
 async function seedGroupedActivitiesOnly() {
   if (env.nodeEnv === "production") throw new Error("Refusing to seed client showcase data while NODE_ENV=production.");
   await connectDb();
@@ -540,6 +604,8 @@ async function seedWithdrawalBalancesOnly() {
   ? seedStatusesOnly()
   : process.argv.includes("--seen-covers-only")
     ? seedSeenCoversOnly()
+    : process.argv.includes("--additional-video-seens-only")
+      ? seedAdditionalVideoSeensOnly()
     : process.argv.includes("--grouped-activities-only")
       ? seedGroupedActivitiesOnly()
       : process.argv.includes("--withdrawal-balances-only")
