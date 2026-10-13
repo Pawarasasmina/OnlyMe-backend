@@ -454,7 +454,7 @@ export const updateMyProfile = asyncHandler(async (req, res) => {
   }
 
   if (Object.keys(profileUpdates).length) {
-    const Model = profileModels[req.user.role];
+    const Model = profileModels[effectiveProfileRole(req.user)];
 
     await Model.updateOne(
       { user: req.user._id },
