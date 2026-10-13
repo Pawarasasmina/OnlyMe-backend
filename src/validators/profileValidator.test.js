@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { validateRoleProfilePayload, validateUsername } from "./profileValidator.js";
+import { validateEmail, validateRoleProfilePayload, validateUsername } from "./profileValidator.js";
 
 test("normalizes valid usernames", () => {
   assert.equal(validateUsername("@Creator.Name_01"), "creator.name_01");
@@ -14,11 +14,20 @@ test("rejects unsafe username formats", () => {
   assert.throws(() => validateUsername("bad handle"), /letters, numbers/);
 });
 
-test("rejects username changes after registration", () => {
-  assert.throws(
-    () => validateRoleProfilePayload("fan", { username: "another_name" }, { isVerified: false }),
-    /cannot be changed/i
-  );
+test("allows and normalizes username changes for every profile role", () => {
+  for (const role of ["fan", "creator", "admin"]) {
+    const result = validateRoleProfilePayload(role, { username: "@Another.Name" }, { isVerified: false });
+    assert.equal(result.common.username, "another.name");
+  }
+});
+
+test("allows normalized email changes and rejects invalid addresses", () => {
+  assert.equal(validateEmail(" Person@Example.COM "), "person@example.com");
+  assert.throws(() => validateEmail("not-an-email"), /valid email/i);
+  for (const role of ["fan", "creator", "admin"]) {
+    const result = validateRoleProfilePayload(role, { email: "New@Example.com" }, { isVerified: false });
+    assert.equal(result.common.email, "new@example.com");
+  }
 });
 
 test("rejects creator-only NSFW toggle when user is not verified", () => {

@@ -67,6 +67,14 @@ export function validateUsername(username) {
   return normalized;
 }
 
+export function validateEmail(email) {
+  const normalized = String(email ?? "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) || normalized.length > 254) {
+    throw new ApiError(400, "A valid email address is required");
+  }
+  return normalized;
+}
+
 export function validateDisplayName(name) {
   const displayName = sanitizeText(name, 50);
 
@@ -254,7 +262,11 @@ export function validateRoleProfilePayload(role, payload, user) {
   }
 
   if (payload.username !== undefined) {
-    throw new ApiError(400, "Username cannot be changed after registration");
+    common.username = validateUsername(payload.username);
+  }
+
+  if (payload.email !== undefined) {
+    common.email = validateEmail(payload.email);
   }
 
   const preferredLanguage =

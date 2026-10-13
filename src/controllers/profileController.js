@@ -449,8 +449,25 @@ export const updateMyProfile = asyncHandler(async (req, res) => {
   const commonUpdates = stripUndefined(common);
   const profileUpdates = stripUndefined(profile);
 
+  if (commonUpdates.username && commonUpdates.username !== req.user.username) {
+    const usernameTaken = await User.exists({ username: commonUpdates.username, _id: { $ne: req.user._id } });
+    if (usernameTaken) throw new ApiError(409, "That username is already taken");
+  }
+  if (commonUpdates.email && commonUpdates.email !== req.user.email) {
+    const emailTaken = await User.exists({ email: commonUpdates.email, _id: { $ne: req.user._id } });
+    if (emailTaken) throw new ApiError(409, "That email address is already in use");
+  }
+
   if (Object.keys(commonUpdates).length) {
-    await User.updateOne({ _id: req.user._id }, { $set: commonUpdates });
+    try {
+      await User.updateOne({ _id: req.user._id }, { $set: commonUpdates }, { runValidators: true });
+    } catch (error) {
+      if (error?.code === 11000) {
+        if (error?.keyPattern?.email || error?.keyValue?.email) throw new ApiError(409, "That email address is already in use");
+        throw new ApiError(409, "That username is already taken");
+      }
+      throw error;
+    }
   }
 
   if (Object.keys(profileUpdates).length) {
