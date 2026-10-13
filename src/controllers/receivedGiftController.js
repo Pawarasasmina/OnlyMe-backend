@@ -1,5 +1,6 @@
 import ChatGift from "../models/ChatGift.js";
 import DreamGift from "../models/DreamGift.js";
+import Gift from "../models/Gift.js";
 import MessageReport from "../models/MessageReport.js";
 import Notification from "../models/Notification.js";
 import User from "../models/User.js";
@@ -44,9 +45,10 @@ function serializeGift(gift, kind, senderUser, hiddenSender = false) {
 
 export const getMyReceivedGifts = asyncHandler(async (req, res) => {
   const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 60));
+  const activeGiftIds = await Gift.find({ isActive: true }).distinct("_id");
   const [chatGifts, dreamGifts] = await Promise.all([
-    ChatGift.find({ recipient: req.user._id }).sort({ createdAt: -1 }).limit(limit).populate("sender", "name username avatar").lean(),
-    DreamGift.find({ creator: req.user._id }).sort({ createdAt: -1 }).limit(limit).populate("supporter", "name username avatar").lean(),
+    ChatGift.find({ recipient: req.user._id, gift: { $in: activeGiftIds } }).sort({ createdAt: -1 }).limit(limit).populate("sender", "name username avatar").lean(),
+    DreamGift.find({ creator: req.user._id, gift: { $in: activeGiftIds } }).sort({ createdAt: -1 }).limit(limit).populate("supporter", "name username avatar").lean(),
   ]);
   const gifts = [
     ...chatGifts.map((gift) => serializeGift(gift, "chat", gift.sender)),
@@ -130,9 +132,10 @@ export const getPublicReceivedGifts = asyncHandler(async (req, res) => {
   const owner = await User.findOne({ username: String(req.params.username || "").toLowerCase(), status: "active" }).select("_id").lean();
   if (!owner) throw new ApiError(404, "Profile not found");
   const limit = Math.min(12, Math.max(1, Number(req.query.limit) || 12));
+  const activeGiftIds = await Gift.find({ isActive: true }).distinct("_id");
   const [chatGifts, dreamGifts] = await Promise.all([
-    ChatGift.find({ recipient: owner._id, visibility: "EVERYONE", hiddenFromProfile: { $ne: true } }).sort({ featuredOnProfile: -1, createdAt: -1 }).limit(limit).lean(),
-    DreamGift.find({ creator: owner._id, privateSupport: false, hiddenFromProfile: { $ne: true } }).sort({ featuredOnProfile: -1, createdAt: -1 }).limit(limit).lean(),
+    ChatGift.find({ recipient: owner._id, gift: { $in: activeGiftIds }, visibility: "EVERYONE", hiddenFromProfile: { $ne: true } }).sort({ featuredOnProfile: -1, createdAt: -1 }).limit(limit).lean(),
+    DreamGift.find({ creator: owner._id, gift: { $in: activeGiftIds }, privateSupport: false, hiddenFromProfile: { $ne: true } }).sort({ featuredOnProfile: -1, createdAt: -1 }).limit(limit).lean(),
   ]);
   const gifts = [
     ...chatGifts.map((gift) => serializeGift(gift, "chat")),
