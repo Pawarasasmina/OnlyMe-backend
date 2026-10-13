@@ -751,7 +751,7 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
     }
     if (hiddenPublicationIds.length) filter._id = { $nin: hiddenPublicationIds };
   }
-  const items = await Publication.find(filter).sort({ publishedAt: -1 }).skip((paging.page - 1) * paging.limit).limit(paging.limit).populate("creator", "name username avatar isVerified activeStatus").populate("series", "name").lean();
+  const items = await Publication.find(filter).sort({ publishedAt: -1, _id: -1 }).skip((paging.page - 1) * paging.limit).limit(paging.limit).populate("creator", "name username avatar isVerified activeStatus").populate("series", "name").lean();
   await attachEntityMetadata(items, req.user || null);
   const publicationIds = items.map((item) => item._id);
   const creatorIds = [...new Set(items.map((item) => String(item.creator?._id || item.creator)).filter(Boolean))];
