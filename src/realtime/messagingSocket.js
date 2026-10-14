@@ -105,7 +105,7 @@ export function configureMessagingSocket(io) {
             await refundPaidCall(paidCall._id, "CREATOR_AWAY").catch(() => {});
             throw new Error("The creator is away. Your Stars were refunded");
           }
-          const payload = { callId: String(paidCall._id), type: paidCall.type, requested: true, paid: true, priceStars: paidCall.priceStars, durationLimitSeconds: paidCall.durationLimitSeconds, caller: { id: userId, displayName: socket.user.name, username: socket.user.username, avatarUrl: socket.user.avatar || null }, createdAt: paidCall.createdAt };
+          const payload = { callId: String(paidCall._id), type: paidCall.type, requested: true, paid: true, topic: paidCall.topic || "", priority: Boolean(paidCall.priority), priceStars: paidCall.priceStars, durationLimitSeconds: paidCall.durationLimitSeconds, caller: { id: userId, displayName: socket.user.name, username: socket.user.username, avatarUrl: socket.user.avatar || null }, createdAt: paidCall.createdAt };
           io.to(`user:${paidCall.recipient}`).emit("call:incoming", payload);
           if (typeof reply === "function") reply({ ok: true, call: payload });
           return;

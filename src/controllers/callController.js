@@ -33,6 +33,6 @@ export const getPaidCallOffer = asyncHandler(async (req, res) => {
 
 export const requestPaidCall = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.creatorId)) throw new ApiError(400, "Invalid creator id");
-  const result = await openPaidCall({ fan: req.user, creatorId: req.params.creatorId, key: req.body.idempotencyKey, type: req.body.type });
+  const result = await openPaidCall({ fan: req.user, creatorId: req.params.creatorId, key: req.body.idempotencyKey, type: req.body.type, topic: req.body.topic, priority: req.body.priority });
   return sendResponse(res, 201, "Paid call requested", result);
 });
