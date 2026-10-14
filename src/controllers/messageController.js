@@ -16,6 +16,7 @@ import GroupMessage from "../models/GroupMessage.js";
 import Gift from "../models/Gift.js";
 import ChatGift from "../models/ChatGift.js";
 import Notification from "../models/Notification.js";
+import CallSession from "../models/CallSession.js";
 import PremiumMembership from "../models/PremiumMembership.js";
 import WorldEntitlement from "../models/WorldEntitlement.js";
 import DreamGift from "../models/DreamGift.js";
@@ -352,10 +353,11 @@ export const listConversations = asyncHandler(async (req, res) => {
   const userById = new Map(users.map((item) => [String(item._id), item]));
   const conversationStates = await Conversation.find({ $or: [{ fan: me }, { creator: me }, { participants: me }] }).lean();
   const otherIds = grouped.map((item) => item._id);
-  const [memberships, entitlements, dreamSupporterIds] = await Promise.all([
+  const [memberships, entitlements, dreamSupporterIds, priorityCalls] = await Promise.all([
     PremiumMembership.find({ creator: me, user: { $in: otherIds }, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] } }).select("user").lean(),
     WorldEntitlement.find({ creator: me, user: { $in: otherIds }, status: "ACTIVE" }).select("user publication metadata").lean(),
     DreamGift.find({ creator: me, supporter: { $in: otherIds } }).distinct("supporter"),
+    CallSession.find({ priority: true, paid: true, settlementStatus: "HELD", status: { $in: ["REQUESTED", "RINGING"] }, $or: [{ caller: me }, { recipient: me }] }).sort({ createdAt: -1 }).select("caller recipient createdAt").lean(),
   ]);
   const experiencePublicationIds = await Publication.find({
     _id: { $in: entitlements.map((item) => item.publication) },
@@ -365,6 +367,11 @@ export const listConversations = asyncHandler(async (req, res) => {
   const memberIds = new Set(memberships.map((item) => String(item.user)));
   const experienceBuyerIds = new Set(entitlements.filter((item) => item.metadata?.publicationKind === "EXPERIENCE" || experiencePublicationSet.has(String(item.publication))).map((item) => String(item.user)));
   const dreamKeeperIds = new Set(dreamSupporterIds.map(String));
+  const priorityCallByOther = new Map();
+  priorityCalls.forEach((call) => {
+    const otherId = String(call.caller) === String(me) ? String(call.recipient) : String(call.caller);
+    if (!priorityCallByOther.has(otherId)) priorityCallByOther.set(otherId, call.createdAt);
+  });
   const stateByOther = new Map(conversationStates.flatMap((item) => {
     const ids = item.participants?.length ? item.participants : [item.fan, item.creator];
     const otherId = ids.find((id) => String(id) !== String(me));
@@ -383,6 +390,8 @@ export const listConversations = asyncHandler(async (req, res) => {
       isWorldMember: memberIds.has(String(item._id)),
       unlockedExperience: experienceBuyerIds.has(String(item._id)),
       isDreamKeeper: dreamKeeperIds.has(String(item._id)),
+      hasPriorityCall: priorityCallByOther.has(String(item._id)),
+      priorityCallRequestedAt: priorityCallByOther.get(String(item._id)) || null,
       status: stateByOther.get(String(item._id))?.status || "ACTIVE",
       archived: (stateByOther.get(String(item._id))?.archivedBy || []).some((id) => String(id) === String(me)),
       muted: (stateByOther.get(String(item._id))?.mutedBy || []).some((id) => String(id) === String(me)),
@@ -390,6 +399,10 @@ export const listConversations = asyncHandler(async (req, res) => {
         ? String(stateByOther.get(String(item._id)).requestRecipient) === String(me)
         : String(stateByOther.get(String(item._id))?.creator) === String(me)),
     }];
+  }).sort((left, right) => {
+    if (left.hasPriorityCall !== right.hasPriorityCall) return left.hasPriorityCall ? -1 : 1;
+    if (left.hasPriorityCall) return new Date(right.priorityCallRequestedAt).getTime() - new Date(left.priorityCallRequestedAt).getTime();
+    return new Date(right.lastMessage?.createdAt || 0).getTime() - new Date(left.lastMessage?.createdAt || 0).getTime();
   });
   return sendResponse(res, 200, "Conversations fetched", { conversations });
 });
