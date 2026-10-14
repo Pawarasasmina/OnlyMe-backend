@@ -13,12 +13,13 @@ import { fingerprint, idempotencyKey } from "../validators/financialValidator.js
 
 export const PAID_CALL_REQUEST_MS = 48 * 60 * 60 * 1000;
 export const PAID_CALL_PLATFORM_RATE_BPS = 2000;
+export const PAID_CALL_PRIORITY_STARS = 200;
 
 export function serializePaidCall(call) {
   if (!call) return null;
   return {
     id: String(call._id), callerId: String(call.caller?._id || call.caller), recipientId: String(call.recipient?._id || call.recipient),
-    type: call.type, status: call.status, paid: Boolean(call.paid), priceStars: call.priceStars || 0,
+    type: call.type, status: call.status, paid: Boolean(call.paid), topic: call.topic || "", priority: Boolean(call.priority), basePriceStars: call.basePriceStars || call.priceStars || 0, priceStars: call.priceStars || 0,
     durationLimitSeconds: call.durationLimitSeconds || 0, settlementStatus: call.settlementStatus || "FREE",
     requestExpiresAt: call.requestExpiresAt, connectedAt: call.connectedAt, createdAt: call.createdAt,
   };
@@ -34,26 +35,31 @@ export async function paidCallOffer(fan, creatorId) {
   ]);
   if (!creator || !profile) throw new ApiError(404, "Creator not found");
   if (blocked) throw new ApiError(403, "Calling is unavailable for this account");
-  return { enabled: Boolean(profile.directCallEnabled), priceStars: profile.directCallPriceStars || 500, durationMinutes: profile.directCallDurationMinutes || 5, autoDeclineWhenAway: Boolean(profile.directCallAutoDeclineAway), walletBalance: wallet?.balance ?? 0, creator };
+  return { enabled: Boolean(profile.directCallEnabled), priceStars: profile.directCallPriceStars || 500, priorityPriceStars: PAID_CALL_PRIORITY_STARS, durationMinutes: profile.directCallDurationMinutes || 5, autoDeclineWhenAway: Boolean(profile.directCallAutoDeclineAway), walletBalance: wallet?.balance ?? 0, creator };
 }
 
-export async function openPaidCall({ fan, creatorId, key, type = "AUDIO" }) {
+export async function openPaidCall({ fan, creatorId, key, type = "AUDIO", topic = "", priority = false }) {
   key = idempotencyKey(key);
   const offer = await paidCallOffer(fan, creatorId);
   if (!offer.enabled) throw new ApiError(403, "This creator is not accepting paid calls");
-  const { creator, priceStars, durationMinutes } = offer;
+  const { creator, durationMinutes } = offer;
+  const normalizedTopic = String(topic || "").trim().slice(0, 160);
+  if (!normalizedTopic) throw new ApiError(400, "Tell the creator what you want to discuss");
+  const isPriority = priority === true;
+  const basePriceStars = offer.priceStars;
+  const priceStars = basePriceStars + (isPriority ? offer.priorityPriceStars : 0);
   return executeFinancialCommand({
     user: fan._id, commandType: "OPEN_PAID_CALL", idempotencyKey: key,
-    requestFingerprint: fingerprint({ creatorId: String(creator._id), priceStars, durationMinutes, type }),
+    requestFingerprint: fingerprint({ creatorId: String(creator._id), priceStars, durationMinutes, type, topic: normalizedTopic, priority: isPriority }),
   }, async (session, command) => {
     const existing = await CallSession.findOne({ status: { $in: ["REQUESTED", "RINGING", "ACTIVE"] }, $or: [{ caller: { $in: [fan._id, creator._id] } }, { recipient: { $in: [fan._id, creator._id] } }] }).session(session);
     if (existing) throw new ApiError(409, "One of you already has an active call request", "CALL_ALREADY_ACTIVE");
     const now = new Date();
-    const [call] = await CallSession.create([{ caller: fan._id, recipient: creator._id, type: type === "VIDEO" ? "VIDEO" : "AUDIO", status: "REQUESTED", paid: true, priceStars, durationLimitSeconds: durationMinutes * 60, settlementStatus: "HELD", requestExpiresAt: new Date(now.getTime() + PAID_CALL_REQUEST_MS), openingCommand: command._id }], { session });
+    const [call] = await CallSession.create([{ caller: fan._id, recipient: creator._id, type: type === "VIDEO" ? "VIDEO" : "AUDIO", status: "REQUESTED", paid: true, topic: normalizedTopic, priority: isPriority, basePriceStars, priceStars, durationLimitSeconds: durationMinutes * 60, settlementStatus: "HELD", requestExpiresAt: new Date(now.getTime() + PAID_CALL_REQUEST_MS), openingCommand: command._id }], { session });
     const held = await debitWallet({ user: fan._id, amount: priceStars, entryType: "CALL_HOLD_DEBIT", entryRole: "FAN_CALL_HOLD", referenceType: "PAID_CALL", referenceId: call._id, creator: creator._id, counterpartyUser: creator._id, command, idempotencyKey: key, metadata: { settlementStatus: "HELD", durationMinutes, requestExpiresAt: call.requestExpiresAt } }, session);
     call.holdLedgerEntry = held.entry._id;
     await call.save({ session });
-    await Notification.create([{ user: creator._id, type: "paid_call_requested", title: `${fan.name || "A fan"} requested a ${durationMinutes}-minute call`, dedupeKey: `paid-call:${call._id}` }], { session });
+    await Notification.create([{ user: creator._id, type: "paid_call_requested", title: `${fan.name || "A fan"} requested a ${durationMinutes}-minute${isPriority ? " priority" : ""} call`, message: normalizedTopic, dedupeKey: `paid-call:${call._id}` }], { session });
     return { resultReference: call._id, call: serializePaidCall(call), wallet: safeWallet(held.wallet) };
   });
 }

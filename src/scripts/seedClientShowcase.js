@@ -80,6 +80,28 @@ const additionalVideoSeenTitles = [
   "Create Movement With Fabric and Light",
   "Automate a Repetitive Founder Task",
 ];
+const additionalVideoSeenChapterTitles = [
+  ["Spot the anxiety signal", "Follow the guided reset", "Name what is controllable", "Build your return cue", "Use it next time"],
+  ["Close the open loops", "Reset the room", "Prepare tomorrow gently", "Protect the final hour"],
+  ["Find your grounded stance", "Lead with your eyeline", "Move between poses", "Review the final walk", "Practice before casting"],
+  ["Choose a calm target", "Find room in the budget", "Automate the first transfer", "Handle an unexpected expense"],
+  ["Choose work worth automating", "Tool one: research faster", "Tool two: shape the draft", "Tool three: check the result", "Keep human judgment"],
+  ["Read your starting position", "Create stable foot pressure", "Track knees and hips", "Test the three cues"],
+  ["Notice before changing", "Match the breathing rhythm", "Lengthen the exhale", "Return to the room", "Make it a daily anchor"],
+  ["Create safety on set", "Give one clear direction", "Capture movement between poses", "Select the honest frame"],
+  ["Calculate your real baseline", "Price the value and scope", "Say the rate clearly", "Respond without discounting", "Review after the project"],
+  ["Check today's range", "Open the hips", "Wake up the spine", "Build a repeatable flow"],
+  ["Recognize the first signal", "Interrupt the stress story", "Ground through the senses", "Choose the next useful action", "Reflect without judgment"],
+  ["Choose the purpose of the trip", "Build a small color palette", "Pack for real moments", "Leave room for discovery"],
+  ["Choose the statement piece", "Look one: quiet balance", "Look two: useful layers", "Look three: evening contrast", "Photograph your combinations"],
+  ["Know what the fund owns", "Read cost and tracking", "Check risk and diversification", "Make a patient decision"],
+  ["Define one useful job", "Give the assistant context", "Add tools and boundaries", "Test difficult requests", "Improve from real use"],
+  ["Raise temperature gradually", "Prepare the strength pattern", "Prime the aerobic system", "Check readiness before training"],
+  ["Catch the urge to react", "Create a short pause", "Name the shared problem", "Make a repair invitation", "Return when both are ready"],
+  ["Choose the day's creative win", "Protect the best energy", "Group the small tasks", "Plan a clean stopping point"],
+  ["Read the fabric first", "Shape motion with direction", "Use light to reveal texture", "Capture the transition", "Choose the strongest frame"],
+  ["Find the repeated founder task", "Map the current workflow", "Build the smallest automation", "Add a human checkpoint"],
+];
 const wallCopy = [
   (c) => ({ context: "RIGHT_NOW", text: `A small reminder from ${c.first}: consistency is allowed to look quiet. What is one promise you can keep today?` }),
   (c) => ({ context: c.category === "Fitness" ? "FITNESS" : c.category === "Lifestyle" ? "LIFESTYLE" : "WELLNESS", text: `Today in ${c.city}: testing a new idea for the community and keeping the useful parts simple. More soon.` }),
@@ -191,6 +213,35 @@ function seenChapters(c, seenIndex, topic = c.seen[seenIndex], insideVideo = nul
       { type: "TEXT", text: "Keep the experiment small, pay attention to the result, and adjust with curiosity rather than pressure." },
     ] },
   ];
+}
+
+function additionalVideoSeenChapters(c, creatorIndex, topic, video) {
+  const titles = additionalVideoSeenChapterTitles[creatorIndex];
+  return titles.map((title, chapterIndex) => {
+    if (chapterIndex === 0) return { title, isPreview: true, blocks: [
+      { type: "HIGHLIGHT", text: `${c.first} begins ${topic.toLowerCase()} by showing what to notice before taking action.` },
+      { type: "VIDEO", media: { ...media(`${c.username}-video-seen-0-demonstration`, video.url, "VIDEO"), duration: video.duration, width: video.width, height: video.height }, metadata: { label: `${title} demonstration` } },
+      { type: "TEXT", text: `Watch the demonstration once, then return to the moment that matters most for your own ${c.category.toLowerCase()} practice.` },
+    ] };
+    if (chapterIndex === 1) return { title, isPreview: true, blocks: [
+      { type: "KEY_POINT", text: `${title} works best when the next step is specific, observable, and small enough to repeat.` },
+      { type: "TEXT", text: `${c.first} breaks this stage into a simple sequence and explains the common mistake that makes it harder than necessary.` },
+    ] };
+    if (chapterIndex === 2) return { title, isPreview: true, blocks: [
+      { type: "IMAGE", media: media(`${c.username}-video-seen-0-chapter-${chapterIndex}`, imageUrl(c, coverIds[(creatorIndex + chapterIndex) % coverIds.length], 1200, 900)), metadata: { label: `${title} in practice` } },
+      { type: "TEXT", text: `Use this example as a reference, then adapt ${title.toLowerCase()} to your own situation instead of copying it perfectly.` },
+    ] };
+    if (chapterIndex === titles.length - 1) return { title, isPreview: true, blocks: [
+      { type: "HIGHLIGHT", text: `Turn the lesson into one action you can complete today.` },
+      { type: "POLL", metadata: { question: `Which part of “${topic}” will you try first?`, options: ["The first step", "The demonstration", "The reflection", "The full practice"], resultsVisibility: "SUBSCRIBERS" } },
+      { type: "TEXT", text: `Save the Seen, try the practice, and return with one observation about what changed.` },
+    ] };
+    return { title, isPreview: true, blocks: [
+      { type: "KEY_POINT", text: `Focus on consistency here—not intensity or perfection.` },
+      { type: "LIST", metadata: { listItems: [`Notice the starting point`, `Try ${title.toLowerCase()}`, "Check the result", "Adjust one detail"] } },
+      { type: "TEXT", text: `${c.first} connects this step to the complete ${topic.toLowerCase()} process.` },
+    ] };
+  });
 }
 
 function normalizeChapters(key, chapters) {
@@ -483,7 +534,7 @@ async function seedAdditionalVideoSeensOnly() {
       coverMedia: { ...media(`${owner.username}-video-seen-0-cover`, video.url, "VIDEO"), duration: video.duration, width: video.width, height: video.height },
       pricing: { mode: "FREE", starsAmount: null, presetId: null },
       planet: { slot: null, emoji: "", accent: `#${owner.color}` },
-      chapters: seenChapters(owner, 2, title, video),
+      chapters: additionalVideoSeenChapters(owner, ownerIndex, title, video),
     }, at(ownerIndex / 3 + 0.5));
 
     const actors = rows.filter((row) => String(row.id) !== String(owner.id));
