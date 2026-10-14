@@ -11,7 +11,7 @@ import { executeFinancialCommand } from "./financialCommandService.js";
 import { creditWallet, debitWallet, safeWallet } from "./walletLedgerService.js";
 import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
 
-export const PAID_CALL_REQUEST_MS = 48 * 60 * 60 * 1000;
+export const PAID_CALL_REQUEST_MS = 24 * 60 * 60 * 1000;
 export const PAID_CALL_PLATFORM_RATE_BPS = 2000;
 export const PAID_CALL_PRIORITY_STARS = 200;
 
@@ -21,7 +21,7 @@ export function serializePaidCall(call) {
     id: String(call._id), callerId: String(call.caller?._id || call.caller), recipientId: String(call.recipient?._id || call.recipient),
     type: call.type, status: call.status, paid: Boolean(call.paid), topic: call.topic || "", priority: Boolean(call.priority), basePriceStars: call.basePriceStars || call.priceStars || 0, priceStars: call.priceStars || 0,
     durationLimitSeconds: call.durationLimitSeconds || 0, settlementStatus: call.settlementStatus || "FREE",
-    requestExpiresAt: call.requestExpiresAt, connectedAt: call.connectedAt, createdAt: call.createdAt,
+    requestExpiresAt: call.requestExpiresAt, scheduledFor: call.scheduledFor, connectedAt: call.connectedAt, createdAt: call.createdAt,
   };
 }
 
@@ -103,10 +103,35 @@ export async function capturePaidCall(callId, now = new Date()) {
 }
 
 export async function processDuePaidCalls(now = new Date(), io = null) {
+  const reminders = await CallSession.find({ paid: true, status: "REQUESTED", settlementStatus: "HELD", scheduledFor: { $gt: now, $lte: new Date(now.getTime() + 10 * 60 * 1000) }, reminderSentAt: null, rescheduleRequestedBy: null }).populate("caller recipient", "name").limit(100);
+  for (const call of reminders) {
+    call.reminderSentAt = now;
+    await call.save();
+    await Notification.insertMany([
+      { user: call.caller._id, type: "paid_call_reminder", title: `Call with ${call.recipient.name} starts in 10 minutes`, message: `Scheduled for ${call.scheduledFor.toISOString()}`, priority: 70, dedupeKey: `paid-call-reminder:caller:${call._id}` },
+      { user: call.recipient._id, type: "paid_call_reminder", title: `Call with ${call.caller.name} starts in 10 minutes`, message: `Scheduled for ${call.scheduledFor.toISOString()}`, priority: 70, dedupeKey: `paid-call-reminder:recipient:${call._id}` },
+    ]).catch(() => {});
+    io?.to(`user:${call.caller._id}`).emit("call:reminder", { callId: String(call._id), scheduledFor: call.scheduledFor, person: { id: String(call.recipient._id), displayName: call.recipient.name } });
+    io?.to(`user:${call.recipient._id}`).emit("call:reminder", { callId: String(call._id), scheduledFor: call.scheduledFor, person: { id: String(call.caller._id), displayName: call.caller.name } });
+    io?.to(`user:${call.caller._id}`).to(`user:${call.recipient._id}`).emit("activity:updated", { type: "paid_call_reminder", callId: String(call._id) });
+  }
+  const scheduled = await CallSession.find({ paid: true, status: "REQUESTED", settlementStatus: "HELD", scheduledFor: { $lte: now }, scheduledPromptSentAt: null, rescheduleRequestedBy: null }).populate("caller recipient", "name username avatar").limit(100);
+  for (const call of scheduled) {
+    call.scheduledPromptSentAt = now;
+    await call.save();
+    const caller = { id: String(call.caller._id), displayName: call.caller.name, username: call.caller.username, avatarUrl: call.caller.avatar || null };
+    const recipient = { id: String(call.recipient._id), displayName: call.recipient.name, username: call.recipient.username, avatarUrl: call.recipient.avatar || null };
+    io?.to(`user:${call.recipient._id}`).emit("call:incoming", { callId: String(call._id), type: call.type, requested: true, scheduled: true, paid: true, topic: call.topic || "", priority: Boolean(call.priority), priceStars: call.priceStars, durationLimitSeconds: call.durationLimitSeconds, caller });
+    io?.to(`user:${call.caller._id}`).emit("call:scheduled-outgoing", { callId: String(call._id), type: call.type, paid: true, topic: call.topic || "", priority: Boolean(call.priority), priceStars: call.priceStars, durationLimitSeconds: call.durationLimitSeconds, person: recipient });
+    await Notification.insertMany([
+      { user: call.caller._id, type: "paid_call_ready", title: `Your call with ${call.recipient.name} is ready`, dedupeKey: `paid-call-ready:caller:${call._id}` },
+      { user: call.recipient._id, type: "paid_call_ready", title: `${call.caller.name} is ready to call`, dedupeKey: `paid-call-ready:recipient:${call._id}` },
+    ]).catch(() => {});
+  }
   const due = await CallSession.find({ paid: true, settlementStatus: "HELD", requestExpiresAt: { $lte: now } }).select("_id").limit(200).lean();
   for (const item of due) {
     try { const result = await refundPaidCall(item._id, "REQUEST_EXPIRED", now); if (result?.call) io?.to(`user:${result.call.callerId}`).to(`user:${result.call.recipientId}`).emit("call:settlement", result.call); }
     catch { await CallSession.updateOne({ _id: item._id, settlementStatus: "HELD" }, { $set: { settlementStatus: "REFUND_PENDING" } }).catch(() => {}); }
   }
-  return { refunded: due.length };
+  return { reminded: reminders.length, prompted: scheduled.length, refunded: due.length };
 }

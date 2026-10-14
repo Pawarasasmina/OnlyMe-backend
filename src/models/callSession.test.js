@@ -11,6 +11,8 @@ test("call sessions persist a constrained WebRTC lifecycle", () => {
   assert.equal(CallSession.schema.path("topic").options.maxlength, 160);
   assert.equal(CallSession.schema.path("priority").options.default, false);
   assert.equal(CallSession.schema.path("basePriceStars").options.min, 0);
+  assert.equal(CallSession.schema.path("scheduledFor").options.default, null);
+  assert.equal(CallSession.schema.path("scheduledPromptSentAt").options.default, null);
   assert.deepEqual(CallSession.schema.path("settlementStatus").enumValues, ["FREE", "HELD", "CAPTURED", "REFUND_PENDING", "REFUNDED"]);
   assert.ok(CallSession.schema.indexes().some(([fields]) => fields.caller === 1 && fields.createdAt === -1));
   assert.ok(CallSession.schema.indexes().some(([fields]) => fields.recipient === 1 && fields.createdAt === -1));
