@@ -597,8 +597,7 @@ function serializeDiscoverPerson(user, profile, meta = {}) {
 
 async function discoverConnections({ blockedIds, previewByCreator, viewerId }) {
   const blockedObjectIds = objectIdList([...blockedIds]);
-  const [relationships, followerRows] = await Promise.all([
-    ProfileRelationship.find({
+  const relationships = await ProfileRelationship.find({
     actor: viewerId,
     type: "FOLLOW",
     target: { $nin: blockedObjectIds },
@@ -613,13 +612,14 @@ async function discoverConnections({ blockedIds, previewByCreator, viewerId }) {
       },
       select: "name username avatar role isVerified creatorApprovalStatus activeStatus lastSeenAt createdAt",
     })
-      .lean(),
-    ProfileRelationship.find({
+    .limit(40)
+    .lean();
+  const followedIds = relationships.map((relationship) => relationship.target?._id).filter(Boolean);
+  const followerRows = followedIds.length ? await ProfileRelationship.find({
       target: viewerId,
       type: "FOLLOW",
-      actor: { $nin: blockedObjectIds },
-    }).select("actor").lean(),
-  ]);
+      actor: { $in: followedIds, $nin: blockedObjectIds },
+    }).select("actor").lean() : [];
 
   const users = relationships
     .map((relationship) => relationship.target)
@@ -754,9 +754,13 @@ function filterCreators(creators, term) {
 
 export const getDiscover = asyncHandler(async (req, res) => {
   const viewerModel = roleProfileModel(req.user.role, req.user.creatorApprovalStatus);
-  const viewerProfile = ["fan", "creator"].includes(req.user.role) ? await viewerModel.findOne({ user: req.user._id }).lean() : null;
+  const slidesOnly = req.query.view === "slides";
+  const [viewerProfile, initialBlockedIds] = await Promise.all([
+    ["fan", "creator"].includes(req.user.role) ? viewerModel.findOne({ user: req.user._id }).lean() : null,
+    blockedIdsFor(req.user._id),
+  ]);
   const settings = discoverSettings(viewerProfile);
-  const blockedIds = await blockedIdsFor(req.user._id);
+  const blockedIds = initialBlockedIds;
   settings.hiddenCreators.forEach((id) => blockedIds.add(String(id)));
   const excludedIds = objectIdList([req.user._id, ...blockedIds]);
   const search = cleanText(req.query.search, 80);
@@ -780,7 +784,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const seenAudienceFilter = await seenVisibilityFilter(req.user, creatorIds);
   const [followerCounts, subscriberCounts, worldCounts, following, publications, seens, posts, stories, signalTargetIds, dreamByCreator] = await Promise.all([
     countsBy(ProfileRelationship, { target: { $in: creatorIds }, type: "FOLLOW" }, "target"),
-    countsBy(Subscription, { creator: { $in: creatorIds }, status: { $in: ["active", "ACTIVE", "cancel_at_period_end", "CANCEL_AT_PERIOD_END"] } }, "creator"),
+    slidesOnly ? Promise.resolve(new Map()) : countsBy(Subscription, { creator: { $in: creatorIds }, status: { $in: ["active", "ACTIVE", "cancel_at_period_end", "CANCEL_AT_PERIOD_END"] } }, "creator"),
     countsBy(WorldEntitlement, { creator: { $in: creatorIds }, status: "ACTIVE" }, "creator"),
     ProfileRelationship.find({ actor: req.user._id, target: { $in: creatorIds }, type: "FOLLOW" }).select("target").lean(),
     Publication.find({ creator: { $in: creatorIds }, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: "PUBLISHED", publishedSnapshot: { $exists: true } })
@@ -825,12 +829,13 @@ export const getDiscover = asyncHandler(async (req, res) => {
     if (!publicationByCreator.has(key)) publicationByCreator.set(key, publication);
   }
   const visibleSeens = seens.filter((seen) => seen.creator);
-  const [worldsByPublication, entitledPublicationIds, savedOfferRows, seenEngagementCounts, connections] = await Promise.all([
+  const [worldsByPublication, entitledPublicationIds, savedOfferRows, seenEngagementCounts, connections, viewerWalks] = await Promise.all([
     countsBy(WorldEntitlement, { publication: { $in: publications.map((item) => item._id) }, status: "ACTIVE" }, "publication"),
     entitlementIdsFor(req.user, publications),
     SeenEngagement.find({ user: req.user._id, publication: { $in: publications.map((item) => item._id) }, type: "SAVE" }).select("publication").lean(),
     countsBy(SeenEngagement, { publication: { $in: visibleSeens.map((item) => item._id) } }, "publication"),
     discoverConnections({ blockedIds, previewByCreator, viewerId: req.user._id }),
+    SeenEngagement.find({ user: req.user._id, type: "WALKED" }).select("publication").lean(),
   ]);
   const savedPublicationIds = new Set(savedOfferRows.map((item) => String(item.publication)));
   const creators = visibleProfiles.map((profile, index) => serializeCreator(profile, { ...meta, reason: reasonFor(profile, index, viewerProfile) }));
@@ -840,7 +845,6 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const viewerCity = settings.preferredCity || viewerProfile?.city || "";
   const nearbyCreators = searchedCreators.filter((creator) => viewerCity && creator.city?.toLowerCase() === viewerCity.toLowerCase());
   const worlds = publications.map((publication) => serializeWorld(publication, { worldMemberCounts: worldsByPublication }));
-  const viewerWalks = await SeenEngagement.find({ user: req.user._id, type: "WALKED" }).select("publication").lean();
   const walkedPublicationIds = viewerWalks.map((item) => item.publication);
   const sharedWalkRows = walkedPublicationIds.length ? await SeenEngagement.find({ publication: { $in: walkedPublicationIds }, user: { $in: creatorIds }, type: "WALKED" }).populate("publication", "title planet").populate("user", "name username avatar").limit(12).lean() : [];
   const sharedWalks = sharedWalkRows.map((item) => ({ id: item._id, world: { id: item.publication?._id, title: item.publication?.title, emoji: item.publication?.planet?.emoji || "🌍" }, person: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" } }));
@@ -899,6 +903,23 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const filteredSlides = filterSlides(allSlides, filter, settings);
   const pageSlides = filteredSlides.slice(cursor, cursor + limit).map(publicSlide);
   const nextCursor = cursor + limit < filteredSlides.length ? String(cursor + limit) : null;
+
+  if (slidesOnly) {
+    return sendResponse(res, 200, "Discover fetched", {
+      recommendations: pageSlides,
+      pagination: {
+        nextCursor,
+        sessionId: req.query.sessionId || sessionIdFor(req.user._id, filter),
+        hasMore: Boolean(nextCursor),
+        limit,
+        filter,
+      },
+      filters: DISCOVER_FILTERS,
+      following: connections.following,
+      sharedWalks,
+      settings,
+    });
+  }
 
   const seenToday = await getWallSawYouToday(req.user, { limit: 1 });
 

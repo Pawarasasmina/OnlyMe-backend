@@ -9,6 +9,7 @@ import Publication from "../models/Publication.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import SavedItem from "../models/SavedItem.js";
 import SearchHistory from "../models/SearchHistory.js";
+import SeenEngagement from "../models/SeenEngagement.js";
 import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
 import WallPost from "../models/WallPost.js";
@@ -16,7 +17,7 @@ import { isBookContent } from "./savedService.js";
 import { publicationDeliveryUrl } from "./publicationMediaStorageService.js";
 import ApiError from "../utils/ApiError.js";
 
-export const SEARCH_TYPES = ["all", "people", "worlds", "seens", "posts", "places", "journeys", "saved"];
+export const SEARCH_TYPES = ["all", "people", "seens", "experiences", "worlds", "wall_notes", "posts", "places", "journeys", "saved"];
 export const SEARCH_SORTS = ["relevant", "newest", "most_saved"];
 export const PRODUCT_TRENDS = ["Fitness", "Paris", "Business", "Mindset", "Tokyo style"];
 export const DEFAULT_CATEGORIES = [
@@ -40,9 +41,10 @@ export const DEFAULT_CATEGORIES = [
 
 const ALL_PREVIEW_LIMITS = {
   people: 6,
+  experiences: 6,
   worlds: 8,
   seens: 8,
-  posts: 8,
+  wall_notes: 8,
 };
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 30;
@@ -268,6 +270,7 @@ function serializeContentResult(content, type, query, savedBookIds = new Set()) 
     location: publicLocation("", ""),
     metadata: {
       creator,
+      kind: content.contentType || "WORLD",
       accessLevel: content.accessLevel,
       free: content.accessLevel === "PUBLIC",
       price: content.accessLevel === "PAY_PER_VIEW" ? content.coinPrice : null,
@@ -323,29 +326,38 @@ async function searchLegacyContent({ blockedIds, category, cursor = 0, limit, lo
   return resultPage(records.map((item) => serializeContentResult(item, type === "seen" ? "seen" : "world", query, savedBookIds)), cursor, limit, total);
 }
 
-function serializePublicationResult(publication, type, query) {
+function serializePublicationResult(publication, type, query, creatorProfile = null, viewCount = 0) {
   const creator = contentCreator(publication);
   const id = String(publication._id);
   const sourceMedia = publication.coverMedia?.secureUrl ? publication.coverMedia : publication.introMedia;
   const image = publicationDeliveryUrl(sourceMedia) || sourceMedia?.secureUrl || sourceMedia?.url || "";
   return {
     id,
-    type: type === "seen" ? "seen" : "world",
+    type: type === "seen" ? "seen" : type === "experience" ? "experience" : "world",
     title: publication.title || publication.publishedSnapshot?.metadata?.title || "Untitled",
     subtitle: [creator.name, publication.category].filter(Boolean).join(" - "),
     description: cleanText(publication.summary || publication.description, 220),
     image,
     coverMedia: sourceMedia ? { ...sourceMedia, secureUrl: image } : null,
-    route: type === "seen" ? `/seen/${id}` : publication.kind === "EXPERIENCE" ? `/experience/${id}` : `/world/${id}`,
+    route: type === "seen"
+      ? `/seen/${id}`
+      : publication.kind === "EXPERIENCE"
+        ? `/experience/${id}`
+        : creator.username
+          ? `/profile/${encodeURIComponent(creator.username)}`
+          : `/world/${id}`,
     verified: creator.verified,
     category: publication.category || "",
     location: publicLocation(publication.experienceLocation, ""),
     metadata: {
       creator,
+      kind: publication.kind,
+      subscriptionPriceCents: creatorProfile?.subscriptionPriceCents || null,
       free: publication.pricing?.mode === "FREE",
       price: publication.pricing?.starsAmount || null,
       pricingMode: publication.pricing?.mode || "FREE",
       chapterCount: publication.publishedSnapshot?.chapters?.length || 0,
+      viewCount,
       matchReason: query ? "Matched published content fields" : "",
     },
     saved: false,
@@ -357,7 +369,7 @@ async function searchPublications({ blockedIds, category, cursor = 0, limit, loc
   const creatorIds = await eligibleCreatorIds(blockedIds);
   const filter = {
     creator: { $in: creatorIds },
-    kind: type === "seen" ? "SEEN" : { $in: ["EXPERIENCE", "WORLD", "PREMIUM_WORLD"] },
+    kind: type === "seen" ? "SEEN" : type === "experience" ? "EXPERIENCE" : { $in: ["WORLD", "PREMIUM_WORLD"] },
     status: "PUBLISHED",
     visibility: "PUBLIC",
     publishedSnapshot: { $exists: true },
@@ -365,7 +377,7 @@ async function searchPublications({ blockedIds, category, cursor = 0, limit, loc
   if (category) filter.category = regexFor(category);
   if (query) filter.$or = queryOr(query, ["title", "summary", "description", "category", "tags", "experienceLocation"]);
   if (location) filter.experienceLocation = regexFor(location);
-  const [records, total] = await Promise.all([
+  const [records, total, creatorProfiles] = await Promise.all([
     Publication.find(filter)
       .sort(baseSort(sort))
       .skip(cursor)
@@ -373,8 +385,15 @@ async function searchPublications({ blockedIds, category, cursor = 0, limit, loc
       .populate("creator", "name username avatar isVerified role status creatorApprovalStatus")
       .lean(),
     Publication.countDocuments(filter),
+    type === "seen" ? [] : CreatorProfile.find({ user: { $in: creatorIds } }).select("user subscriptionPriceCents").lean(),
   ]);
-  return resultPage(records.map((item) => serializePublicationResult(item, type, query)), cursor, limit, total);
+  const profileByCreator = new Map(creatorProfiles.map((profile) => [String(profile.user), profile]));
+  const engagementRows = type === "seen" && records.length ? await SeenEngagement.aggregate([
+    { $match: { publication: { $in: records.map((item) => item._id) } } },
+    { $group: { _id: "$publication", count: { $sum: 1 } } },
+  ]) : [];
+  const viewsByPublication = new Map(engagementRows.map((row) => [String(row._id), Number(row.count) || 0]));
+  return resultPage(records.map((item) => serializePublicationResult(item, type, query, profileByCreator.get(String(item.creator?._id || item.creator)), viewsByPublication.get(String(item._id)) || 0)), cursor, limit, total);
 }
 
 async function searchContent(params) {
@@ -382,7 +401,7 @@ async function searchContent(params) {
   const sourceParams = { ...params, cursor: 0, limit: sourceLimit };
   const [publications, legacy] = await Promise.all([
     searchPublications(sourceParams),
-    searchLegacyContent(sourceParams),
+    params.type === "seen" ? searchLegacyContent(sourceParams) : Promise.resolve(resultPage([], 0, sourceLimit, 0)),
   ]);
   const unique = new Map();
   [...publications.items, ...legacy.items].forEach((item) => unique.set(`${item.type}:${item.id}`, item));
@@ -688,12 +707,13 @@ export async function getSearchDefaults(user) {
     sort: "relevant",
     user,
   };
-  const [trending, recent, people, worlds, seens, posts] = await Promise.all([
+  const [trending, recent, people, seens, experiences, worlds, wallNotes] = await Promise.all([
     getTrendingSearches({ limit: 8 }),
     getRecentSearches(user._id, 10),
     searchPeople(previewParams),
-    searchContent({ ...previewParams, type: "world" }),
     searchContent({ ...previewParams, type: "seen" }),
+    searchContent({ ...previewParams, type: "experience" }),
+    searchContent({ ...previewParams, type: "world" }),
     searchPosts(previewParams),
   ]);
   return {
@@ -704,7 +724,7 @@ export async function getSearchDefaults(user) {
     trending,
     recent,
     categories: DEFAULT_CATEGORIES,
-    sections: { people, worlds, seens, posts },
+    sections: { people, seens, experiences, worlds, wall_notes: wallNotes },
   };
 }
 
@@ -754,20 +774,23 @@ export async function runSearch(user, params) {
   if (params.type === "all") {
     const sections = {};
     const allShared = { ...shared, cursor: 0 };
-    const [people, worlds, seens, posts] = await Promise.all([
+    const [people, seens, experiences, worlds, wallNotes] = await Promise.all([
       searchPeople({ ...allShared, limit: ALL_PREVIEW_LIMITS.people }),
-      searchContent({ ...allShared, limit: ALL_PREVIEW_LIMITS.worlds, type: "world" }),
       searchContent({ ...allShared, limit: ALL_PREVIEW_LIMITS.seens, type: "seen" }),
-      searchPosts({ ...allShared, limit: ALL_PREVIEW_LIMITS.posts }),
+      searchContent({ ...allShared, limit: ALL_PREVIEW_LIMITS.experiences, type: "experience" }),
+      searchContent({ ...allShared, limit: ALL_PREVIEW_LIMITS.worlds, type: "world" }),
+      searchPosts({ ...allShared, limit: ALL_PREVIEW_LIMITS.wall_notes }),
     ]);
-    Object.assign(sections, { people, worlds, seens, posts });
+    Object.assign(sections, { people, seens, experiences, worlds, wall_notes: wallNotes });
     return { query: params.q, type: params.type, sections };
   }
 
   const runners = {
     people: () => searchPeople(shared),
-    worlds: () => searchContent({ ...shared, type: "world" }),
     seens: () => searchContent({ ...shared, type: "seen" }),
+    experiences: () => searchContent({ ...shared, type: "experience" }),
+    worlds: () => searchContent({ ...shared, type: "world" }),
+    wall_notes: () => searchPosts(shared),
     posts: () => searchPosts(shared),
     places: () => searchPlaces(shared),
     journeys: () => searchJourneys(shared),
