@@ -677,9 +677,24 @@ export async function getTrendingSearches({ limit = 8 } = {}) {
 }
 
 export async function getSearchDefaults(user) {
-  const [trending, recent] = await Promise.all([
+  const blockedIds = await blockedIdsFor(user._id);
+  const previewParams = {
+    blockedIds,
+    category: "",
+    cursor: 0,
+    limit: 6,
+    location: "",
+    query: "",
+    sort: "relevant",
+    user,
+  };
+  const [trending, recent, people, worlds, seens, posts] = await Promise.all([
     getTrendingSearches({ limit: 8 }),
     getRecentSearches(user._id, 10),
+    searchPeople(previewParams),
+    searchContent({ ...previewParams, type: "world" }),
+    searchContent({ ...previewParams, type: "seen" }),
+    searchPosts(previewParams),
   ]);
   return {
     quickCards: [
@@ -689,6 +704,7 @@ export async function getSearchDefaults(user) {
     trending,
     recent,
     categories: DEFAULT_CATEGORIES,
+    sections: { people, worlds, seens, posts },
   };
 }
 
