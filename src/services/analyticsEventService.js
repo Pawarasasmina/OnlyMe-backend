@@ -8,6 +8,7 @@ import Subscription from "../models/Subscription.js";
 import Transaction from "../models/Transaction.js";
 import User from "../models/User.js";
 import ApiError from "../utils/ApiError.js";
+import { normalizeAccountType } from "../constants/accountTypeConstants.js";
 
 export const TRACKING_START_DATE = new Date("2026-09-03T00:00:00.000Z");
 export const SESSION_INACTIVITY_MS = 30 * 60 * 1000;
@@ -112,12 +113,12 @@ function deviceTypeFromUserAgent(userAgent = "") {
   return "unknown";
 }
 
-export async function touchAnalyticsSession({ deviceType = "unknown", now = new Date(), sessionId, userId }) {
+export async function touchAnalyticsSession({ actorAccountType, deviceType = "unknown", now = new Date(), sessionId, userId }) {
   if (!sessionId) return null;
   const startedAt = now;
   const existing = await AnalyticsSession.findOne({ sessionId });
   if (!existing) {
-    return AnalyticsSession.create({ deviceType, lastActivityAt: now, sessionId, startedAt, userId });
+    return AnalyticsSession.create({ actorAccountType: normalizeAccountType(actorAccountType), deviceType, lastActivityAt: now, sessionId, startedAt, userId });
   }
   if (String(existing.userId) !== String(userId)) throw new ApiError(400, "Analytics session does not belong to this user");
   existing.lastActivityAt = now;
@@ -149,13 +150,15 @@ export async function recordAnalyticsEvent({ client = false, entityId = "", enti
   const finalSource = normalizeSource(source);
   const safe = safeMetadata(type, metadata);
   const deviceType = req ? deviceTypeFromUserAgent(req.get("User-Agent") || "") : "unknown";
+  const actorAccountType = normalizeAccountType(req?.user?.accountType || (await User.findById(userId).select("+accountType").lean())?.accountType);
 
-  await touchAnalyticsSession({ deviceType, now, sessionId: finalSessionId, userId });
+  await touchAnalyticsSession({ actorAccountType, deviceType, now, sessionId: finalSessionId, userId });
   const dedupeKey = dedupeKeyFor({ entityId: cleanEntityId, entityType: cleanEntityType, eventType: type, metadata: safe, now, sessionId: finalSessionId, source: finalSource, userId });
 
   try {
     const event = await AnalyticsEvent.create({
       userId,
+      actorAccountType,
       sessionId: finalSessionId,
       eventType: type,
       entityType: cleanEntityType,

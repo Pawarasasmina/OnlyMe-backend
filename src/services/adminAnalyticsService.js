@@ -39,6 +39,33 @@ const percent = (numerator, denominator) => denominator > 0 ? Number(((numerator
 const dateMatch = (field, startDate, endDate) => ({ [field]: { $gte: startDate, $lte: endDate } });
 const normalizeStatus = (status) => String(status || "").toLowerCase();
 const formatReportValue = (value) => value == null ? "N/A" : Number.isFinite(Number(value)) ? Number(value).toLocaleString("en-US") : String(value);
+const accountTypeMetric = () => ({ total: 0, real: 0, seed: 0, test: 0, publicTotal: 0 });
+const addAccountTypeCount = (metric, type, count) => {
+  const key = String(type || "SEED").toLowerCase();
+  metric[key] = (metric[key] || 0) + Number(count || 0);
+  metric.total += Number(count || 0);
+  if (key !== "test") metric.publicTotal += Number(count || 0);
+};
+
+async function internalAccountTypeBreakdown(startDate, endDate) {
+  const metrics = Object.fromEntries(["views", "reactions", "comments", "saves", "shares", "followers", "messages"].map((key) => [key, accountTypeMetric()]));
+  const eventRows = await AnalyticsEvent.aggregate([
+    { $match: { createdAt: { $gte: startDate, $lte: endDate }, eventType: { $in: ["CONTENT_VIEW", "CONTENT_OPENED", "STORY_VIEW", "SEEN_VIEW", "REACTION", "COMMENT", "SAVE", "SHARE"] } } },
+    { $group: { _id: { accountType: { $ifNull: ["$actorAccountType", "SEED"] }, eventType: "$eventType" }, count: { $sum: 1 } } },
+  ]);
+  const eventMetric = (type) => ["CONTENT_VIEW", "CONTENT_OPENED", "STORY_VIEW", "SEEN_VIEW"].includes(type) ? "views" : ({ REACTION: "reactions", COMMENT: "comments", SAVE: "saves", SHARE: "shares" })[type];
+  for (const row of eventRows) { const metric = eventMetric(row._id.eventType); if (metric) addAccountTypeCount(metrics[metric], row._id.accountType, row.count); }
+  const [follows, messages] = await Promise.all([
+    ProfileRelationship.aggregate([{ $match: { type: "FOLLOW", createdAt: { $gte: startDate, $lte: endDate } } }, { $group: { _id: { $ifNull: ["$actorAccountType", "SEED"] }, count: { $sum: 1 } } }]),
+    Message.aggregate([{ $match: { deletedAt: null, createdAt: { $gte: startDate, $lte: endDate } } }, { $lookup: { from: User.collection.name, localField: "sender", foreignField: "_id", as: "actor" } }, { $set: { resolvedAccountType: { $ifNull: [{ $arrayElemAt: ["$actor.accountType", 0] }, "SEED"] } } }, { $group: { _id: "$resolvedAccountType", count: { $sum: 1 } } }]),
+  ]);
+  for (const row of follows) addAccountTypeCount(metrics.followers, row._id, row.count);
+  for (const row of messages) addAccountTypeCount(metrics.messages, row._id, row.count);
+  const userRows = await User.aggregate([{ $match: { deletionRequestedAt: null } }, { $group: { _id: { $ifNull: ["$accountType", "SEED"] }, count: { $sum: 1 } } }]);
+  const users = accountTypeMetric();
+  for (const row of userRows) addAccountTypeCount(users, row._id, row.count);
+  return { users, ...metrics };
+}
 
 export function parseAnalyticsRange(query = {}) {
   const now = new Date();
@@ -336,7 +363,7 @@ export async function getAdminAnalytics(query = {}) {
     totalContent, publishedContent, postsCreated, publicationsCreated, storiesCreated, wallPostsCreated,
     accountRows, contentRows, publicationStatusRows, contentStatusRows, growth, creation, engagement, previousEngagement,
     trend, top, creatorsTable, activeTable, moderationRows, moderationTrend, subscriptions, memberships, transactions, time,
-    sessions, retention, profiles, search, funnel,
+    sessions, retention, profiles, search, funnel, accountTypeBreakdown,
   ] = await Promise.all([
     User.countDocuments({ deletionRequestedAt: null }),
     User.countDocuments({ role: "fan", deletionRequestedAt: null }),
@@ -376,6 +403,7 @@ export async function getAdminAnalytics(query = {}) {
     profileAnalytics(range.startDate, range.endDate),
     searchAnalytics(range.startDate, range.endDate, range.previousStartDate, range.previousEndDate),
     contentFunnelAnalytics(range.startDate, range.endDate),
+    internalAccountTypeBreakdown(range.startDate, range.endDate),
   ]);
 
   const behavior = [
@@ -452,6 +480,7 @@ export async function getAdminAnalytics(query = {}) {
     ].filter((item) => item.value > 0),
     contentStatus: [...contentStatusMap.entries()].map(([label, value]) => ({ label, value })),
     engagement: { summary: engagement, trend },
+    accountTypeBreakdown,
     sessions,
     retention,
     profiles,
@@ -468,7 +497,7 @@ export async function getAdminAnalytics(query = {}) {
     mostActiveUsers: activeTable,
     moderation,
     platformActivity: time,
-    filters: { contentTypes: SUPPORTED_CONTENT_TYPES, statuses: SUPPORTED_STATUSES, accountTypes: ["all", "fan", "creator", "admin"] },
+    filters: { contentTypes: SUPPORTED_CONTENT_TYPES, statuses: SUPPORTED_STATUSES, accountTypes: ["REAL", "SEED", "TEST"] },
   };
 }
 

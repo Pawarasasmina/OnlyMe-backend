@@ -4,12 +4,14 @@ import Subscription from "../models/Subscription.js";
 import User from "../models/User.js";
 import MessageReport from "../models/MessageReport.js";
 import Notification from "../models/Notification.js";
+import AdminAccountAudit from "../models/AdminAccountAudit.js";
+import { ACCOUNT_TYPES, normalizeAccountType } from "../constants/accountTypeConstants.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 
 export const getAdminDashboard = asyncHandler(async (_req, res) => {
-  const [totalUsers, fans, creators, admins, activeUsers, pendingCreators, publishedContent, draftContent, activeSubscriptions] =
+  const [totalUsers, fans, creators, admins, activeUsers, pendingCreators, publishedContent, draftContent, activeSubscriptions, accountTypeRows] =
     await Promise.all([
       User.countDocuments(),
       User.countDocuments({ role: { $in: ["fan", "creator"] }, creatorApprovalStatus: { $ne: "approved" } }),
@@ -20,10 +22,11 @@ export const getAdminDashboard = asyncHandler(async (_req, res) => {
       Content.countDocuments({ status: { $in: ["PUBLISHED", "published"] } }),
       Content.countDocuments({ status: { $in: ["DRAFT", "draft"] } }),
       Subscription.countDocuments({ status: "active" }),
+      User.aggregate([{ $group: { _id: { $ifNull: ["$accountType", "SEED"] }, count: { $sum: 1 } } }]),
     ]);
 
   return sendResponse(res, 200, "Admin dashboard fetched", {
-    stats: { totalUsers, fans, creators, admins, activeUsers, pendingCreators, publishedContent, draftContent, activeSubscriptions },
+    stats: { totalUsers, fans, creators, admins, activeUsers, pendingCreators, publishedContent, draftContent, activeSubscriptions, accountTypes: Object.fromEntries(accountTypeRows.map((row) => [row._id, row.count])) },
   });
 });
 
@@ -39,9 +42,11 @@ export const listUsers = asyncHandler(async (req, res) => {
     filter.role = "admin";
   }
   if (["active", "suspended"].includes(req.query.status)) filter.status = req.query.status;
+  const requestedAccountType = String(req.query.accountType || "").toUpperCase();
+  if (ACCOUNT_TYPES.includes(requestedAccountType)) filter.accountType = requestedAccountType;
 
   const users = await User.find(filter)
-    .select("name username email role status creatorApprovalStatus isVerified avatar createdAt")
+    .select("+accountType name username email role status creatorApprovalStatus isVerified avatar createdAt")
     .sort({ createdAt: -1 })
     .limit(200)
     .lean();
@@ -57,14 +62,35 @@ export const updateUserStatus = asyncHandler(async (req, res) => {
     throw new ApiError(400, "You cannot change your own account status");
   }
 
-  const user = await User.findByIdAndUpdate(
-    req.params.userId,
-    { $set: { status: req.body.status } },
-    { new: true, runValidators: true }
-  ).select("name username email role status creatorApprovalStatus isVerified avatar createdAt");
+  const reason = String(req.body.reason || "Administrative account status change").trim().slice(0, 500);
+  const previous = await User.findById(req.params.userId).select("status");
+  const user = await User.findByIdAndUpdate(req.params.userId, { $set: { status: req.body.status } }, { new: true, runValidators: true }).select("+accountType name username email role status creatorApprovalStatus isVerified avatar createdAt");
   if (!user) throw new ApiError(404, "User not found");
+  await AdminAccountAudit.create({ admin: req.user._id, user: user._id, action: "ACCOUNT_STATUS_CHANGED", previousStatus: previous?.status, status: user.status, reason });
 
   return sendResponse(res, 200, "User status updated", { user });
+});
+
+export const bulkUpdateUsers = asyncHandler(async (req, res) => {
+  const ids = [...new Set((Array.isArray(req.body.userIds) ? req.body.userIds : []).map(String))];
+  if (!ids.length || ids.length > 200 || ids.some((id) => !mongoose.isValidObjectId(id))) throw new ApiError(400, "Choose between 1 and 200 valid user IDs");
+  if (ids.includes(String(req.user._id))) throw new ApiError(400, "You cannot bulk-change your own administrator account");
+  const accountType = req.body.accountType == null ? null : String(req.body.accountType).toUpperCase();
+  const status = req.body.status == null ? null : String(req.body.status).toLowerCase();
+  if (accountType && !ACCOUNT_TYPES.includes(accountType)) throw new ApiError(400, "Account type must be REAL, SEED, or TEST");
+  if (status && !["active", "suspended"].includes(status)) throw new ApiError(400, "Status must be active or suspended");
+  if (!accountType && !status) throw new ApiError(400, "Choose an account type or status to update");
+  const reason = String(req.body.reason || "").trim();
+  if (reason.length < 3 || reason.length > 500) throw new ApiError(400, "A reason between 3 and 500 characters is required");
+  const users = await User.find({ _id: { $in: ids } }).select("+accountType status");
+  if (users.length !== ids.length) throw new ApiError(404, "One or more users were not found");
+  const update = { ...(accountType ? { accountType } : {}), ...(status ? { status } : {}) };
+  await User.updateMany({ _id: { $in: ids } }, { $set: update }, { runValidators: true });
+  await AdminAccountAudit.insertMany(users.flatMap((user) => [
+    ...(accountType && normalizeAccountType(user.accountType) !== accountType ? [{ admin: req.user._id, user: user._id, action: "ACCOUNT_TYPE_CHANGED", previousAccountType: normalizeAccountType(user.accountType), accountType, reason }] : []),
+    ...(status && user.status !== status ? [{ admin: req.user._id, user: user._id, action: "ACCOUNT_STATUS_CHANGED", previousStatus: user.status, status, reason }] : []),
+  ]));
+  return sendResponse(res, 200, "Accounts updated", { matched: users.length, modified: users.filter((user) => (accountType && normalizeAccountType(user.accountType) !== accountType) || (status && user.status !== status)).length });
 });
 
 export const updateCreatorApproval = asyncHandler(async (_req, _res) => {

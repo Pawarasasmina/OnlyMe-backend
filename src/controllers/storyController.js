@@ -167,6 +167,46 @@ export const getStory = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Story fetched", { story: serialize(story, req.user._id) });
 });
 
+export const getCreatorStories = asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.creatorId)) throw new ApiError(400, "Invalid creator ID");
+
+  const creatorId = req.params.creatorId;
+  const viewerId = req.user._id;
+  const isOwner = String(creatorId) === String(viewerId);
+  const blocked = !isOwner && await UserBlock.exists({
+    $or: [
+      { blocker: viewerId, blocked: creatorId },
+      { blocker: creatorId, blocked: viewerId },
+    ],
+  });
+  if (blocked) throw new ApiError(403, "These stories are unavailable");
+
+  const audience = [{ audience: "everyone" }, { audience: { $exists: false } }];
+  if (isOwner) audience.push({ creator: viewerId });
+  else {
+    const follows = await ProfileRelationship.exists({ actor: viewerId, target: creatorId, type: "FOLLOW" });
+    if (follows) {
+      audience.push({ audience: "followers" });
+      const followsBack = await ProfileRelationship.exists({ actor: creatorId, target: viewerId, type: "FOLLOW" });
+      if (followsBack) audience.push({ audience: "close_circle" });
+    }
+  }
+
+  const stories = await Story.find({
+    creator: creatorId,
+    expiresAt: { $gt: new Date() },
+    ...(isOwner ? {} : { $or: audience }),
+  }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified role creatorApprovalStatus status").populate({ path: "sourceSeen", populate: [{ path: "creator", select: "name username avatar isVerified" }, { path: "series", select: "name" }] }).lean();
+
+  const availableStories = stories.filter((story) => story.creator?.status === "active");
+  const engagements = await StoryEngagement.find({ fan: viewerId, story: { $in: availableStories.map((story) => story._id) } }).lean();
+  const byStory = new Map(engagements.map((item) => [String(item.story), item]));
+
+  return sendResponse(res, 200, "Creator stories fetched", {
+    items: availableStories.map((story) => serialize(story, viewerId, byStory.get(String(story._id)))),
+  });
+});
+
 export const getStoryInsights = asyncHandler(async (req, res) => {
   const story = await activeStory(req.params.id);
   if (String(story.creator) !== String(req.user._id)) throw new ApiError(403, "Only the story creator can view insights");
@@ -466,7 +506,7 @@ export const updateStoryStatus = asyncHandler(async (req, res) => {
 
 export const viewStory = asyncHandler(async (req, res) => {
   await followedStory(req.params.id, req.user._id);
-  await StoryEngagement.findOneAndUpdate({ story: req.params.id, fan: req.user._id }, { $set: { viewedAt: new Date() } }, { upsert: true, new: true });
+  await StoryEngagement.findOneAndUpdate({ story: req.params.id, fan: req.user._id }, { $set: { viewedAt: new Date(), actorAccountType: req.user.accountType } }, { upsert: true, new: true });
   return sendResponse(res, 200, "Story viewed", { storyId: req.params.id, viewed: true });
 });
 
@@ -477,7 +517,7 @@ export const reactStory = asyncHandler(async (req, res) => {
   if (!reaction || reaction.length > 12) throw new ApiError(400, "A valid reaction is required");
   const engagement = await StoryEngagement.findOneAndUpdate(
     { story: story._id, fan: req.user._id },
-    { $set: { reaction, viewedAt: new Date() } },
+    { $set: { reaction, viewedAt: new Date(), actorAccountType: req.user.accountType } },
     { upsert: true, new: true },
   );
   return sendResponse(res, 200, "Reaction sent", { reaction: engagement.reaction, reactedAt: engagement.updatedAt });

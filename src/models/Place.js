@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 const placeSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, maxlength: 120, index: true },
-    slug: { type: String, required: true, trim: true, lowercase: true, maxlength: 160, index: true },
+    slug: { type: String, required: true, trim: true, lowercase: true, maxlength: 160 },
     description: { type: String, trim: true, maxlength: 1000, default: "" },
     city: { type: String, trim: true, maxlength: 80, default: "", index: true },
     country: { type: String, trim: true, maxlength: 80, default: "", index: true },

@@ -164,7 +164,7 @@ export async function openDirectAccessWindow({ fan, creatorId, key, source = "PA
       title: `${fan.name || "A fan"} opened Direct Access`,
       dedupeKey: `da-open:${window._id}`,
     }], { session });
-    return { resultReference: window._id, window: serializeDAWindow(window), wallet: held ? safeWallet(held.wallet) : null };
+    return { resultReference: window._id, window: serializeDAWindow(window), wallet: held ? safeWallet(held.wallet, command.financialMode) : null };
   });
 }
 
@@ -172,8 +172,10 @@ export async function refundDirectAccessWindow(windowId, now = new Date()) {
   const candidate = await DAWindow.findById(windowId).lean();
   if (!candidate || candidate.settlementStatus !== "HELD") return candidate ? { window: serializeDAWindow(candidate), changed: false } : null;
   const key = `da-refund:${candidate._id}`;
+  const original = await StarsLedgerEntry.findById(candidate.holdLedgerEntry).select("financialMode").lean();
   return executeFinancialCommand({
     user: candidate.fan,
+    financialMode: original?.financialMode || "REAL_SEED",
     commandType: "REFUND_DA_WINDOW",
     idempotencyKey: key,
     requestFingerprint: fingerprint({ windowId: String(candidate._id), priceStars: candidate.priceStars }),
@@ -214,7 +216,7 @@ export async function refundDirectAccessWindow(windowId, now = new Date()) {
       title: `Your ${window.priceStars} Stars were refunded`,
       dedupeKey: `da-refund:${window._id}`,
     }], { session });
-    return { resultReference: window._id, window: serializeDAWindow(window), wallet: safeWallet(refunded.wallet), changed: true };
+    return { resultReference: window._id, window: serializeDAWindow(window), wallet: safeWallet(refunded.wallet, command.financialMode), changed: true };
   });
 }
 
@@ -228,8 +230,10 @@ export async function captureDirectAccessWindow(windowId, creatorId, now = new D
   if (candidate.settlementStatus === "CAPTURED") return { window: serializeDAWindow(candidate), changed: false };
   if (candidate.settlementStatus !== "HELD") throw new ApiError(409, "Direct Access window is not capturable", FINANCIAL_ERROR_CODES.DA_WINDOW_CLOSED);
   const key = `da-capture:${candidate._id}`;
+  const original = await StarsLedgerEntry.findById(candidate.holdLedgerEntry).select("financialMode").lean();
   return executeFinancialCommand({
     user: creatorId,
+    financialMode: original?.financialMode || "REAL_SEED",
     commandType: "CAPTURE_DA_WINDOW",
     idempotencyKey: key,
     requestFingerprint: fingerprint({ windowId: String(candidate._id), priceStars: candidate.priceStars }),
@@ -253,7 +257,7 @@ export async function captureDirectAccessWindow(windowId, creatorId, now = new D
       metadata: { settlementStatus: "CAPTURED", grossStars: window.priceStars, creatorStars, platformStars, platformRateBasisPoints },
     }, session);
     const [revenue] = await PlatformRevenue.create([{
-      sourceType: "DIRECT_ACCESS",
+      sourceType: "DIRECT_ACCESS", financialMode: command.financialMode,
       referenceId: String(window._id),
       fan: window.fan,
       creator: window.creator,
@@ -440,7 +444,7 @@ export async function createDirectAccessMessageAtomic({ windowId, sender, recipi
       const platformStars = Math.floor((window.priceStars * platformRateBasisPoints) / 10000);
       const creatorStars = window.priceStars - platformStars;
       const earned = await creditWallet({ user: window.creator, amount: creatorStars, entryType: "DA_CREATOR_EARNING", entryRole: "CREATOR_DA_EARNING", referenceType: "DIRECT_ACCESS_WINDOW", referenceId: window._id, creator: window.creator, counterpartyUser: window.fan, command, idempotencyKey: key, metadata: { settlementStatus: "CAPTURED", grossStars: window.priceStars, creatorStars, platformStars, platformRateBasisPoints } }, session);
-      const [revenue] = await PlatformRevenue.create([{ sourceType: "DIRECT_ACCESS", referenceId: String(window._id), fan: window.fan, creator: window.creator, grossStars: window.priceStars, creatorStars, platformStars, rateBasisPoints: platformRateBasisPoints, command: command._id, capturedAt: now }], { session });
+      const [revenue] = await PlatformRevenue.create([{ sourceType: "DIRECT_ACCESS", financialMode: command.financialMode, referenceId: String(window._id), fan: window.fan, creator: window.creator, grossStars: window.priceStars, creatorStars, platformStars, rateBasisPoints: platformRateBasisPoints, command: command._id, capturedAt: now }], { session });
       Object.assign(window, { status: window.status === "CLOSED" ? "CLOSED" : "ANSWERED", settlementStatus: "CAPTURED", firstCreatorReplyAt: now, answeredAt: now, capturedAt: now, captureCommand: command._id, creatorEarningLedgerEntry: earned.entry._id, platformRevenue: revenue._id, version: window.version + 1 });
       await window.save({ session });
       await Notification.create([{ user: window.fan, type: "direct_access_answered", title: "Your Direct Access question was answered", dedupeKey: `da-answer:${window._id}` }], { session });

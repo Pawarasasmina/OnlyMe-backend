@@ -21,7 +21,7 @@ export const analyticsRateLimit = rateLimit({
 export const startSession = asyncHandler(async (req, res) => {
   const sessionId = readAnalyticsSessionId(req);
   if (!sessionId) throw new ApiError(400, "Analytics session ID is required");
-  const session = await touchAnalyticsSession({ req, sessionId, userId: req.user._id });
+  const session = await touchAnalyticsSession({ actorAccountType: req.user.accountType, req, sessionId, userId: req.user._id });
   await recordAnalyticsEvent({ eventType: "SESSION_STARTED", req, sessionId, source: req.body.source || "unknown", userId: req.user._id });
   return sendResponse(res, 200, "Analytics session started", { sessionId: session.sessionId, startedAt: session.startedAt });
 });

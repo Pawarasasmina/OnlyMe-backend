@@ -1,9 +1,11 @@
 import mongoose from "mongoose";
 import { WALL_REACTIONS } from "./WallEngagement.js";
+import { ACCOUNT_TYPES, DEFAULT_ACCOUNT_TYPE } from "../constants/accountTypeConstants.js";
 
 const schema = new mongoose.Schema({
   share: { type: mongoose.Schema.Types.ObjectId, ref: "WallEngagement", required: true, index: true },
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+  actorAccountType: { type: String, enum: ACCOUNT_TYPES, default: DEFAULT_ACCOUNT_TYPE, index: true },
   type: { type: String, enum: ["REACTION", "COMMENT", "SAVE"], required: true, index: true },
   reaction: { type: String, enum: WALL_REACTIONS, default: undefined },
   text: { type: String, trim: true, maxlength: 500, default: undefined },

@@ -6,6 +6,7 @@
   "scripts": {
     "seed:seen-flow": "node src/scripts/seedSeenFlowSamples.js",
     "seed:creator-demos": "node src/scripts/seedCreatorDemoContent.js",
+    "seed:creator-stories": "node src/scripts/seedCreatorStories.js",
     "seed:client-showcase": "node src/scripts/seedClientShowcase.js",
     "dev": "nodemon --watch src --watch .env --watch src/controllers/.env --ext js,mjs,cjs,json,env src/server.js",
     "start": "node src/server.js",
@@ -23,6 +24,8 @@
     "analyze:publications": "node src/scripts/analyzeLegacyContentForPublications.js",
     "analyze:financial-migration": "node src/scripts/analyzeFinancialMigration.js",
     "analyze:wallet-reconciliation": "node src/scripts/analyzeWalletReconciliation.js"
+    ,"migrate:account-types:dry-run": "node src/scripts/migrateAccountTypes.js"
+    ,"migrate:account-types": "node src/scripts/migrateAccountTypes.js --apply"
   },
   "dependencies": {
     "@deepgram/sdk": "^5.8.0",

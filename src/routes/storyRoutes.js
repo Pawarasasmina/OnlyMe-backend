@@ -1,11 +1,16 @@
 import { Router } from "express";
-import { createStory, deleteStory, getStory, getStoryInsights, hideStoriesFromCreator, hideStoryCreator, listStories, reactStory, replyStory, reportStory, seeStory, shareSeenAsStory, unfollowCreatorFromStories, unfollowStoryCreator, updateStoryStatus, viewStory } from "../controllers/storyController.js";
+import { createStory, deleteStory, getCreatorStories, getStory, getStoryInsights, hideStoriesFromCreator, hideStoryCreator, listStories, reactStory, replyStory, reportStory, seeStory, shareSeenAsStory, unfollowCreatorFromStories, unfollowStoryCreator, updateStoryStatus, viewStory } from "../controllers/storyController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { uploadStoryMedia } from "../middleware/uploadMiddleware.js";
 import { requireMessagingAccess } from "../services/messagingAccessService.js";
 const router = Router();
 router.get("/active", protect, authorize("fan", "creator"), listStories);
+router.get("/me", protect, authorize("fan", "creator"), (req, res, next) => {
+  req.params.creatorId = String(req.user._id);
+  return getCreatorStories(req, res, next);
+});
+router.get("/creators/:creatorId", protect, authorize("fan", "creator"), getCreatorStories);
 router.patch("/status", protect, authorize("fan", "creator"), updateStoryStatus);
 router.post("/share/seen/:seenId", protect, authorize("fan", "creator"), uploadStoryMedia.single("image"), shareSeenAsStory);
 router.delete("/creators/:creatorId/follow", protect, authorize("fan", "creator"), unfollowCreatorFromStories);

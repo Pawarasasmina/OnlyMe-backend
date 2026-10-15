@@ -15,6 +15,8 @@ import GroupConversation from "../models/GroupConversation.js";
 import MessageReport from "../models/MessageReport.js";
 import PremiumMembership from "../models/PremiumMembership.js";
 import WorldEntitlement from "../models/WorldEntitlement.js";
+import Story from "../models/Story.js";
+import StoryEngagement from "../models/StoryEngagement.js";
 import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
 import { activeIncludedExperienceIds } from "../services/publicationEntitlementService.js";
 import { attachEntityMetadata } from "../services/contentEntityService.js";
@@ -145,11 +147,63 @@ async function loadProfile(owner, viewer) {
     { $group: { _id: "$publication", ownerCount: { $sum: 1 } } },
   ]) : [];
   const experienceOwnerCounts = new Map(experienceOwnerRows.map((item) => [String(item._id), Number(item.ownerCount) || 0]));
+  const viewerFollowsOwner = profileOwner || viewerRelationships.some((item) => item.type === "FOLLOW");
+  const activeStories = await Story.find({
+    creator: owner._id,
+    expiresAt: { $gt: new Date() },
+    ...(profileOwner ? {} : {
+      $or: [
+        { audience: "everyone" },
+        { audience: { $exists: false } },
+        ...(viewerFollowsOwner ? [{ audience: "followers" }] : []),
+      ],
+    }),
+  }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified role creatorApprovalStatus").lean();
+  const storyEngagements = viewer?._id && activeStories.length
+    ? await StoryEngagement.find({ fan: viewer._id, story: { $in: activeStories.map((story) => story._id) } }).select("story viewedAt reaction").lean()
+    : [];
+  const storyEngagementById = new Map(storyEngagements.map((item) => [String(item.story), item]));
+  const profileStories = activeStories.map((story) => {
+    const engagement = storyEngagementById.get(String(story._id));
+    const creator = story.creator || owner;
+    return {
+      id: String(story._id),
+      creatorId: String(creator._id || owner._id),
+      owner: {
+        id: String(creator._id || owner._id),
+        name: creator.name || owner.name,
+        username: creator.username || owner.username,
+        avatar: creator.avatar || owner.avatar || "",
+        verified: Boolean(creator.isVerified ?? owner.isVerified),
+        role: creator.creatorApprovalStatus === "approved" ? "creator" : creator.role || owner.role,
+      },
+      image: story.image?.url || "",
+      mediaUrl: story.image?.url || "",
+      thumbnailUrl: story.image?.url || "",
+      mediaType: story.mediaType || "image",
+      duration: story.duration || 5,
+      editorMetadata: story.editorMetadata || {},
+      audience: story.audience || "everyone",
+      allowReactions: story.allowReactions !== false,
+      allowReplies: story.allowReplies !== false,
+      allowSharing: story.allowSharing !== false,
+      caption: story.caption || "",
+      createdAt: story.createdAt,
+      expiresAt: story.expiresAt,
+      viewed: Boolean(engagement?.viewedAt),
+      viewerReaction: engagement?.reaction || null,
+      isOwn: profileOwner,
+      isOwner: profileOwner,
+      sourceType: story.sourceType || "original",
+      sourceSeenId: story.sourceSeen ? String(story.sourceSeen) : "",
+    };
+  });
+  const activeStoryCount = profileStories.length;
   if (ownCurrentWallPosts.length) await attachEntityMetadata(ownCurrentWallPosts, viewer || null);
   const currentWallPosts = await Promise.all(ownCurrentWallPosts.map(async (post) => serializeWallPost(post, await engagementForWallPost(post._id, viewer?._id))));
   const ownWallPosts = [...ownFeedPosts.map((post) => serializePost(post, viewer)), ...currentWallPosts]
     .sort((left, right) => new Date(right.feedCreatedAt || right.publishedAt || right.createdAt) - new Date(left.feedCreatedAt || left.publishedAt || left.createdAt));
-  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, membershipIncludedExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, seenByCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal) });
+  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, membershipIncludedExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, seenByCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal), activeStoryCount, profileStories });
 }
 
 async function relationshipTarget(username) {

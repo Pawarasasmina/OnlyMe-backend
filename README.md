@@ -51,6 +51,12 @@ Profile updates never accept role, status, verification approval, wallet, earnin
 Phase 6A uses immutable `StarsLedgerEntry` records as the source of truth and `Wallet.balance` as a transactionally updated integer-Stars projection. Legacy `Transaction` and `Subscription` collections remain read-only compatibility data. Financial commands require a transaction-capable MongoDB deployment (replica set or managed cluster) and fail with `TRANSACTIONS_REQUIRED` on standalone MongoDB; they never use transaction fallback. Admin test credits are disabled unless `ENABLE_ADMIN_STAR_CREDITS=true` and are never automatic.
 
 Read-only audits: `npm run analyze:financial-migration` and `npm run analyze:wallet-reconciliation`. These commands never create opening balances or change records. Resolve duplicate wallets, unsupported currency values, fractions, negatives, and projection mismatches manually before any approved migration.
+
+## Internal account classification
+
+Accounts are classified internally as `REAL`, `SEED`, or `TEST`; the default is `SEED`. The classification is admin-only and must not be exposed by public profile or creator APIs. REAL and SEED activity contributes to public counters and real financial reporting. TEST activity remains available for product and financial QA but uses isolated test wallet/ledger balances and is excluded from creator-facing earnings.
+
+Inspect legacy users without writing: `npm run migrate:account-types:dry-run`. After a verified backup, apply the additive migration with `npm run migrate:account-types`. It only assigns `SEED` where `accountType` is missing or null and never changes an existing classification.
 Profile uploads use a temporary local `uploads/` file before Cloudinary storage. Verification documents use authenticated Cloudinary assets and are streamed through authorized API endpoints. Content media uses Cloudinary directly.
 
 ## Content workflow

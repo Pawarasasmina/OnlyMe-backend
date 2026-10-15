@@ -11,6 +11,7 @@ import { fingerprint, idempotencyKey, positiveStars } from "../validators/financ
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import ApiError from "../utils/ApiError.js";
+import { financialModeForAccountType } from "../constants/accountTypeConstants.js";
 
 const TOPUP_PACKS = {
   "4.99": { usd: 4.99, bonus: 0 },
@@ -28,15 +29,17 @@ export function withdrawalBalances(earnedBalance, recentIncomeStars) {
 }
 
 export const getWallet = asyncHandler(async (req, res) => {
+  const financialMode = financialModeForAccountType(req.user.accountType);
+  const ledgerMode = { financialMode: financialMode === "TEST" ? "TEST" : { $ne: "TEST" } };
   const now = new Date();
   const withdrawalCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const automaticFilter = { creator: req.user._id, status: "ACTIVE", cancelAtPeriodEnd: false, currentPeriodEnd: { $gt: now } };
   const [wallet, starsPerUsd, income, recentIncome, automaticMemberships, automaticSummary] = await Promise.all([
     Wallet.findOne({ user: req.user._id }).lean(),
     getStarExchangeRate(),
-    StarsLedgerEntry.aggregate([{ $match: { accountUser: req.user._id, entryType: { $in: CREATOR_EVENTS } } }, { $group: { _id: null, stars: { $sum: "$signedAmount" } } }]),
+    StarsLedgerEntry.aggregate([{ $match: { accountUser: req.user._id, ...ledgerMode, entryType: { $in: CREATOR_EVENTS } } }, { $group: { _id: null, stars: { $sum: "$signedAmount" } } }]),
     StarsLedgerEntry.aggregate([
-      { $match: { accountUser: req.user._id, entryType: { $in: CREATOR_EVENTS }, createdAt: { $gt: withdrawalCutoff } } },
+      { $match: { accountUser: req.user._id, ...ledgerMode, entryType: { $in: CREATOR_EVENTS }, createdAt: { $gt: withdrawalCutoff } } },
       { $lookup: { from: StarsLedgerEntry.collection.name, localField: "_id", foreignField: "reversalOf", as: "reversals" } },
       { $match: { reversals: { $size: 0 } } },
       { $group: { _id: null, stars: { $sum: "$signedAmount" } } },
@@ -44,10 +47,11 @@ export const getWallet = asyncHandler(async (req, res) => {
     PremiumMembership.find(automaticFilter).sort({ currentPeriodEnd: 1 }).limit(10).populate("user", "name username avatar").populate("premiumPublication", "title publishedSnapshot.metadata.title").lean(),
     PremiumMembership.aggregate([{ $match: automaticFilter }, { $group: { _id: null, count: { $sum: 1 }, starsPerMonth: { $sum: "$starsPerPeriod" } } }]),
   ]);
-  const balance = wallet?.balance || 0;
-  let sourceBalances = { bonus: Number(wallet?.bonusBalance || 0), purchased: Number(wallet?.purchasedBalance || 0), earned: Number(wallet?.earnedBalance || 0) };
+  const testMode = financialMode === "TEST";
+  const balance = Number(testMode ? wallet?.testBalance : wallet?.balance) || 0;
+  let sourceBalances = { bonus: Number(testMode ? wallet?.testBonusBalance : wallet?.bonusBalance) || 0, purchased: Number(testMode ? wallet?.testPurchasedBalance : wallet?.purchasedBalance) || 0, earned: Number(testMode ? wallet?.testEarnedBalance : wallet?.earnedBalance) || 0 };
   if (sourceBalances.bonus + sourceBalances.purchased + sourceBalances.earned !== balance) {
-    const history = await StarsLedgerEntry.find({ accountUser: req.user._id }).sort({ createdAt: 1, _id: 1 }).lean();
+    const history = await StarsLedgerEntry.find({ accountUser: req.user._id, ...ledgerMode }).sort({ createdAt: 1, _id: 1 }).lean();
     sourceBalances = rebuildWalletBuckets(history);
   }
   const bonusBalance = sourceBalances.bonus;
@@ -70,7 +74,7 @@ export const topUpWallet = asyncHandler(async (req, res) => {
     { user: req.user._id, commandType: "WALLET_TOPUP", idempotencyKey: key, requestFingerprint: fingerprint({ packUsd: pack.usd, baseStars, bonusStars: pack.bonus, starsPerUsd }) },
     async (session, command) => {
       const posted = await creditWallet({ user: req.user._id, amount: totalStars, bonusAmount: pack.bonus, entryType: "WALLET_TOPUP_CREDIT", entryRole: "USER_TOPUP", referenceType: "WALLET_TOPUP", referenceId: command._id, command, idempotencyKey: key, metadata: { usdAmount: pack.usd, starsPerUsd, baseStars, bonusStars: pack.bonus, temporaryCheckout: true } }, session);
-      return { resultReference: posted.entry._id, wallet: safeWallet(posted.wallet), topUp: { usd: pack.usd, baseStars, bonusStars: pack.bonus, totalStars } };
+      return { resultReference: posted.entry._id, wallet: safeWallet(posted.wallet, command.financialMode), topUp: { usd: pack.usd, baseStars, bonusStars: pack.bonus, totalStars } };
     },
   );
   return sendResponse(res, 200, "Wallet topped up", result);
@@ -162,7 +166,8 @@ export const withdrawCreatorIncome = asyncHandler(async (req, res) => {
 export const getLedger = asyncHandler(async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
-  const filter = { accountUser: req.user._id };
+  const financialMode = financialModeForAccountType(req.user.accountType);
+  const filter = { accountUser: req.user._id, financialMode: financialMode === "TEST" ? "TEST" : { $ne: "TEST" } };
   const [rows, total] = await Promise.all([StarsLedgerEntry.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).populate("counterpartyUser", "name username avatar isVerified role").populate("publication", "title kind planet publishedSnapshot.metadata.title").lean(), StarsLedgerEntry.countDocuments(filter)]);
   const chatGiftIds = rows.filter((item) => item.referenceType === "CHAT_GIFT" && item.referenceId).map((item) => item.referenceId);
   const dreamGiftIds = rows.filter((item) => item.referenceType === "DREAM_GIFT" && item.referenceId).map((item) => item.referenceId);

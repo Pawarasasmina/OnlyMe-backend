@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
+import { ACCOUNT_TYPES, DEFAULT_ACCOUNT_TYPE } from "../constants/accountTypeConstants.js";
 
 const userSchema = new mongoose.Schema(
   {
@@ -35,6 +36,13 @@ const userSchema = new mongoose.Schema(
       type: String,
       enum: ["fan", "creator", "admin"],
       default: "fan",
+    },
+    accountType: {
+      type: String,
+      enum: ACCOUNT_TYPES,
+      default: DEFAULT_ACCOUNT_TYPE,
+      index: true,
+      select: false,
     },
     creatorApprovalStatus: {
       type: String,
@@ -136,6 +144,7 @@ userSchema.methods.passwordChangedAfter = function passwordChangedAfter(jwtIssue
 };
 
 userSchema.index({ role: 1, status: 1, creatorApprovalStatus: 1 });
+userSchema.index({ accountType: 1, status: 1 });
 userSchema.index({ username: 1, status: 1 });
 userSchema.index({ name: 1, status: 1 });
 userSchema.index({ "activeStatus.isActive": 1, "activeStatus.expiresAt": 1, status: 1 });

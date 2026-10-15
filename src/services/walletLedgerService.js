@@ -22,7 +22,7 @@ async function normalizeBuckets(wallet, session) {
   const earned = Number(wallet.earnedBalance || 0);
   const unclassified = Number(wallet.balance || 0) - bonus - purchased - earned;
   if (!unclassified) return wallet;
-  const entries = await StarsLedgerEntry.find({ accountUser: wallet.user }).sort({ createdAt: 1, _id: 1 }).session(session).lean();
+  const entries = await StarsLedgerEntry.find({ accountUser: wallet.user, financialMode: { $ne: "TEST" } }).sort({ createdAt: 1, _id: 1 }).session(session).lean();
   const rebuilt = rebuildWalletBuckets(entries);
   if (rebuilt.bonus + rebuilt.purchased + rebuilt.earned !== Number(wallet.balance || 0)) throw new ApiError(409, "Wallet source balances require reconciliation", "WALLET_BUCKET_DRIFT");
   wallet.bonusBalance = rebuilt.bonus;
@@ -91,12 +91,18 @@ async function debitBuckets(wallet, amount, reversalOf, session) {
 async function post({ user, amount, bonusAmount = 0, purchasedAmount, earnedAmount, direction, entryType, entryRole, referenceType, referenceId, publication, creator, counterpartyUser, command, idempotencyKey, reversalOf, metadata = {} }, session) {
   const create = direction === "CREDIT";
   let wallet = await normalizeBuckets(await walletFor(user, session, { create }), session);
+  const financialMode = command?.financialMode === "TEST" ? "TEST" : "REAL_SEED";
+  const testMode = financialMode === "TEST";
+  const fields = testMode
+    ? { balance: "testBalance", bonus: "testBonusBalance", purchased: "testPurchasedBalance", earned: "testEarnedBalance" }
+    : { balance: "balance", bonus: "bonusBalance", purchased: "purchasedBalance", earned: "earnedBalance" };
+  const bucketWallet = testMode ? { ...wallet.toObject(), balance: Number(wallet.testBalance || 0), bonusBalance: Number(wallet.testBonusBalance || 0), purchasedBalance: Number(wallet.testPurchasedBalance || 0), earnedBalance: Number(wallet.testEarnedBalance || 0) } : wallet;
   let bucketMetadata;
   if (direction === "DEBIT") {
-    bucketMetadata = await debitBuckets(wallet, amount, reversalOf, session);
+    bucketMetadata = await debitBuckets(bucketWallet, amount, reversalOf, session);
     wallet = await Wallet.findOneAndUpdate(
-      { _id: wallet._id, balance: { $gte: amount }, bonusBalance: { $gte: bucketMetadata.bonus }, purchasedBalance: { $gte: bucketMetadata.purchased }, earnedBalance: { $gte: bucketMetadata.earned } },
-      { $inc: { balance: -amount, bonusBalance: -bucketMetadata.bonus, purchasedBalance: -bucketMetadata.purchased, earnedBalance: -bucketMetadata.earned, version: 1 }, $set: { currency: "STARS", ledgerActivatedAt: wallet.ledgerActivatedAt || new Date(), reconciliationStatus: "MATCHED" } },
+      { _id: wallet._id, [fields.balance]: { $gte: amount }, [fields.bonus]: { $gte: bucketMetadata.bonus }, [fields.purchased]: { $gte: bucketMetadata.purchased }, [fields.earned]: { $gte: bucketMetadata.earned } },
+      { $inc: { [fields.balance]: -amount, [fields.bonus]: -bucketMetadata.bonus, [fields.purchased]: -bucketMetadata.purchased, [fields.earned]: -bucketMetadata.earned, version: 1 }, $set: { currency: "STARS", ledgerActivatedAt: wallet.ledgerActivatedAt || new Date(), reconciliationStatus: "MATCHED" } },
       { new: true, session, runValidators: true },
     );
     if (!wallet) throw new ApiError(422, "Insufficient Stars", FINANCIAL_ERROR_CODES.INSUFFICIENT_STARS);
@@ -104,12 +110,12 @@ async function post({ user, amount, bonusAmount = 0, purchasedAmount, earnedAmou
     bucketMetadata = await creditBuckets({ amount, bonusAmount, purchasedAmount, earnedAmount, entryType, reversalOf }, session);
     wallet = await Wallet.findOneAndUpdate(
       { _id: wallet._id },
-      { $inc: { balance: amount, bonusBalance: bucketMetadata.bonus, purchasedBalance: bucketMetadata.purchased, earnedBalance: bucketMetadata.earned, version: 1 }, $set: { currency: "STARS", ledgerActivatedAt: wallet.ledgerActivatedAt || new Date(), reconciliationStatus: "MATCHED" } },
+      { $inc: { [fields.balance]: amount, [fields.bonus]: bucketMetadata.bonus, [fields.purchased]: bucketMetadata.purchased, [fields.earned]: bucketMetadata.earned, version: 1 }, $set: { currency: "STARS", ledgerActivatedAt: wallet.ledgerActivatedAt || new Date(), reconciliationStatus: "MATCHED" } },
       { new: true, session, runValidators: true },
     );
   }
   const bucketKey = direction === "CREDIT" ? "bucketCredit" : "bucketSpend";
-  const [entry] = await StarsLedgerEntry.create([{ accountUser: user, entryType, entryRole, direction, starsAmount: amount, signedAmount: direction === "CREDIT" ? amount : -amount, balanceAfter: wallet.balance, referenceType, referenceId: String(referenceId), publication: publication || null, creator: creator || null, counterpartyUser: counterpartyUser || null, commandId: command._id, idempotencyKey, parentEntry: reversalOf || null, reversalOf: reversalOf || null, metadata: { ...metadata, [bucketKey]: bucketMetadata } }], { session });
+  const [entry] = await StarsLedgerEntry.create([{ accountUser: user, financialMode, entryType, entryRole, direction, starsAmount: amount, signedAmount: direction === "CREDIT" ? amount : -amount, balanceAfter: Number(wallet[fields.balance] || 0), referenceType, referenceId: String(referenceId), publication: publication || null, creator: creator || null, counterpartyUser: counterpartyUser || null, commandId: command._id, idempotencyKey, parentEntry: reversalOf || null, reversalOf: reversalOf || null, metadata: { ...metadata, [bucketKey]: bucketMetadata } }], { session });
   await Wallet.updateOne({ _id: wallet._id }, { $set: { lastLedgerEntry: entry._id } }, { session });
   return { wallet, entry };
 }
@@ -121,4 +127,7 @@ export async function transferStars({ fromUser, toUser, amount, debitType, credi
   const credit = await creditWallet({ user: toUser, amount, entryType: creditType, entryRole: "CREATOR_EARNING", referenceType, referenceId, publication, creator, counterpartyUser: fromUser, command, idempotencyKey, metadata: { ...metadata, settlementStatus: "UNSETTLED", grossStars: amount } }, session);
   return { debit, credit };
 }
-export const safeWallet = (wallet) => ({ balance: wallet.balance, bonusBalance: Number(wallet.bonusBalance || 0), purchasedBalance: Number(wallet.purchasedBalance || 0), earnedBalance: Number(wallet.earnedBalance || 0), version: wallet.version, currency: "STARS" });
+export const safeWallet = (wallet, financialMode = "REAL_SEED") => {
+  const test = financialMode === "TEST";
+  return { balance: Number(test ? wallet.testBalance : wallet.balance) || 0, bonusBalance: Number(test ? wallet.testBonusBalance : wallet.bonusBalance) || 0, purchasedBalance: Number(test ? wallet.testPurchasedBalance : wallet.purchasedBalance) || 0, earnedBalance: Number(test ? wallet.testEarnedBalance : wallet.earnedBalance) || 0, version: wallet.version, currency: "STARS" };
+};

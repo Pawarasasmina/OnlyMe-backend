@@ -1,8 +1,10 @@
 import mongoose from "mongoose";
+import { ACCOUNT_TYPES, DEFAULT_ACCOUNT_TYPE } from "../constants/accountTypeConstants.js";
 
 const analyticsSessionSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    actorAccountType: { type: String, enum: ACCOUNT_TYPES, default: DEFAULT_ACCOUNT_TYPE, index: true },
     sessionId: { type: String, required: true, trim: true, maxlength: 80, unique: true },
     startedAt: { type: Date, required: true, default: Date.now, index: true },
     lastActivityAt: { type: Date, required: true, default: Date.now, index: true },

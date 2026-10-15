@@ -181,14 +181,14 @@ export async function toggleFollowRelationship({ actor, targetUsername }) {
     await existing.deleteOne();
   } else {
     try {
-      await ProfileRelationship.updateOne(filter, { $setOnInsert: filter }, { upsert: true });
+      await ProfileRelationship.updateOne(filter, { $setOnInsert: { ...filter, actorAccountType: actor.accountType || "SEED" } }, { upsert: true });
     } catch (error) {
       if (error?.code !== 11000) throw error;
     }
   }
   return {
     active: !existing,
-    followerCount: await ProfileRelationship.countDocuments({ target: target._id, type: FOLLOW_TYPE }),
+    followerCount: await ProfileRelationship.countDocuments({ target: target._id, type: FOLLOW_TYPE, actorAccountType: { $ne: "TEST" } }),
     targetUserId: String(target._id),
     username: target.username,
   };
@@ -207,7 +207,7 @@ export async function createFollowRelationship({ actor, targetUserId }) {
   if (blockedIds.some((id) => String(id) === String(target._id))) throw new ApiError(403, "This profile is unavailable");
 
   const filter = { actor: actor._id, target: target._id, type: FOLLOW_TYPE };
-  await ProfileRelationship.updateOne(filter, { $setOnInsert: filter }, { upsert: true });
+  await ProfileRelationship.updateOne(filter, { $setOnInsert: { ...filter, actorAccountType: actor.accountType || "SEED" } }, { upsert: true });
   return {
     active: true,
     targetUserId: String(target._id),

@@ -510,7 +510,7 @@ export const markFeedPostViewed = asyncHandler(async (req, res) => {
 
   const updated = await FeedPost.findOneAndUpdate(
     { _id: post._id, "views.user": { $ne: viewerId } },
-    { $push: { views: { user: viewerId, viewedAt: new Date() } }, $inc: { viewCount: 1 } },
+    { $push: { views: { user: viewerId, actorAccountType: req.user.accountType, viewedAt: new Date() } }, ...(req.user.accountType === "TEST" ? {} : { $inc: { viewCount: 1 } }) },
     { new: true, runValidators: true, select: "viewCount views" }
   ).lean();
   if (updated) await trackPostEvent(req, "CONTENT_VIEW", post._id, { source: req.body.source || "home" });
@@ -610,10 +610,10 @@ export const updatePostReaction = asyncHandler(async (req, res) => {
   } else if (existing) {
     existing.reaction = reaction;
   } else {
-    post.reactions.push({ user: req.user._id, reaction });
+    post.reactions.push({ user: req.user._id, actorAccountType: req.user.accountType, reaction });
   }
 
-  post.supportCount = post.reactions.length;
+  post.supportCount = post.reactions.filter((item) => item.actorAccountType !== "TEST").length;
   await post.save();
   if (reaction) await trackPostEvent(req, "REACTION", post._id, { metadata: { reaction } });
   await populatePostForResponse(post);
@@ -630,10 +630,10 @@ export const togglePostSave = asyncHandler(async (req, res) => {
   if (existing) {
     post.saves = post.saves.filter((item) => String(item.user) !== userId);
   } else {
-    post.saves.push({ user: req.user._id });
+    post.saves.push({ user: req.user._id, actorAccountType: req.user.accountType });
   }
 
-  post.saveCount = post.saves.length;
+  post.saveCount = post.saves.filter((item) => item.actorAccountType !== "TEST").length;
   await post.save();
   if (!existing) await trackPostEvent(req, "SAVE", post._id);
   await populatePostForResponse(post);
@@ -650,10 +650,10 @@ export const togglePostShare = asyncHandler(async (req, res) => {
   if (existing) {
     post.shares = post.shares.filter((item) => String(item.user) !== userId);
   } else {
-    post.shares.push({ user: req.user._id, caption: cleanString(req.body.caption, 500) });
+    post.shares.push({ user: req.user._id, actorAccountType: req.user.accountType, caption: cleanString(req.body.caption, 500) });
   }
 
-  post.shareCount = post.shares.length;
+  post.shareCount = post.shares.filter((item) => item.actorAccountType !== "TEST").length;
   await post.save();
   if (!existing) await trackPostEvent(req, "SHARE", post._id);
   await populatePostForResponse(post);
@@ -726,8 +726,8 @@ export const createPostComment = asyncHandler(async (req, res) => {
   if (audio) {
     try { audio.waveform = JSON.parse(req.body.waveform || "[]").map(Number).filter(Number.isFinite).slice(0, 100); } catch { audio.waveform = []; }
   }
-  post.comments.push({ user: req.user._id, text: text || "Voice comment", audio: audio || undefined });
-  post.commentCount = post.comments.filter((comment) => !comment.deletedAt).length;
+  post.comments.push({ user: req.user._id, actorAccountType: req.user.accountType, text: text || "Voice comment", audio: audio || undefined });
+  post.commentCount = post.comments.filter((comment) => !comment.deletedAt && comment.actorAccountType !== "TEST").length;
   await post.save();
   await trackPostEvent(req, "COMMENT", post._id);
   await populatePostForResponse(post);
