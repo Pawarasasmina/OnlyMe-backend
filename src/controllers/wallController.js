@@ -1,3 +1,4 @@
+import UserBlock from "../models/UserBlock.js";
 import mongoose from "mongoose";
 import WallPost from "../models/WallPost.js";
 import WallEngagement, { WALL_REACTIONS } from "../models/WallEngagement.js";
@@ -10,6 +11,15 @@ import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { getActiveRecommendationConfig, personalizeCandidates } from "../services/recommendationService.js";
+
+export const getWallPost = asyncHandler(async (req, res) => {
+  const post = await requirePost(req.params.id);
+  const blocked = await UserBlock.exists({ $or: [{ blocker: req.user._id, blocked: post.creator }, { blocker: post.creator, blocked: req.user._id }] });
+  if (blocked) throw new ApiError(404, "Wall post not found");
+  await post.populate("creator", "name username avatar isVerified");
+  await attachEntityMetadata(post, req.user);
+  return sendResponse(res, 200, "Wall post fetched", { post: serializeWallPost(post) });
+});
 const contexts = new Set(["RIGHT_NOW", "COFFEE", "NEED_HELP", "PLACE", "RESTAURANT", "BOOK", "MOVIE", "TRAVEL", "BUSINESS", "FITNESS", "WELLNESS", "LIFESTYLE", "BEAUTY"]);
 export const serializeWallPost = (post, engagement = {}, activity = {}) => ({ id: activity.feedId || post._id, originalPostId: post._id, shareId: activity.shareId || null, text: post.text, shareCaption: activity.shareCaption || post.shareCaption || "", context: post.context, location: post.location, attachedEntities: post.attachedEntities || [], entityRefs: (post.entityRefs || []).map((ref) => ({ entityId: String(ref.entityId), entityType: ref.entityType })), media: post.media || [], createdAt: post.createdAt, feedCreatedAt: activity.feedCreatedAt || post.createdAt, sharedBy: activity.sharedBy || null, creator: { id: post.creator?._id, name: post.creator?.name, username: post.creator?.username, avatar: post.creator?.avatar || "", verified: Boolean(post.creator?.isVerified) }, reactionCount: engagement.reactionCount || 0, reactionBreakdown: engagement.reactionBreakdown || {}, topReactions: engagement.topReactions || [], viewerReaction: engagement.viewerReaction || null, viewerReacted: Boolean(engagement.viewerReaction || engagement.viewerReacted), commentCount: engagement.commentCount || 0, shareCount: engagement.shareCount || 0, saveCount: engagement.saveCount || 0, viewerShared: Boolean(engagement.viewerShared), viewerSaved: Boolean(engagement.viewerSaved) });
 const requirePost = async (id) => { if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid Wall post ID"); const post = await WallPost.findOne({ _id: id, status: "PUBLISHED" }); if (!post) throw new ApiError(404, "Wall post not found"); return post; };

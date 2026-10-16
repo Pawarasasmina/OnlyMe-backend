@@ -96,3 +96,21 @@ test("feed post voice translations display old short codes and new Lara locales"
     { language: "fr-FR", languageName: "French", text: "Bonjour encore" },
   ]);
 });
+
+
+test("community composer keeps post type and topic separate when persisted and serialized", () => {
+  const post = new FeedPost({ author: "507f1f77bcf86cd799439012", text: "Looking for a local photographer", context: "Looking for", postType: "Looking for", topic: "Services", status: "published" });
+  assert.equal(post.validateSync(), undefined);
+  const result = serializePost(post);
+  assert.equal(result.postType, "Looking for");
+  assert.equal(result.topic, "Services");
+  assert.equal(result.context, "Looking for");
+  assert.equal(result.visibility, "public");
+});
+
+test("community composer rejects unsupported type and topic values", () => {
+  const post = new FeedPost({ author: "507f1f77bcf86cd799439012", text: "Hello", postType: "invalid", topic: "invalid" });
+  const error = post.validateSync();
+  assert.ok(error.errors.postType);
+  assert.ok(error.errors.topic);
+});

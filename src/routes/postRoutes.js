@@ -1,5 +1,7 @@
+import { getWallContentLanguage, translateWallPostContent, wallTranslationLimiter } from "../controllers/wallTranslationController.js";
 import { Router } from "express";
 import {
+  setPostResolution,
   createDraftPost,
   createFeedPost,
   createPostComment,
@@ -34,6 +36,8 @@ router.get("/drafts", ...consumerOnly, (req, res, next) => {
 router.post("/", ...consumerOnly, uploadFeedPostMedia.fields([{ name: "media", maxCount: 4 }, { name: "voice", maxCount: 1 }]), createFeedPost);
 router.post("/drafts", ...consumerOnly, uploadFeedPostImages.array("media", 4), createDraftPost);
 router.get("/:id", protect, getFeedPost);
+router.get("/:id/language", ...consumerOnly, wallTranslationLimiter, getWallContentLanguage);
+router.post("/:id/translation", ...consumerOnly, wallTranslationLimiter, translateWallPostContent);
 router.get("/:id/reactions", protect, listPostReactors);
 router.post("/:id/views", protect, markFeedPostViewed);
 router.put("/:id/reaction", protect, updatePostReaction);
@@ -44,6 +48,7 @@ router.post("/:id/report", protect, reportFeedPost);
 router.post("/:id/archive", ...consumerOnly, archiveFeedPost);
 router.put("/:id/block-author", protect, blockPostAuthor);
 router.post("/:id/comments", protect, uploadVoiceMessage.single("voice"), createPostComment);
+router.put("/:id/resolution", ...consumerOnly, setPostResolution);
 router.put("/:id", ...consumerOnly, updateFeedPost);
 router.delete("/:id", ...consumerOnly, deleteFeedPost);
 
