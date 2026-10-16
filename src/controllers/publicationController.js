@@ -32,6 +32,7 @@ import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { getStarExchangeRate } from "../services/starExchangeService.js";
+import { getActiveRecommendationConfig, personalizeCandidates } from "../services/recommendationService.js";
 import { admitWorldWaitlist } from "../services/premiumMembershipService.js";
 
 const page = (req) => ({ page: Math.max(1, Number(req.query.page) || 1), limit: Math.min(50, Math.max(1, Number(req.query.limit) || 20)) });
@@ -751,7 +752,9 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
     }
     if (hiddenPublicationIds.length) filter._id = { $nin: hiddenPublicationIds };
   }
-  const items = await Publication.find(filter).sort({ publishedAt: -1, _id: -1 }).skip((paging.page - 1) * paging.limit).limit(paging.limit).populate("creator", "name username avatar isVerified activeStatus").populate("series", "name").lean();
+  const recommendationConfig = req.user?._id && !req.query.creator ? await getActiveRecommendationConfig() : null;
+  const candidateLimit = recommendationConfig ? recommendationConfig.config.rules.candidateLimit : paging.limit;
+  const items = await Publication.find(filter).sort({ publishedAt: -1, _id: -1 }).skip(recommendationConfig ? 0 : (paging.page - 1) * paging.limit).limit(candidateLimit).populate("creator", "name username avatar isVerified activeStatus").populate("series", "name").lean();
   await attachEntityMetadata(items, req.user || null);
   const publicationIds = items.map((item) => item._id);
   const creatorIds = [...new Set(items.map((item) => String(item.creator?._id || item.creator)).filter(Boolean))];
@@ -828,7 +831,8 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
       previewComment: previewCommentByPublication.get(String(item._id)) || null,
     };
   }).filter(Boolean);
-  return sendResponse(res, 200, "Published Seens fetched", { items: itemsWithEngagement, pagination: { ...paging, hasMore: items.length === paging.limit } });
+  const personalized = recommendationConfig ? await personalizeCandidates({ items: itemsWithEngagement, req, surface: "SEEN" }) : { items: itemsWithEngagement, recommendation: null };
+  return sendResponse(res, 200, "Published Seens fetched", { items: personalized.items.slice(0, paging.limit), recommendation: personalized.recommendation, pagination: { ...paging, hasMore: !recommendationConfig && items.length === paging.limit } });
 });
 export const getPublishedPublication = asyncHandler(async (req, res) => {
   const publication = await Publication.findById(req.params.id).select("+shareToken").populate("creator", "name username avatar isVerified").populate("series", "name").lean();

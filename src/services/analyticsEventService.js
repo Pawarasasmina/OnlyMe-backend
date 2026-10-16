@@ -9,6 +9,7 @@ import Transaction from "../models/Transaction.js";
 import User from "../models/User.js";
 import ApiError from "../utils/ApiError.js";
 import { normalizeAccountType } from "../constants/accountTypeConstants.js";
+import { updateInterestProfileFromEvent } from "./interestProfileService.js";
 
 export const TRACKING_START_DATE = new Date("2026-09-03T00:00:00.000Z");
 export const SESSION_INACTIVITY_MS = 30 * 60 * 1000;
@@ -21,6 +22,12 @@ const CLIENT_EVENT_TYPES = new Set([
   "CONTENT_IMPRESSION",
   "CONTENT_VIEW",
   "CONTENT_OPENED",
+  "CONTENT_WATCH",
+  "CONTENT_COMPLETED",
+  "CONTENT_REPLAY",
+  "FAST_SKIP",
+  "NOT_INTERESTED",
+  "HIDE",
 ]);
 const SOURCES = new Set(["home", "discover", "search", "profile", "seen", "saved", "notification", "world", "admin", "unknown"]);
 const ENTITY_TYPES = new Set(["", "user", "profile", "feed_post", "content", "seen", "world", "story", "publication", "comment", "book", "place", "journey", "search_result"]);
@@ -78,12 +85,25 @@ function safeMetadata(eventType, metadata = {}) {
     output.position = Math.max(0, Math.min(1000, Number(input.position) || 0));
     output.visibleThreshold = Math.max(0, Math.min(1, Number(input.visibleThreshold) || 0.5));
     output.visibleMs = Math.max(0, Math.min(10000, Number(input.visibleMs) || 500));
+    output.creatorId = mongoose.isValidObjectId(input.creatorId) ? String(input.creatorId) : "";
+    output.batchId = mongoose.isValidObjectId(input.batchId) ? String(input.batchId) : "";
+    output.topics = Array.isArray(input.topics) ? input.topics.map((item) => clean(item, 40).toLowerCase()).filter(Boolean).slice(0, 12) : [];
+  } else if (["CONTENT_WATCH", "CONTENT_COMPLETED", "CONTENT_REPLAY", "FAST_SKIP", "NOT_INTERESTED", "HIDE"].includes(eventType)) {
+    output.watchMs = Math.max(0, Math.min(86_400_000, Number(input.watchMs) || 0));
+    output.durationMs = Math.max(0, Math.min(86_400_000, Number(input.durationMs) || 0));
+    output.completion = Math.max(0, Math.min(1, Number(input.completion) || 0));
+    output.position = Math.max(0, Math.min(1000, Number(input.position) || 0));
+    output.creatorId = mongoose.isValidObjectId(input.creatorId) ? String(input.creatorId) : "";
+    output.batchId = mongoose.isValidObjectId(input.batchId) ? String(input.batchId) : "";
+    output.reason = clean(input.reason, 80);
+    output.topics = Array.isArray(input.topics) ? input.topics.map((item) => clean(item, 40).toLowerCase()).filter(Boolean).slice(0, 12) : [];
   } else if (eventType === "PROFILE_VIEW") {
     output.profileUserId = mongoose.isValidObjectId(input.profileUserId) ? String(input.profileUserId) : "";
   } else {
-    for (const key of ["placement", "position", "contentType", "targetUserId"]) {
+    for (const key of ["placement", "position", "contentType", "targetUserId", "creatorId", "reaction"]) {
       if (input[key] != null) output[key] = typeof input[key] === "number" ? input[key] : clean(input[key], 80);
     }
+    if (Array.isArray(input.topics)) output.topics = input.topics.map((item) => clean(item, 40).toLowerCase()).filter(Boolean).slice(0, 12);
   }
   return output;
 }
@@ -168,6 +188,7 @@ export async function recordAnalyticsEvent({ client = false, entityId = "", enti
       dedupeKey,
       createdAt: now,
     });
+    await updateInterestProfileFromEvent({ eventType: type, metadata: safe, now, userId });
     return { event, recorded: true };
   } catch (error) {
     if (error?.code === 11000 && dedupeKey) {

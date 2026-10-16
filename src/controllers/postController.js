@@ -21,6 +21,7 @@ import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyt
 import { listSupportedTranslationLanguages } from "../services/translationService.js";
 import { messageVoiceUrl, uploadMessageVoice } from "../services/messageVoiceStorageService.js";
 import { getVoiceLanguageName, normalizeVoiceLanguageCode, resolveSupportedVoiceLanguage } from "../constants/voiceTranslationLanguages.js";
+import { personalizeCandidates } from "../services/recommendationService.js";
 
 function pageOptions(req) {
   return {
@@ -468,10 +469,11 @@ export const listFeedPosts = asyncHandler(async (req, res) => {
   const originalItems = items.map((item) => serializePostFeedItem(item, req.user));
   const mergedItems = [...originalItems, ...sharedItems]
     .sort((left, right) => new Date(right.feedCreatedAt || right.publishedAt || right.createdAt) - new Date(left.feedCreatedAt || left.publishedAt || left.createdAt));
-  const offset = (page - 1) * limit;
+  const personalized = await personalizeCandidates({ items: mergedItems, req, surface: "WALL" });
 
   return sendResponse(res, 200, "Feed posts fetched", {
-    items: mergedItems.slice(offset, offset + limit),
+    items: personalized.items.slice(0, limit),
+    recommendation: personalized.recommendation,
     pagination: { page, limit, total: total + sharedItems.length, pages: Math.ceil((total + sharedItems.length) / limit) },
   });
 });
