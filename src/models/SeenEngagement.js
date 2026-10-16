@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { ACCOUNT_TYPES, DEFAULT_ACCOUNT_TYPE } from "../constants/accountTypeConstants.js";
 
 export const SEEN_REACTIONS = [
   "LIKE",
@@ -23,6 +24,7 @@ export const SEEN_REACTIONS = [
 const seenEngagementSchema = new mongoose.Schema({
   publication: { type: mongoose.Schema.Types.ObjectId, ref: "Publication", required: true, index: true },
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+  actorAccountType: { type: String, enum: ACCOUNT_TYPES, default: DEFAULT_ACCOUNT_TYPE, index: true },
   type: { type: String, enum: ["REACTION", "COMMENT", "COMMENT_REACTION", "SHARE", "SAVE", "WALKED"], required: true, index: true },
   parentComment: { type: mongoose.Schema.Types.ObjectId, ref: "SeenEngagement", default: undefined, index: true },
   reaction: { type: String, enum: SEEN_REACTIONS, default: undefined },

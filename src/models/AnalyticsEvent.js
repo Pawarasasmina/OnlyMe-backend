@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { ACCOUNT_TYPES, DEFAULT_ACCOUNT_TYPE } from "../constants/accountTypeConstants.js";
 
 export const ANALYTICS_EVENT_TYPES = [
   "SESSION_STARTED",
@@ -25,6 +26,7 @@ export const ANALYTICS_EVENT_TYPES = [
 const analyticsEventSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    actorAccountType: { type: String, enum: ACCOUNT_TYPES, default: DEFAULT_ACCOUNT_TYPE, index: true },
     sessionId: { type: String, required: true, trim: true, maxlength: 80, index: true },
     eventType: { type: String, enum: ANALYTICS_EVENT_TYPES, required: true, index: true },
     entityType: { type: String, trim: true, maxlength: 40, default: "", index: true },

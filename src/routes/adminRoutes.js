@@ -12,6 +12,7 @@ import {
   getReportedMessageUser,
   getReportForModeration,
   listReportedMessageUsers,
+  bulkUpdateUsers,
 } from "../controllers/adminController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
@@ -37,6 +38,7 @@ router.patch("/gifts/reorder", reorderGifts);
 router.patch("/gifts/:id", uploadGiftImage.single("image"), updateGift);
 router.delete("/gifts/:id", deleteGift);
 router.get("/users", listUsers);
+router.patch("/users/bulk", bulkUpdateUsers);
 router.patch("/users/:userId/status", updateUserStatus);
 router.patch("/users/:userId/creator-approval", updateCreatorApproval);
 router.get("/message-reports", messageReportScope, listMessageReports);

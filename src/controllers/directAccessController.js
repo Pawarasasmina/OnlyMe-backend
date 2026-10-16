@@ -11,6 +11,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { hasCreatorAccess, isConsumerAccount } from "../utils/accountCapabilities.js";
 import { activeDirectAccessWindow, createDirectAccessMessageAtomic, creatorTypicalReplyHours, openDirectAccessWindow, processDueDirectAccessWindows, refundDirectAccessWindow, serializeDAWindow } from "../services/directAccessService.js";
+import { financialModeForAccountType } from "../constants/accountTypeConstants.js";
 
 const validId = (value) => {
   if (!mongoose.isValidObjectId(value)) throw new ApiError(400, "Invalid account id");
@@ -22,7 +23,7 @@ export const getDirectAccessOffer = asyncHandler(async (req, res) => {
   if (!profile) throw new ApiError(404, "Creator profile not found");
   const active = isConsumerAccount(req.user) ? await activeDirectAccessWindow(req.user._id, req.params.creatorId) : null;
   const [wallet, membership] = isConsumerAccount(req.user) ? await Promise.all([
-    Wallet.findOne({ user: req.user._id }).select("balance").lean(),
+    Wallet.findOne({ user: req.user._id }).select("balance testBalance").lean(),
     PremiumMembership.findOne({ user: req.user._id, creator: req.params.creatorId, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }).select("currentPeriodStart currentPeriodEnd directAccessAllowancePeriodStart directAccessAllowanceUsedAt").lean(),
   ]) : [null, null];
   const allowanceAvailable = Boolean(membership && (
@@ -42,7 +43,7 @@ export const getDirectAccessOffer = asyncHandler(async (req, res) => {
     fanMessageLimit: 3,
     activeWindow: serializeDAWindow(active),
     typicalReplyHours: await creatorTypicalReplyHours(req.params.creatorId),
-    walletBalance: wallet?.balance ?? null,
+    walletBalance: financialModeForAccountType(req.user.accountType) === "TEST" ? wallet?.testBalance ?? null : wallet?.balance ?? null,
     premiumAllowance: membership ? { available: allowanceAvailable, renewsAt: membership.currentPeriodEnd } : null,
   });
 });

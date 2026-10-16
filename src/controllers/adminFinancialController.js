@@ -14,6 +14,7 @@ import { getStarExchangeRate, setStarExchangeRate } from "../services/starExchan
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
+import { financialModeForAccountType } from "../constants/accountTypeConstants.js";
 
 const objectId = (value) => {
   if (!mongoose.isObjectIdOrHexString(value)) throw new ApiError(400, "A valid financial record identifier is required", "INVALID_FINANCIAL_ID");
@@ -31,7 +32,7 @@ export const updateExchangeRate = asyncHandler(async (req, res) => {
 
 export const creditStars = asyncHandler(async (req, res) => {
   if (!env.enableAdminStarCredits) throw new ApiError(403, "Admin Stars credits are disabled", "ADMIN_CREDITS_DISABLED");
-  const target = await User.findById(objectId(req.params.userId)).select("_id role status");
+  const target = await User.findById(objectId(req.params.userId)).select("+accountType _id role status");
   if (!target) throw new ApiError(404, "User not found", "USER_NOT_FOUND");
   if (!["fan", "creator"].includes(target.role)) throw new ApiError(400, "Stars can only be added to fan or creator Wallets", "WALLET_ACCOUNT_REQUIRED");
   if (target.status !== "active") throw new ApiError(409, "The selected account is not active", "WALLET_ACCOUNT_INACTIVE");
@@ -39,14 +40,14 @@ export const creditStars = asyncHandler(async (req, res) => {
   const reason = requiredReason(req.body.reason);
   const key = idempotencyKey(req.body.idempotencyKey);
   const resetLegacyWallet = req.body.resetLegacyWallet === true;
-  const result = await executeFinancialCommand({ user: req.user._id, commandType: "ADMIN_CREDIT", idempotencyKey: key, requestFingerprint: fingerprint({ target: String(target._id), amount, reason, resetLegacyWallet }) }, async (session, command) => {
+  const result = await executeFinancialCommand({ user: req.user._id, financialMode: financialModeForAccountType(target.accountType), commandType: "ADMIN_CREDIT", idempotencyKey: key, requestFingerprint: fingerprint({ target: String(target._id), amount, reason, resetLegacyWallet }) }, async (session, command) => {
     const existingWallet = await Wallet.findOne({ user: target._id }).session(session);
     const requiresReset = Boolean(existingWallet && (existingWallet.currency !== "STARS" || !existingWallet.ledgerActivatedAt || existingWallet.reconciliationStatus !== "MATCHED"));
     if (requiresReset && !resetLegacyWallet) throw new ApiError(409, "Legacy Wallet reset confirmation is required", "WALLET_RESET_CONFIRMATION_REQUIRED");
     let reset = null;
     if (requiresReset) reset = await activateWalletLedger({ user: target._id, openingBalance: 0, reason: `Legacy Wallet reset before admin top-up: ${reason}`, admin: req.user._id, command, idempotencyKey: key }, session);
     const posted = await creditWallet({ user: target._id, amount, entryType: "CREDIT_ADMIN", entryRole: "ADMIN_CREDIT", referenceType: "ADMIN_CREDIT", referenceId: command._id, command, idempotencyKey: key, counterpartyUser: req.user._id, metadata: { reason, adminUser: String(req.user._id), legacyWalletReset: Boolean(reset), previousBalance: reset?.previous.balance, previousCurrency: reset?.previous.currency } }, session);
-    return { resultReference: posted.entry._id, wallet: safeWallet(posted.wallet), credit: { starsAmount: amount, createdAt: posted.entry.createdAt }, legacyReset: reset ? { previousBalance: reset.previous.balance, previousCurrency: reset.previous.currency } : null };
+    return { resultReference: posted.entry._id, wallet: safeWallet(posted.wallet, command.financialMode), credit: { starsAmount: amount, createdAt: posted.entry.createdAt }, legacyReset: reset ? { previousBalance: reset.previous.balance, previousCurrency: reset.previous.currency } : null };
   });
   return sendResponse(res, 200, "Stars credited", result);
 });
@@ -54,50 +55,54 @@ export const creditStars = asyncHandler(async (req, res) => {
 export const listUserWallets = asyncHandler(async (req, res) => {
   const search = String(req.query.search || "").trim();
   const filter = { role: { $in: ["fan", "creator"] }, ...(search ? { $or: ["name", "username", "email"].map((field) => ({ [field]: { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" } })) } : {}) };
-  const users = await User.find(filter).select("name username email avatar status role").sort({ createdAt: -1 }).limit(200).lean();
+  const users = await User.find(filter).select("+accountType name username email avatar status role").sort({ createdAt: -1 }).limit(200).lean();
   const userIds = users.map((user) => user._id);
   const [wallets, ledgerTotals] = await Promise.all([
     Wallet.find({ user: { $in: userIds } }).lean(),
-    StarsLedgerEntry.aggregate([{ $match: { accountUser: { $in: userIds } } }, { $group: { _id: "$accountUser", balance: { $sum: "$signedAmount" }, entries: { $sum: 1 } } }]),
+    StarsLedgerEntry.aggregate([{ $match: { accountUser: { $in: userIds } } }, { $group: { _id: { user: "$accountUser", mode: { $ifNull: ["$financialMode", "REAL_SEED"] } }, balance: { $sum: "$signedAmount" }, earnings: { $sum: { $cond: [{ $regexMatch: { input: "$entryRole", regex: "EARNING" } }, { $cond: [{ $eq: ["$direction", "CREDIT"] }, "$starsAmount", { $multiply: ["$starsAmount", -1] }] }, 0] } }, entries: { $sum: 1 } } }]),
   ]);
   const legacyTransactions = await Transaction.find({ wallet: { $in: wallets.map((wallet) => wallet._id) } }).sort({ createdAt: -1 }).limit(1000).lean();
   const walletByUser = new Map(wallets.map((wallet) => [String(wallet.user), wallet]));
-  const ledgerByUser = new Map(ledgerTotals.map((row) => [String(row._id), row]));
+  const ledgerByUser = new Map(ledgerTotals.map((row) => [`${row._id.user}:${row._id.mode}`, row]));
   const legacyByWallet = new Map();
   for (const transaction of legacyTransactions) legacyByWallet.set(String(transaction.wallet), [...(legacyByWallet.get(String(transaction.wallet)) || []), transaction]);
   const items = users.map((user) => {
     const wallet = walletByUser.get(String(user._id));
-    const ledger = ledgerByUser.get(String(user._id));
+    const realLedger = ledgerByUser.get(`${user._id}:REAL_SEED`);
+    const testLedger = ledgerByUser.get(`${user._id}:TEST`);
     const walletBalance = Number(wallet?.balance || 0);
-    const ledgerBalance = Number(ledger?.balance || 0);
+    const ledgerBalance = Number(realLedger?.balance || 0);
     const legacy = legacyByWallet.get(String(wallet?._id)) || [];
     const legacyProjection = legacy.filter((item) => item.status === "completed").reduce((total, item) => total + (item.type === "debit" ? -1 : 1) * Math.abs(Number(item.amount) || 0), 0);
     const reconciliationStatus = !wallet ? "NOT_CREATED" : wallet.currency !== "STARS" || !wallet.ledgerActivatedAt ? "NOT_ACTIVATED" : walletBalance !== ledgerBalance ? "DRIFT" : wallet.reconciliationStatus === "MATCHED" ? "MATCHED" : wallet.reconciliationStatus || "BLOCKED";
-    return { id: user._id, name: user.name, username: user.username, email: user.email, avatar: user.avatar || "", status: user.status, role: user.role, wallet: { exists: Boolean(wallet), balance: walletBalance, currency: wallet?.currency || "STARS", version: wallet?.version || 0, ledgerActivated: Boolean(wallet?.ledgerActivatedAt), ledgerActivatedAt: wallet?.ledgerActivatedAt || null, reconciliationStatus, ledgerBalance, ledgerEntries: ledger?.entries || 0, legacyProjection, legacyDifference: walletBalance - legacyProjection, legacyTransactions: legacy.slice(0, 20).map((item) => ({ id: item._id, amount: item.amount, type: item.type, status: item.status, description: item.description, createdAt: item.createdAt })) } };
+    return { id: user._id, name: user.name, username: user.username, email: user.email, avatar: user.avatar || "", status: user.status, role: user.role, accountType: user.accountType || "SEED", wallet: { exists: Boolean(wallet), balance: walletBalance, realSeedBalance: walletBalance, testBalance: Number(wallet?.testBalance || 0), realSeedEarnings: Number(realLedger?.earnings || 0), testEarnings: Number(testLedger?.earnings || 0), currency: wallet?.currency || "STARS", version: wallet?.version || 0, ledgerActivated: Boolean(wallet?.ledgerActivatedAt), ledgerActivatedAt: wallet?.ledgerActivatedAt || null, reconciliationStatus, ledgerBalance, ledgerEntries: Number(realLedger?.entries || 0) + Number(testLedger?.entries || 0), legacyProjection, legacyDifference: walletBalance - legacyProjection, legacyTransactions: legacy.slice(0, 20).map((item) => ({ id: item._id, amount: item.amount, type: item.type, status: item.status, description: item.description, createdAt: item.createdAt })) } };
   });
   return sendResponse(res, 200, "User Wallets fetched", { items });
 });
 
 export const getPlatformRevenue = asyncHandler(async (_req, res) => {
-  const [summary] = await PlatformRevenue.aggregate([{
+  const summaries = await PlatformRevenue.aggregate([{
     $group: {
-      _id: null,
+      _id: { $ifNull: ["$financialMode", "REAL_SEED"] },
       grossStars: { $sum: "$grossStars" },
       creatorStars: { $sum: "$creatorStars" },
       platformStars: { $sum: "$platformStars" },
       transactions: { $sum: 1 },
     },
   }]);
+  const byMode = Object.fromEntries(summaries.map((item) => [item._id, { grossStars: item.grossStars, creatorStars: item.creatorStars, platformStars: item.platformStars, transactions: item.transactions }]));
   const recent = await PlatformRevenue.find().sort({ capturedAt: -1 }).limit(50)
     .populate("fan creator", "name username").lean();
   return sendResponse(res, 200, "Platform revenue fetched", {
-    summary: summary || { grossStars: 0, creatorStars: 0, platformStars: 0, transactions: 0 },
+    summary: byMode.REAL_SEED || { grossStars: 0, creatorStars: 0, platformStars: 0, transactions: 0 },
+    breakdown: { realSeed: byMode.REAL_SEED || { grossStars: 0, creatorStars: 0, platformStars: 0, transactions: 0 }, test: byMode.TEST || { grossStars: 0, creatorStars: 0, platformStars: 0, transactions: 0 } },
     recent: recent.map((item) => ({
       id: String(item._id),
       windowId: item.referenceId,
       grossStars: item.grossStars,
       creatorStars: item.creatorStars,
       platformStars: item.platformStars,
+      financialMode: item.financialMode || "REAL_SEED",
       ratePercent: item.rateBasisPoints / 100,
       fan: item.fan ? { name: item.fan.name, username: item.fan.username } : null,
       creator: item.creator ? { name: item.creator.name, username: item.creator.username } : null,

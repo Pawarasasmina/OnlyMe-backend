@@ -10,44 +10,40 @@ import { processDueDirectAccessWindows } from "./services/directAccessService.js
 import { processDuePaidCalls } from "./services/paidCallService.js";
 import { reconcileVerifiedCreatorBadges } from "./services/verifiedCreatorService.js";
 
+const WORKER_INTERVAL_MS = 60 * 1000;
+const INITIAL_WORKER_DELAY_MS = 5 * 1000;
+
+function startWorker(name, task) {
+  const run = async () => {
+    try {
+      await task();
+    } catch (error) {
+      console.error(`${name} worker failed`, error);
+    } finally {
+      const timer = setTimeout(run, WORKER_INTERVAL_MS);
+      timer.unref();
+    }
+  };
+
+  const timer = setTimeout(run, INITIAL_WORKER_DELAY_MS);
+  timer.unref();
+}
+
 async function startServer() {
   try {
     await connectDb();
-    await retryPendingVerificationFileCleanup();
-    await processDuePremiumMemberships();
-    await processDueDirectAccessWindows();
-    await processDuePaidCalls();
-    await reconcileVerifiedCreatorBadges();
-    const premiumRenewalTimer = setInterval(
-      () => processDuePremiumMemberships().catch((error) =>
-        console.error("Premium renewal worker failed", error),
-      ),
-      60 * 1000,
-    );
-    premiumRenewalTimer.unref();
-    const directAccessExpiryTimer = setInterval(
-      () => processDueDirectAccessWindows(new Date(), io).catch((error) =>
-        console.error("Direct Access expiry worker failed", error),
-      ),
-      60 * 1000,
-    );
-    directAccessExpiryTimer.unref();
-    const paidCallExpiryTimer = setInterval(
-      () => processDuePaidCalls(new Date(), io).catch((error) => console.error("Paid call refund worker failed", error)),
-      60 * 1000,
-    );
-    paidCallExpiryTimer.unref();
-    const verifiedCreatorRenewalTimer = setInterval(
-      () => reconcileVerifiedCreatorBadges().catch((error) => console.error("Verified Creator renewal worker failed", error)),
-      60 * 1000,
-    );
-    verifiedCreatorRenewalTimer.unref();
     const server = http.createServer(app);
     const io = new Server(server, { cors: { origin: env.clientUrl, credentials: true } });
     configureMessagingSocket(io);
     app.set("io", io);
     server.listen(env.port, () => {
       console.log(`OnlyMe API listening on port ${env.port}`);
+      // Maintenance must never delay API readiness or cold-start recovery.
+      startWorker("Verification file cleanup", retryPendingVerificationFileCleanup);
+      startWorker("Premium renewal", processDuePremiumMemberships);
+      startWorker("Direct Access expiry", () => processDueDirectAccessWindows(new Date(), io));
+      startWorker("Paid call refund", () => processDuePaidCalls(new Date(), io));
+      startWorker("Verified Creator renewal", reconcileVerifiedCreatorBadges);
     });
   } catch (error) {
     console.error("Failed to start server", error);

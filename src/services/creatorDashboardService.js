@@ -21,6 +21,8 @@ import { getStarExchangeRate } from "./starExchangeService.js";
 // allowlist. This automatically includes future fan-to-creator earning sources,
 // while top-ups, refunds, admin credits, conversions and reversals stay out.
 export const CREATOR_EARNING_ROLE_PATTERN = /^CREATOR_(?:.*_)?EARNING$/;
+const PUBLIC_ACTOR = { actorAccountType: { $ne: "TEST" } };
+const REAL_FINANCE = { financialMode: { $ne: "TEST" } };
 
 const SOURCE_COLORS = {
   Discover: "#9CCBFF",
@@ -145,11 +147,11 @@ async function contentAudience({ creatorId, publicationIds, wallPostIds, storyId
     : { entityId: String(creatorId), entityType: "profile" };
   const eventTypes = ["CONTENT_IMPRESSION", "CONTENT_VIEW", "CONTENT_OPENED", "SEEN_VIEW", "STORY_VIEW", "PROFILE_VIEW"];
   const [currentUsers, previousUsers, historicalUsers, sourceRows] = await Promise.all([
-    AnalyticsEvent.distinct("userId", { eventType: { $in: eventTypes }, createdAt: { $gte: start, $lte: now }, ...contentMatch }),
-    AnalyticsEvent.distinct("userId", { eventType: { $in: eventTypes }, createdAt: { $gte: previousStart, $lte: previousEnd }, ...contentMatch }),
-    AnalyticsEvent.distinct("userId", { eventType: { $in: eventTypes }, createdAt: { $lt: start }, ...contentMatch }),
+    AnalyticsEvent.distinct("userId", { ...PUBLIC_ACTOR, eventType: { $in: eventTypes }, createdAt: { $gte: start, $lte: now }, ...contentMatch }),
+    AnalyticsEvent.distinct("userId", { ...PUBLIC_ACTOR, eventType: { $in: eventTypes }, createdAt: { $gte: previousStart, $lte: previousEnd }, ...contentMatch }),
+    AnalyticsEvent.distinct("userId", { ...PUBLIC_ACTOR, eventType: { $in: eventTypes }, createdAt: { $lt: start }, ...contentMatch }),
     AnalyticsEvent.aggregate([
-      { $match: { eventType: { $in: eventTypes }, createdAt: { $gte: start, $lte: now }, ...contentMatch } },
+      { $match: { ...PUBLIC_ACTOR, eventType: { $in: eventTypes }, createdAt: { $gte: start, $lte: now }, ...contentMatch } },
       { $group: { _id: "$source", value: { $sum: 1 } } },
     ]),
   ]);
@@ -175,11 +177,11 @@ async function bestSeenFor(seens) {
   if (!seens.length) return null;
   const ids = seens.map((seen) => seen._id);
   const analyticsRows = await AnalyticsEvent.aggregate([
-    { $match: { eventType: { $in: ["CONTENT_VIEW", "CONTENT_OPENED", "SEEN_VIEW"] }, entityId: { $in: ids.map(String) } } },
+    { $match: { ...PUBLIC_ACTOR, eventType: { $in: ["CONTENT_VIEW", "CONTENT_OPENED", "SEEN_VIEW"] }, entityId: { $in: ids.map(String) } } },
     { $group: { _id: "$entityId", value: { $sum: 1 } } },
   ]);
   const engagementRows = await SeenEngagement.aggregate([
-    { $match: { publication: { $in: ids }, type: "WALKED" } },
+    { $match: { ...PUBLIC_ACTOR, publication: { $in: ids }, type: "WALKED" } },
     { $group: { _id: "$publication", value: { $sum: 1 } } },
   ]);
   const scores = new Map();
@@ -198,7 +200,7 @@ async function bestSeenFor(seens) {
 async function bestWallPostFor(wallPosts) {
   if (!wallPosts.length) return null;
   const engagementRows = await WallEngagement.aggregate([
-    { $match: { post: { $in: wallPosts.map((post) => post._id) } } },
+    { $match: { ...PUBLIC_ACTOR, post: { $in: wallPosts.map((post) => post._id) } } },
     { $group: { _id: "$post", value: { $sum: 1 } } },
   ]);
   const scores = new Map(engagementRows.map((row) => [String(row._id), row.value]));
@@ -217,7 +219,7 @@ async function locationRowsFor(wallPosts) {
   const located = wallPosts.filter((post) => post.location);
   if (!located.length) return { best: null };
   const engagementRows = await WallEngagement.aggregate([
-    { $match: { post: { $in: located.map((post) => post._id) } } },
+    { $match: { ...PUBLIC_ACTOR, post: { $in: located.map((post) => post._id) } } },
     { $group: { _id: "$post", value: { $sum: 1 } } },
   ]);
   const byPost = new Map(engagementRows.map((row) => [String(row._id), row.value]));
@@ -233,9 +235,9 @@ async function locationRowsFor(wallPosts) {
 
 async function recentActivity({ publicationIds, wallPostIds, creatorId }) {
   const [seenRows, wallRows, followRows] = await Promise.all([
-    publicationIds.length ? SeenEngagement.find({ publication: { $in: publicationIds }, type: { $in: ["REACTION", "SHARE", "SAVE", "COMMENT"] } }).sort({ createdAt: -1 }).limit(8).populate("user", "name username avatar isVerified").lean() : [],
-    wallPostIds.length ? WallEngagement.find({ post: { $in: wallPostIds }, type: { $in: ["REACTION", "SHARE", "SAVE", "COMMENT"] } }).sort({ createdAt: -1 }).limit(8).populate("user", "name username avatar isVerified").lean() : [],
-    ProfileRelationship.find({ target: creatorId, type: "FOLLOW" }).sort({ createdAt: -1 }).limit(5).populate("actor", "name username avatar isVerified").lean(),
+    publicationIds.length ? SeenEngagement.find({ ...PUBLIC_ACTOR, publication: { $in: publicationIds }, type: { $in: ["REACTION", "SHARE", "SAVE", "COMMENT"] } }).sort({ createdAt: -1 }).limit(8).populate("user", "name username avatar isVerified").lean() : [],
+    wallPostIds.length ? WallEngagement.find({ ...PUBLIC_ACTOR, post: { $in: wallPostIds }, type: { $in: ["REACTION", "SHARE", "SAVE", "COMMENT"] } }).sort({ createdAt: -1 }).limit(8).populate("user", "name username avatar isVerified").lean() : [],
+    ProfileRelationship.find({ ...PUBLIC_ACTOR, target: creatorId, type: "FOLLOW" }).sort({ createdAt: -1 }).limit(5).populate("actor", "name username avatar isVerified").lean(),
   ]);
   const items = [
     ...seenRows.map((row) => ({ createdAt: row.createdAt, text: `${row.user?.name || row.user?.username || "Someone"} ${row.type === "SAVE" ? "saved" : row.type === "SHARE" ? "reposted" : row.type === "COMMENT" ? "commented on" : "reacted to"} your Seen`, type: "seen" })),
@@ -287,7 +289,7 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
     Publication.find({ creator: creatorId }).select("title kind status pricing publishedAt planet publishedSnapshot.metadata.title createdAt").lean(),
     WallPost.find({ creator: creatorId, status: "PUBLISHED" }).select("text context location createdAt").sort({ createdAt: -1 }).limit(100).lean(),
     ProfileMedia.countDocuments({ user: creatorId, type: "image" }),
-    ProfileRelationship.find({ target: creatorId, type: "FOLLOW" }).select("actor createdAt").lean(),
+    ProfileRelationship.find({ ...PUBLIC_ACTOR, target: creatorId, type: "FOLLOW" }).select("actor createdAt").lean(),
     ProfileRelationship.countDocuments({ actor: creatorId, type: "FOLLOW" }),
     User.findById(creatorId).select("avatar activeStatus").lean(),
   ]);
@@ -323,14 +325,14 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
     previousStoryViews,
   ] = await Promise.all([
     contentAudience({ creatorId, now, previousEnd, previousStart, publicationIds, wallPostIds, start, storyIds }),
-    seenIds.length ? AnalyticsEvent.countDocuments({ eventType: { $in: ["CONTENT_VIEW", "CONTENT_OPENED", "SEEN_VIEW"] }, entityId: { $in: seenIds.map(String) }, createdAt: { $gte: start, $lte: now } }) : 0,
-    seenIds.length ? AnalyticsEvent.countDocuments({ eventType: { $in: ["CONTENT_VIEW", "CONTENT_OPENED", "SEEN_VIEW"] }, entityId: { $in: seenIds.map(String) }, createdAt: { $gte: previousStart, $lte: previousEnd } }) : 0,
-    AnalyticsEvent.countDocuments({ eventType: "PROFILE_VIEW", entityId: String(creatorId), createdAt: { $gte: start, $lte: now } }),
-    AnalyticsEvent.countDocuments({ eventType: "PROFILE_VIEW", entityId: String(creatorId), createdAt: { $gte: previousStart, $lte: previousEnd } }),
+    seenIds.length ? AnalyticsEvent.countDocuments({ ...PUBLIC_ACTOR, eventType: { $in: ["CONTENT_VIEW", "CONTENT_OPENED", "SEEN_VIEW"] }, entityId: { $in: seenIds.map(String) }, createdAt: { $gte: start, $lte: now } }) : 0,
+    seenIds.length ? AnalyticsEvent.countDocuments({ ...PUBLIC_ACTOR, eventType: { $in: ["CONTENT_VIEW", "CONTENT_OPENED", "SEEN_VIEW"] }, entityId: { $in: seenIds.map(String) }, createdAt: { $gte: previousStart, $lte: previousEnd } }) : 0,
+    AnalyticsEvent.countDocuments({ ...PUBLIC_ACTOR, eventType: "PROFILE_VIEW", entityId: String(creatorId), createdAt: { $gte: start, $lte: now } }),
+    AnalyticsEvent.countDocuments({ ...PUBLIC_ACTOR, eventType: "PROFILE_VIEW", entityId: String(creatorId), createdAt: { $gte: previousStart, $lte: previousEnd } }),
     DAWindow.find({ creator: creatorId, openedAt: { $gte: start, $lte: now } }).select("openedAt firstCreatorReplyAt answeredAt status settlementStatus").lean(),
-    StarsLedgerEntry.find({ accountUser: creatorId, direction: "CREDIT", entryRole: CREATOR_EARNING_ROLE_PATTERN, createdAt: { $gte: start, $lte: now } }).lean(),
-    StarsLedgerEntry.find({ accountUser: creatorId, direction: "CREDIT", entryRole: CREATOR_EARNING_ROLE_PATTERN, createdAt: { $gte: previousStart, $lte: previousEnd } }).lean(),
-    StarsLedgerEntry.find({ accountUser: creatorId, direction: "CREDIT", entryRole: CREATOR_EARNING_ROLE_PATTERN }).sort({ createdAt: -1 }).limit(20).populate("counterpartyUser", "name username avatar isVerified").populate("publication", "title kind planet publishedSnapshot.metadata.title").lean(),
+    StarsLedgerEntry.find({ ...REAL_FINANCE, accountUser: creatorId, direction: "CREDIT", entryRole: CREATOR_EARNING_ROLE_PATTERN, createdAt: { $gte: start, $lte: now } }).lean(),
+    StarsLedgerEntry.find({ ...REAL_FINANCE, accountUser: creatorId, direction: "CREDIT", entryRole: CREATOR_EARNING_ROLE_PATTERN, createdAt: { $gte: previousStart, $lte: previousEnd } }).lean(),
+    StarsLedgerEntry.find({ ...REAL_FINANCE, accountUser: creatorId, direction: "CREDIT", entryRole: CREATOR_EARNING_ROLE_PATTERN }).sort({ createdAt: -1 }).limit(20).populate("counterpartyUser", "name username avatar isVerified").populate("publication", "title kind planet publishedSnapshot.metadata.title").lean(),
     PremiumMembership.find({ creator: creatorId, status: { $in: ACTIVE_MEMBERSHIP_STATUSES } }).select("user starsPerPeriod status currentPeriodEnd").lean(),
     WorldEntitlement.distinct("user", { creator: creatorId, status: "ACTIVE", grantedAt: { $gte: weekStart, $lte: now } }),
     bestSeenFor(publishedSeens),

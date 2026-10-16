@@ -21,7 +21,7 @@ export const protect = asyncHandler(async (req, _res, next) => {
     throw new ApiError(401, "Invalid or expired authentication token");
   }
 
-  const user = await User.findById(decoded.sub);
+  const user = await User.findById(decoded.sub).select("+accountType");
 
   if (!user) {
     throw new ApiError(401, "User not found");
@@ -55,7 +55,7 @@ export const optionalProtect = asyncHandler(async (req, _res, next) => {
     throw new ApiError(401, "Invalid or expired authentication token");
   }
 
-  const user = await User.findById(decoded.sub);
+  const user = await User.findById(decoded.sub).select("+accountType");
   if (!user) throw new ApiError(401, "User not found");
   if (user.status !== "active") throw new ApiError(403, "This account is suspended");
   if (user.loginRestrictedUntil && user.loginRestrictedUntil > new Date()) throw new ApiError(403, `Account access is restricted until ${user.loginRestrictedUntil.toISOString()}`);

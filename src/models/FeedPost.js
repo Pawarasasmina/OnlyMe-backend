@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { CONTENT_ENTITY_TYPES } from "../constants/contentEntityConstants.js";
 import { POST_CONTEXTS, POST_REACTIONS, POST_STATUSES, POST_VISIBILITIES } from "../constants/postConstants.js";
+import { ACCOUNT_TYPES, DEFAULT_ACCOUNT_TYPE } from "../constants/accountTypeConstants.js";
 
 const postMediaTranslationSchema = new mongoose.Schema(
   {
@@ -35,6 +36,7 @@ const postMediaSchema = new mongoose.Schema(
 const postReactionSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    actorAccountType: { type: String, enum: ACCOUNT_TYPES, default: DEFAULT_ACCOUNT_TYPE },
     reaction: { type: String, enum: POST_REACTIONS, required: true },
   },
   { timestamps: true }
@@ -43,6 +45,7 @@ const postReactionSchema = new mongoose.Schema(
 const postCommentSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    actorAccountType: { type: String, enum: ACCOUNT_TYPES, default: DEFAULT_ACCOUNT_TYPE },
     text: { type: String, trim: true, required: true, maxlength: 500 },
     audio: {
       assetId: String,
@@ -61,6 +64,7 @@ const postCommentSchema = new mongoose.Schema(
 const postSaveSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    actorAccountType: { type: String, enum: ACCOUNT_TYPES, default: DEFAULT_ACCOUNT_TYPE },
   },
   { timestamps: true }
 );
@@ -68,6 +72,7 @@ const postSaveSchema = new mongoose.Schema(
 const postViewSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    actorAccountType: { type: String, enum: ACCOUNT_TYPES, default: DEFAULT_ACCOUNT_TYPE },
     viewedAt: { type: Date, default: Date.now },
   },
   { _id: false }
@@ -76,6 +81,7 @@ const postViewSchema = new mongoose.Schema(
 const postShareSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    actorAccountType: { type: String, enum: ACCOUNT_TYPES, default: DEFAULT_ACCOUNT_TYPE },
     caption: { type: String, trim: true, maxlength: 500, default: "" },
   },
   { timestamps: true }

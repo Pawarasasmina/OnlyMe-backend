@@ -10,6 +10,7 @@ import ApiError from "../utils/ApiError.js";
 import { executeFinancialCommand } from "./financialCommandService.js";
 import { creditWallet, debitWallet, safeWallet } from "./walletLedgerService.js";
 import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
+import { financialModeForAccountType } from "../constants/accountTypeConstants.js";
 
 export const PAID_CALL_REQUEST_MS = 24 * 60 * 60 * 1000;
 export const PAID_CALL_PLATFORM_RATE_BPS = 2000;
@@ -30,12 +31,12 @@ export async function paidCallOffer(fan, creatorId) {
   const [creator, profile, wallet, blocked] = await Promise.all([
     User.findOne({ _id: creatorId, role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved", status: "active" }).select("_id name username avatar role creatorApprovalStatus").lean(),
     CreatorProfile.findOne({ user: creatorId }).select("directCallEnabled directCallPriceStars directCallDurationMinutes directCallAutoDeclineAway").lean(),
-    Wallet.findOne({ user: fan._id }).select("balance").lean(),
+    Wallet.findOne({ user: fan._id }).select("balance testBalance").lean(),
     UserBlock.exists({ $or: [{ blocker: fan._id, blocked: creatorId }, { blocker: creatorId, blocked: fan._id }] }),
   ]);
   if (!creator || !profile) throw new ApiError(404, "Creator not found");
   if (blocked) throw new ApiError(403, "Calling is unavailable for this account");
-  return { enabled: Boolean(profile.directCallEnabled), priceStars: profile.directCallPriceStars || 500, priorityPriceStars: PAID_CALL_PRIORITY_STARS, durationMinutes: profile.directCallDurationMinutes || 5, autoDeclineWhenAway: Boolean(profile.directCallAutoDeclineAway), walletBalance: wallet?.balance ?? 0, creator };
+  return { enabled: Boolean(profile.directCallEnabled), priceStars: profile.directCallPriceStars || 500, priorityPriceStars: PAID_CALL_PRIORITY_STARS, durationMinutes: profile.directCallDurationMinutes || 5, autoDeclineWhenAway: Boolean(profile.directCallAutoDeclineAway), walletBalance: financialModeForAccountType(fan.accountType) === "TEST" ? wallet?.testBalance ?? 0 : wallet?.balance ?? 0, creator };
 }
 
 export async function openPaidCall({ fan, creatorId, key, type = "AUDIO", topic = "", priority = false }) {
@@ -60,7 +61,7 @@ export async function openPaidCall({ fan, creatorId, key, type = "AUDIO", topic 
     call.holdLedgerEntry = held.entry._id;
     await call.save({ session });
     await Notification.create([{ user: creator._id, type: "paid_call_requested", title: `${fan.name || "A fan"} requested a ${durationMinutes}-minute${isPriority ? " priority" : ""} call`, message: normalizedTopic, dedupeKey: `paid-call:${call._id}` }], { session });
-    return { resultReference: call._id, call: serializePaidCall(call), wallet: safeWallet(held.wallet) };
+    return { resultReference: call._id, call: serializePaidCall(call), wallet: safeWallet(held.wallet, command.financialMode) };
   });
 }
 
@@ -68,7 +69,8 @@ export async function refundPaidCall(callId, reason = "NOT_DELIVERED", now = new
   const candidate = await CallSession.findById(callId).lean();
   if (!candidate || !candidate.paid || candidate.settlementStatus !== "HELD") return candidate ? { call: serializePaidCall(candidate), changed: false } : null;
   const key = `paid-call-refund:${candidate._id}`;
-  return executeFinancialCommand({ user: candidate.caller, commandType: "REFUND_PAID_CALL", idempotencyKey: key, requestFingerprint: fingerprint({ callId: String(candidate._id), priceStars: candidate.priceStars }) }, async (session, command) => {
+  const original = await StarsLedgerEntry.findById(candidate.holdLedgerEntry).select("financialMode").lean();
+  return executeFinancialCommand({ user: candidate.caller, financialMode: original?.financialMode || "REAL_SEED", commandType: "REFUND_PAID_CALL", idempotencyKey: key, requestFingerprint: fingerprint({ callId: String(candidate._id), priceStars: candidate.priceStars }) }, async (session, command) => {
     const call = await CallSession.findOne({ _id: callId, settlementStatus: "HELD" }).session(session);
     if (!call) return { resultReference: callId, call: serializePaidCall(await CallSession.findById(callId).session(session)), changed: false };
     const held = await StarsLedgerEntry.findById(call.holdLedgerEntry).session(session);
@@ -78,7 +80,7 @@ export async function refundPaidCall(callId, reason = "NOT_DELIVERED", now = new
     call.endedAt = call.endedAt || now; call.endReason = call.endReason || reason;
     await call.save({ session });
     await Notification.create([{ user: call.caller, type: "paid_call_refunded", title: `Your ${call.priceStars} Stars were refunded`, dedupeKey: `paid-call-refund:${call._id}` }], { session });
-    return { resultReference: call._id, call: serializePaidCall(call), wallet: safeWallet(refunded.wallet), changed: true };
+    return { resultReference: call._id, call: serializePaidCall(call), wallet: safeWallet(refunded.wallet, command.financialMode), changed: true };
   });
 }
 
@@ -88,17 +90,18 @@ export async function capturePaidCall(callId, now = new Date()) {
   if (!candidate.paid || candidate.settlementStatus === "CAPTURED") return { call: serializePaidCall(candidate), changed: false };
   if (candidate.settlementStatus !== "HELD") throw new ApiError(409, "This call is not capturable");
   const key = `paid-call-capture:${candidate._id}`;
-  return executeFinancialCommand({ user: candidate.recipient, commandType: "CAPTURE_PAID_CALL", idempotencyKey: key, requestFingerprint: fingerprint({ callId: String(candidate._id), priceStars: candidate.priceStars }) }, async (session, command) => {
+  const original = await StarsLedgerEntry.findById(candidate.holdLedgerEntry).select("financialMode").lean();
+  return executeFinancialCommand({ user: candidate.recipient, financialMode: original?.financialMode || "REAL_SEED", commandType: "CAPTURE_PAID_CALL", idempotencyKey: key, requestFingerprint: fingerprint({ callId: String(candidate._id), priceStars: candidate.priceStars }) }, async (session, command) => {
     const call = await CallSession.findOne({ _id: callId, settlementStatus: "HELD" }).session(session);
     if (!call) return { resultReference: callId, call: serializePaidCall(await CallSession.findById(callId).session(session)), changed: false };
     const platformStars = Math.floor((call.priceStars * PAID_CALL_PLATFORM_RATE_BPS) / 10000);
     const creatorStars = call.priceStars - platformStars;
     const earned = await creditWallet({ user: call.recipient, amount: creatorStars, entryType: "CALL_CREATOR_EARNING", entryRole: "CREATOR_CALL_EARNING", referenceType: "PAID_CALL", referenceId: call._id, creator: call.recipient, counterpartyUser: call.caller, command, idempotencyKey: key, metadata: { settlementStatus: "CAPTURED", grossStars: call.priceStars, creatorStars, platformStars, platformRateBasisPoints: PAID_CALL_PLATFORM_RATE_BPS } }, session);
-    const [revenue] = await PlatformRevenue.create([{ sourceType: "PAID_CALL", referenceId: String(call._id), fan: call.caller, creator: call.recipient, grossStars: call.priceStars, creatorStars, platformStars, rateBasisPoints: PAID_CALL_PLATFORM_RATE_BPS, command: command._id, capturedAt: now }], { session });
+    const [revenue] = await PlatformRevenue.create([{ sourceType: "PAID_CALL", financialMode: command.financialMode, referenceId: String(call._id), fan: call.caller, creator: call.recipient, grossStars: call.priceStars, creatorStars, platformStars, rateBasisPoints: PAID_CALL_PLATFORM_RATE_BPS, command: command._id, capturedAt: now }], { session });
     call.settlementStatus = "CAPTURED"; call.captureCommand = command._id; call.creatorEarningLedgerEntry = earned.entry._id; call.platformRevenue = revenue._id; call.connectedAt = call.connectedAt || now;
     await call.save({ session });
     await Notification.create([{ user: call.recipient, type: "paid_call_earned", title: `You earned ${creatorStars} Stars from a call`, dedupeKey: `paid-call-capture:${call._id}` }], { session });
-    return { resultReference: call._id, call: serializePaidCall(call), wallet: safeWallet(earned.wallet), changed: true };
+    return { resultReference: call._id, call: serializePaidCall(call), wallet: safeWallet(earned.wallet, command.financialMode), changed: true };
   });
 }
 

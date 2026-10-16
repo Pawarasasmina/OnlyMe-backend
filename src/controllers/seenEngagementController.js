@@ -65,12 +65,12 @@ const publishedSaveable = async (id, viewer, shareToken = "") => {
 
 const summary = async (publication, viewerId) => {
   const [counts, reactionCounts, viewer, comments, reactions, commentReactionRows, viewerCommentReactions] = await Promise.all([
-    SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication) } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
-    SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), type: "REACTION" } }, { $group: { _id: { $ifNull: ["$reaction", "LIKE"] }, count: { $sum: 1 } } }]),
+    SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), actorAccountType: { $ne: "TEST" } } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
+    SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), type: "REACTION", actorAccountType: { $ne: "TEST" } } }, { $group: { _id: { $ifNull: ["$reaction", "LIKE"] }, count: { $sum: 1 } } }]),
     viewerId ? SeenEngagement.find({ publication, user: viewerId, type: { $in: ["REACTION", "SHARE", "SAVE"] } }).lean() : [],
     SeenEngagement.find({ publication, type: "COMMENT" }).sort({ createdAt: -1 }).limit(50).populate("user", "name username avatar").lean(),
     SeenEngagement.find({ publication, type: "REACTION" }).sort({ updatedAt: -1 }).limit(200).populate("user", "name username avatar").lean(),
-    SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), type: "COMMENT_REACTION" } }, { $group: { _id: { comment: "$parentComment", reaction: { $ifNull: ["$reaction", "LIKE"] } }, count: { $sum: 1 } } }]),
+    SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), type: "COMMENT_REACTION", actorAccountType: { $ne: "TEST" } } }, { $group: { _id: { comment: "$parentComment", reaction: { $ifNull: ["$reaction", "LIKE"] } }, count: { $sum: 1 } } }]),
     viewerId ? SeenEngagement.find({ publication, user: viewerId, type: "COMMENT_REACTION" }).select("parentComment reaction").lean() : [],
   ]);
   const savedCommentRows = viewerId && comments.length
@@ -286,7 +286,7 @@ export const listSeenReactors = asyncHandler(async (req, res) => {
 export const reactToSeen = asyncHandler(async (req, res) => {
   const publication = await publishedSeen(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const reaction = String(req.body.reaction || "").toUpperCase();
   if (!SEEN_REACTIONS.includes(reaction)) throw new ApiError(400, "A valid reaction is required");
-  await SeenEngagement.findOneAndUpdate({ publication: req.params.id, user: req.user._id, type: "REACTION" }, { $set: { reaction } }, { upsert: true, new: true, runValidators: true });
+  await SeenEngagement.findOneAndUpdate({ publication: req.params.id, user: req.user._id, type: "REACTION" }, { $set: { reaction, actorAccountType: req.user.accountType } }, { upsert: true, new: true, runValidators: true });
   notifyCreatorActivity(req, publication);
   return sendResponse(res, 200, "Reaction saved", { engagement: await summary(req.params.id, req.user._id) });
 });
@@ -313,7 +313,7 @@ export const commentOnSeen = asyncHandler(async (req, res) => {
     senderId: req.user._id,
   }) : null;
   if (audio) audio.waveform = readWaveform(req.body.waveform);
-  await SeenEngagement.create({ publication: req.params.id, user: req.user._id, type: "COMMENT", text: text || undefined, audio: audio || undefined, parentComment: parentComment?._id });
+  await SeenEngagement.create({ publication: req.params.id, user: req.user._id, actorAccountType: req.user.accountType, type: "COMMENT", text: text || undefined, audio: audio || undefined, parentComment: parentComment?._id });
   notifyCreatorActivity(req, publication);
   return sendResponse(res, 201, "Comment added", { engagement: await summary(req.params.id, req.user._id) });
 });
@@ -324,7 +324,7 @@ export const reactToSeenComment = asyncHandler(async (req, res) => {
   if (!SEEN_REACTIONS.includes(reaction)) throw new ApiError(400, "A valid reaction is required");
   const comment = await SeenEngagement.findOne({ _id: req.params.commentId, publication: req.params.id, type: "COMMENT" }).select("_id").lean();
   if (!comment) throw new ApiError(404, "Comment not found");
-  await SeenEngagement.findOneAndUpdate({ publication: req.params.id, parentComment: comment._id, user: req.user._id, type: "COMMENT_REACTION" }, { $set: { reaction } }, { upsert: true, new: true, runValidators: true });
+  await SeenEngagement.findOneAndUpdate({ publication: req.params.id, parentComment: comment._id, user: req.user._id, type: "COMMENT_REACTION" }, { $set: { reaction, actorAccountType: req.user.accountType } }, { upsert: true, new: true, runValidators: true });
   return sendResponse(res, 200, "Comment reaction saved", { engagement: await summary(req.params.id, req.user._id) });
 });
 
@@ -353,10 +353,10 @@ export const removeSeenComment = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Comment removed", { engagement: await summary(publication._id, req.user._id) });
 });
 
-export const shareSeen = asyncHandler(async (req, res) => { await publishedSeen(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const caption = String(req.body.caption || "").trim(); if (caption.length > 500) throw new ApiError(400, "Share caption must not exceed 500 characters"); await SeenEngagement.findOneAndUpdate({ publication: req.params.id, user: req.user._id, type: "SHARE" }, { $set: { text: caption || undefined }, $setOnInsert: { publication: req.params.id, user: req.user._id, type: "SHARE" } }, { upsert: true, new: true, runValidators: true }); return sendResponse(res, 200, "Seen shared to your profile", { engagement: await summary(req.params.id, req.user._id) }); });
+export const shareSeen = asyncHandler(async (req, res) => { await publishedSeen(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const caption = String(req.body.caption || "").trim(); if (caption.length > 500) throw new ApiError(400, "Share caption must not exceed 500 characters"); await SeenEngagement.findOneAndUpdate({ publication: req.params.id, user: req.user._id, type: "SHARE" }, { $set: { text: caption || undefined, actorAccountType: req.user.accountType }, $setOnInsert: { publication: req.params.id, user: req.user._id, type: "SHARE" } }, { upsert: true, new: true, runValidators: true }); return sendResponse(res, 200, "Seen shared to your profile", { engagement: await summary(req.params.id, req.user._id) }); });
 export const removeSeenShare = asyncHandler(async (req, res) => { await publishedSeen(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); await SeenEngagement.deleteOne({ publication: req.params.id, user: req.user._id, type: "SHARE" }); return sendResponse(res, 200, "Seen removed from your profile", { engagement: await summary(req.params.id, req.user._id) }); });
-export const toggleSeenSave = asyncHandler(async (req, res) => { const publication = await publishedSaveable(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const filter = { publication: req.params.id, user: req.user._id, type: "SAVE" }; const existing = await SeenEngagement.findOne(filter); if (existing) await existing.deleteOne(); else await SeenEngagement.create(filter); return sendResponse(res, 200, existing ? "Removed from Saved" : "Saved", { engagement: await summary(req.params.id, req.user._id), saved: !existing, publication: { id: publication._id, kind: publication.kind } }); });
-export const markWorldWalked = asyncHandler(async (req, res) => { const publication = await publishedPlanet(req.params.id); if (publication.kind === "PREMIUM_WORLD" && !await hasActivePremiumAccess(publication, req.user)) throw new ApiError(403, "Join this World to step inside"); await SeenEngagement.findOneAndUpdate({ publication: publication._id, user: req.user._id, type: "WALKED" }, { $setOnInsert: { publication: publication._id, user: req.user._id, type: "WALKED" } }, { upsert: true, new: true }); return sendResponse(res, 200, "World marked as walked", { walked: true, publication: { id: publication._id, title: publication.title } }); });
+export const toggleSeenSave = asyncHandler(async (req, res) => { const publication = await publishedSaveable(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token); const filter = { publication: req.params.id, user: req.user._id, type: "SAVE" }; const existing = await SeenEngagement.findOne(filter); if (existing) await existing.deleteOne(); else await SeenEngagement.create({ ...filter, actorAccountType: req.user.accountType }); return sendResponse(res, 200, existing ? "Removed from Saved" : "Saved", { engagement: await summary(req.params.id, req.user._id), saved: !existing, publication: { id: publication._id, kind: publication.kind } }); });
+export const markWorldWalked = asyncHandler(async (req, res) => { const publication = await publishedPlanet(req.params.id); if (publication.kind === "PREMIUM_WORLD" && !await hasActivePremiumAccess(publication, req.user)) throw new ApiError(403, "Join this World to step inside"); await SeenEngagement.findOneAndUpdate({ publication: publication._id, user: req.user._id, type: "WALKED" }, { $setOnInsert: { publication: publication._id, user: req.user._id, type: "WALKED", actorAccountType: req.user.accountType } }, { upsert: true, new: true }); return sendResponse(res, 200, "World marked as walked", { walked: true, publication: { id: publication._id, title: publication.title } }); });
 
 export const listWorldWalkers = asyncHandler(async (req, res) => {
   const publication = await publishedPlanet(req.params.id);
