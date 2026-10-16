@@ -24,6 +24,8 @@ import { canAccessPublicationAudience, seenVisibilityFilter } from "../services/
 import { publicationDeliveryUrl } from "../services/publicationMediaStorageService.js";
 import { getWallSawYouToday } from "../services/wallSeenTodayService.js";
 import { serializeProfileStatus } from "../services/statusService.js";
+import { personalizeCandidates } from "../services/recommendationService.js";
+import { readAnalyticsSessionId, recordAnalyticsEvent } from "../services/analyticsEventService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -901,7 +903,10 @@ export const getDiscover = asyncHandler(async (req, res) => {
     .sort((left, right) => right.score - left.score || left.slide.creator.name.localeCompare(right.slide.creator.name))
     .map((item) => item.slide);
   const filteredSlides = filterSlides(allSlides, filter, settings);
-  const pageSlides = filteredSlides.slice(cursor, cursor + limit).map(publicSlide);
+  const personalizedSlides = filter === "for_you"
+    ? await personalizeCandidates({ exposureLimit: limit, items: filteredSlides, req, surface: "DISCOVER" })
+    : { items: filteredSlides, recommendation: null };
+  const pageSlides = personalizedSlides.items.slice(filter === "for_you" ? 0 : cursor, filter === "for_you" ? limit : cursor + limit).map(publicSlide);
   const nextCursor = cursor + limit < filteredSlides.length ? String(cursor + limit) : null;
 
   if (slidesOnly) {
@@ -910,6 +915,8 @@ export const getDiscover = asyncHandler(async (req, res) => {
       pagination: {
         nextCursor,
         sessionId: req.query.sessionId || sessionIdFor(req.user._id, filter),
+        batchId: personalizedSlides.recommendation?.batchId || null,
+        configVersion: personalizedSlides.recommendation?.configVersion || null,
         hasMore: Boolean(nextCursor),
         limit,
         filter,
@@ -928,6 +935,8 @@ export const getDiscover = asyncHandler(async (req, res) => {
     pagination: {
       nextCursor,
       sessionId: req.query.sessionId || sessionIdFor(req.user._id, filter),
+      batchId: personalizedSlides.recommendation?.batchId || null,
+      configVersion: personalizedSlides.recommendation?.configVersion || null,
       hasMore: Boolean(nextCursor),
       limit,
       filter,
@@ -978,6 +987,11 @@ export const hideDiscoverCreator = asyncHandler(async (req, res) => {
     { $addToSet: { "discoverSettings.hiddenCreators": req.params.userId }, $set: { "discoverSettings.updatedAt": new Date() } },
     { new: true },
   ).lean();
+  const sessionId = readAnalyticsSessionId(req);
+  if (sessionId) {
+    const targetProfile = await CreatorProfile.findOne({ user: req.params.userId }).select("category categories").lean();
+    await recordAnalyticsEvent({ entityId: String(req.params.userId), entityType: "profile", eventType: "NOT_INTERESTED", metadata: { creatorId: String(req.params.userId), reason: "hide_discover_creator", topics: [targetProfile?.category, ...(targetProfile?.categories || [])].filter(Boolean) }, req, sessionId, source: "discover", userId: req.user._id });
+  }
   return sendResponse(res, 200, "Creator hidden from Discover", { settings: discoverSettings(updated), hiddenCreatorId: String(req.params.userId) });
 });
 

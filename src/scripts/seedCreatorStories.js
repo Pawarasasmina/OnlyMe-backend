@@ -3,6 +3,7 @@ import { connectDb } from "../config/db.js";
 import { env } from "../config/env.js";
 import Story from "../models/Story.js";
 import User from "../models/User.js";
+import { storyExpiresAt } from "../services/storyExpiryService.js";
 
 const SEED_SOURCE = "creator-stories-v1";
 const HOUR = 60 * 60 * 1000;
@@ -29,16 +30,24 @@ async function seed() {
 
   await connectDb();
 
-  const creators = await User.find({
-    creatorApprovalStatus: "approved",
+  const users = await User.find({
+    role: { $in: ["fan", "creator"] },
     status: "active",
-  }).select("_id name username").sort({ username: 1 }).lean();
+  }).select("+accountType _id name username role").sort({ username: 1 }).lean();
 
   const now = new Date();
   let created = 0;
   let refreshed = 0;
 
-  for (const creator of creators) {
+  const testUserIds = users.filter((user) => user.accountType === "TEST").map((user) => user._id);
+  if (testUserIds.length) {
+    await Story.updateMany(
+      { creator: { $in: testUserIds } },
+      { $set: { expiresAt: storyExpiresAt("TEST", now) } },
+    );
+  }
+
+  for (const creator of users) {
     for (const [index, template] of STORY_TEMPLATES.entries()) {
       const assetId = `${SEED_SOURCE}:${creator._id}:${index + 1}`;
       const createdAt = new Date(now.getTime() - (index * 37 + 5) * 60 * 1000);
@@ -59,7 +68,9 @@ async function seed() {
             allowSharing: true,
             createdAt,
             updatedAt: createdAt,
-            expiresAt: new Date(now.getTime() + (23 - index) * HOUR),
+            expiresAt: creator.accountType === "TEST"
+              ? storyExpiresAt(creator.accountType, now)
+              : new Date(storyExpiresAt(creator.accountType, now).getTime() - index * HOUR),
           },
         },
         { upsert: true, setDefaultsOnInsert: true, timestamps: false },
@@ -75,7 +86,7 @@ async function seed() {
     expiresAt: { $gt: now },
   });
 
-  console.log(JSON.stringify({ creators: creators.length, created, refreshed, activeSeedStories }, null, 2));
+  console.log(JSON.stringify({ users: users.length, created, refreshed, activeSeedStories }, null, 2));
 }
 
 seed()

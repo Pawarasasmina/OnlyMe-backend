@@ -1,11 +1,13 @@
 ﻿import mongoose from "mongoose";
 import Content from "../models/Content.js";
 import Subscription from "../models/Subscription.js";
+import Story from "../models/Story.js";
 import User from "../models/User.js";
 import MessageReport from "../models/MessageReport.js";
 import Notification from "../models/Notification.js";
 import AdminAccountAudit from "../models/AdminAccountAudit.js";
 import { ACCOUNT_TYPES, normalizeAccountType } from "../constants/accountTypeConstants.js";
+import { storyExpiresAt } from "../services/storyExpiryService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -86,6 +88,13 @@ export const bulkUpdateUsers = asyncHandler(async (req, res) => {
   if (users.length !== ids.length) throw new ApiError(404, "One or more users were not found");
   const update = { ...(accountType ? { accountType } : {}), ...(status ? { status } : {}) };
   await User.updateMany({ _id: { $in: ids } }, { $set: update }, { runValidators: true });
+  if (accountType) {
+    const nextExpiry = storyExpiresAt(accountType);
+    await Story.updateMany(
+      accountType === "TEST" ? { creator: { $in: ids } } : { creator: { $in: ids }, expiresAt: { $gt: nextExpiry } },
+      { $set: { expiresAt: nextExpiry } },
+    );
+  }
   await AdminAccountAudit.insertMany(users.flatMap((user) => [
     ...(accountType && normalizeAccountType(user.accountType) !== accountType ? [{ admin: req.user._id, user: user._id, action: "ACCOUNT_TYPE_CHANGED", previousAccountType: normalizeAccountType(user.accountType), accountType, reason }] : []),
     ...(status && user.status !== status ? [{ admin: req.user._id, user: user._id, action: "ACCOUNT_STATUS_CHANGED", previousStatus: user.status, status, reason }] : []),

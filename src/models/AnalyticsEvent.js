@@ -12,6 +12,12 @@ export const ANALYTICS_EVENT_TYPES = [
   "CONTENT_IMPRESSION",
   "CONTENT_VIEW",
   "CONTENT_OPENED",
+  "CONTENT_WATCH",
+  "CONTENT_COMPLETED",
+  "CONTENT_REPLAY",
+  "FAST_SKIP",
+  "NOT_INTERESTED",
+  "HIDE",
   "REACTION",
   "COMMENT",
   "SAVE",
@@ -40,6 +46,7 @@ const analyticsEventSchema = new mongoose.Schema(
 
 analyticsEventSchema.index({ eventType: 1, createdAt: -1 });
 analyticsEventSchema.index({ userId: 1, createdAt: -1 });
+analyticsEventSchema.index({ userId: 1, entityType: 1, entityId: 1, createdAt: -1 });
 analyticsEventSchema.index({ entityType: 1, entityId: 1, createdAt: -1 });
 analyticsEventSchema.index({ sessionId: 1, createdAt: -1 });
 analyticsEventSchema.index({ eventType: 1, "metadata.normalizedQuery": 1, createdAt: -1 });

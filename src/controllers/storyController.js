@@ -15,6 +15,8 @@ import { profileMediaReferencesAsset, profileMediaSourceKeysFor } from "../servi
 import { parseStoryEditorMetadata, parseStoryOptions } from "../services/storyMetadataService.js";
 import { canAccessPublicationAudience, serializePublication } from "../services/publicationAccessService.js";
 import { buildStatusFromPayload, serializeProfileStatus, serializeStatus } from "../services/statusService.js";
+import { personalizeCandidates } from "../services/recommendationService.js";
+import { isPermanentTestStory, storyExpiresAt } from "../services/storyExpiryService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -260,10 +262,10 @@ export const createStory = asyncHandler(async (req, res) => {
     duration,
     editorMetadata,
     ...options,
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    expiresAt: storyExpiresAt(req.user.accountType),
   });
   await story.populate("creator", "name username avatar isVerified");
-  return sendResponse(res, 201, "Story is live for 24 hours", { story: serialize(story, req.user._id) });
+  return sendResponse(res, 201, isPermanentTestStory(req.user.accountType) ? "Test story is live without expiry" : "Story is live for 24 hours", { story: serialize(story, req.user._id) });
 });
 
 function sourceSeenSharedCard(publication) {
@@ -337,11 +339,11 @@ export const shareSeenAsStory = asyncHandler(async (req, res) => {
     sourceType: "seen",
     sourceSeen: publication._id,
     ...options,
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    expiresAt: storyExpiresAt(req.user.accountType),
   });
   await story.populate("creator", "name username avatar isVerified");
   await story.populate({ path: "sourceSeen", populate: [{ path: "creator", select: "name username avatar isVerified" }, { path: "series", select: "name" }] });
-  return sendResponse(res, 201, "Shared to your story for 24 hours", { story: serialize(story, req.user._id) });
+  return sendResponse(res, 201, isPermanentTestStory(req.user.accountType) ? "Shared to your permanent test story" : "Shared to your story for 24 hours", { story: serialize(story, req.user._id) });
 });
 
 export const listStories = asyncHandler(async (req, res) => {
@@ -467,7 +469,7 @@ export const listStories = asyncHandler(async (req, res) => {
     group.latestActivityAt = new Date(Math.max(recentTime([group.latestActivityAt, statusActivityTime(person.activeStatus), person.lastSeenAt]))).toISOString();
   }
 
-  const items = [...groups.values()]
+  const rankedStoryGroups = [...groups.values()]
     .filter((item) => item.stories.length || item.activeStatus || item.presence?.isOnline)
     .map((item) => ({
       ...item,
@@ -480,6 +482,7 @@ export const listStories = asyncHandler(async (req, res) => {
       || recentTime([right.latestActivityAt]) - recentTime([left.latestActivityAt])
       || recentTime([right.latestStoryAt]) - recentTime([left.latestStoryAt]))
     .map(({ followed: _followed, latestActivityAt: _latestActivityAt, latestStoryAt: _latestStoryAt, ...item }) => item);
+  const personalizedStories = await personalizeCandidates({ items: rankedStoryGroups, req, surface: "STORIES" });
 
   viewerStories.sort((left, right) => new Date(left.createdAt) - new Date(right.createdAt));
 
@@ -492,7 +495,8 @@ export const listStories = asyncHandler(async (req, res) => {
       stories: viewerStories,
       presence: { isOnline: false, lastActiveAt: req.user.lastSeenAt || null },
     },
-    items,
+    items: personalizedStories.items,
+    recommendation: personalizedStories.recommendation,
   });
 });
 

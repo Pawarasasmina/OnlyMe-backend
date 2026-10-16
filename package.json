@@ -24,6 +24,8 @@
     "analyze:publications": "node src/scripts/analyzeLegacyContentForPublications.js",
     "analyze:financial-migration": "node src/scripts/analyzeFinancialMigration.js",
     "analyze:wallet-reconciliation": "node src/scripts/analyzeWalletReconciliation.js"
+    ,"recommendations:rebuild:dry-run": "node src/scripts/rebuildInterestProfiles.js"
+    ,"recommendations:rebuild": "node src/scripts/rebuildInterestProfiles.js --apply"
     ,"migrate:account-types:dry-run": "node src/scripts/migrateAccountTypes.js"
     ,"migrate:account-types": "node src/scripts/migrateAccountTypes.js --apply"
   },

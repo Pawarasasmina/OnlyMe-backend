@@ -19,6 +19,7 @@ import { authorize } from "../middleware/roleMiddleware.js";
 import { createGift, createGiftCategory, deleteGift, deleteGiftCategory, listGifts, reorderGifts, updateGift, updateGiftCategory } from "../controllers/adminGiftController.js";
 import { uploadGiftImage } from "../middleware/uploadMiddleware.js";
 import { getWelcomeEmailTemplate, updateWelcomeEmailTemplate } from "../controllers/adminEmailTemplateController.js";
+import { activateRecommendationConfig, createRecommendationDraft, getRecommendationSettings, resetRecommendationConfig } from "../controllers/adminRecommendationController.js";
 
 const router = Router();
 const messageReportScope = (req, _res, next) => { req.reportScopes = ["MESSAGE", "GROUP_MESSAGE", "CONVERSATION"]; next(); };
@@ -27,6 +28,10 @@ const postReportScope = (req, _res, next) => { req.reportScopes = ["FEED_POST", 
 
 router.use(protect, authorize("admin"));
 router.get("/dashboard", getAdminDashboard);
+router.get("/recommendations", getRecommendationSettings);
+router.post("/recommendations/drafts", createRecommendationDraft);
+router.post("/recommendations/:id/activate", activateRecommendationConfig);
+router.post("/recommendations/reset", resetRecommendationConfig);
 router.get("/email-templates/welcome", getWelcomeEmailTemplate);
 router.patch("/email-templates/welcome", uploadGiftImage.single("logo"), updateWelcomeEmailTemplate);
 router.get("/gifts", listGifts);
