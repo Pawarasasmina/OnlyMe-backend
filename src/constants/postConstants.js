@@ -1,5 +1,8 @@
 export const POST_CONTEXTS = [
   "Right now",
+  "Buy/Sell",
+  "Recommendation",
+  "Looking for",
   "Advice",
   "Need help",
   "Things to do",

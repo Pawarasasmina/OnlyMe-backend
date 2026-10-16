@@ -1,3 +1,4 @@
+import { resolveSupportedVoiceLanguage } from "../constants/voiceTranslationLanguages.js";
 import ApiError from "../utils/ApiError.js";
 
 export const RESERVED_USERNAMES = new Set([
@@ -109,8 +110,10 @@ function validateTimezone(value) {
 
 function validatePreferredLanguage(value) {
   const language = sanitizeText(value, 12).toLowerCase() || "en";
-  if (!allowedLanguages.has(language)) throw new ApiError(400, "Select a supported language");
-  return language;
+  if (allowedLanguages.has(language)) return language;
+  const supported = resolveSupportedVoiceLanguage(language);
+  if (!supported) throw new ApiError(400, "Select a supported language");
+  return supported.code;
 }
 
 function validateNotificationPreferences(value, allowedKeys) {

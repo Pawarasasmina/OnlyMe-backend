@@ -183,3 +183,15 @@ export async function translateVoiceTranscript({
     throw normalizeProviderError(error);
   }
 }
+
+
+export async function detectTextLanguage(text, { translator = null } = {}) {
+  const clean = cleanText(text);
+  if (!clean || (!translator && !translationAvailable())) return "";
+  try {
+    const result = await withTimeout((translator || createTranslator()).detect(clean));
+    return resolveSupportedVoiceLanguage(result?.language)?.code || "";
+  } catch (error) {
+    throw normalizeProviderError(error);
+  }
+}
