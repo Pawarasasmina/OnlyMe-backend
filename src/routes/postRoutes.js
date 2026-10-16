@@ -1,3 +1,4 @@
+import { getWallContentLanguage, translateWallPostContent, wallTranslationLimiter } from "../controllers/wallTranslationController.js";
 import { Router } from "express";
 import {
   setPostResolution,
@@ -35,6 +36,8 @@ router.get("/drafts", ...consumerOnly, (req, res, next) => {
 router.post("/", ...consumerOnly, uploadFeedPostMedia.fields([{ name: "media", maxCount: 4 }, { name: "voice", maxCount: 1 }]), createFeedPost);
 router.post("/drafts", ...consumerOnly, uploadFeedPostImages.array("media", 4), createDraftPost);
 router.get("/:id", protect, getFeedPost);
+router.get("/:id/language", ...consumerOnly, wallTranslationLimiter, getWallContentLanguage);
+router.post("/:id/translation", ...consumerOnly, wallTranslationLimiter, translateWallPostContent);
 router.get("/:id/reactions", protect, listPostReactors);
 router.post("/:id/views", protect, markFeedPostViewed);
 router.put("/:id/reaction", protect, updatePostReaction);

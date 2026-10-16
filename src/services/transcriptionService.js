@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { normalizeVoiceLanguageCode } from "../constants/voiceTranslationLanguages.js";
 import { DeepgramClient } from "@deepgram/sdk";
 import { env } from "../config/env.js";
 import ApiError from "../utils/ApiError.js";
@@ -19,6 +21,7 @@ export function normalizeDeepgramTranscription(response = {}) {
   const alternative = response?.results?.channels?.[0]?.alternatives?.[0] || {};
   const transcript = cleanTranscript(alternative.transcript);
   return {
+    detectedLanguage: response?.results?.channels?.[0]?.detected_language || "",
     confidence: normalizeConfidence(alternative.confidence),
     emptySpeech: transcript.length === 0,
     transcript,
@@ -62,6 +65,7 @@ export async function transcribeVoiceNote({
       {
         model: env.deepgramTranscriptionModel,
         smart_format: true,
+        detect_language: true,
       },
       {
         abortSignal: signal,
@@ -82,5 +86,18 @@ export async function transcribeVoiceNote({
       throw new ApiError(408, "Voice transcription timed out.", "TRANSCRIPTION_TIMEOUT");
     }
     throw new ApiError(502, "Could not transcribe the voice note.", "TRANSCRIPTION_FAILED");
+  }
+}
+
+
+export async function prepareWallVoiceTranscript({ file, transcript = "", transcriptLanguage = "", client = null, readAudio = readFile }) {
+  const existing = { transcript: cleanTranscript(transcript), transcriptLanguage: normalizeVoiceLanguageCode(transcriptLanguage) };
+  if (existing.transcript || !file?.path || (!client && !transcriptionAvailable())) return existing;
+  try {
+    const result = await transcribeVoiceNote({ buffer: await readAudio(file.path), filename: file.originalname, mimeType: file.mimetype, client });
+    return { transcript: result.transcript, transcriptLanguage: normalizeVoiceLanguageCode(result.detectedLanguage) };
+  } catch {
+    // A transcription outage must not prevent publishing a playable voice note.
+    return existing;
   }
 }

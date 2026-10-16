@@ -222,6 +222,13 @@ const defaultLocaleByBaseLanguage = new Map([
   ["de", "de-DE"],
 ]);
 
+// Providers return base codes such as ja, ta and si during detection.
+// Keep explicit regional defaults and supply defaults for every other language.
+for (const language of LARA_SUPPORTED_TRANSLATION_LANGUAGES) {
+  const base = language.code.split("-")[0].toLowerCase();
+  if (!defaultLocaleByBaseLanguage.has(base)) defaultLocaleByBaseLanguage.set(base, language.code);
+}
+
 const languageByLookupCode = new Map(
   LARA_SUPPORTED_TRANSLATION_LANGUAGES.flatMap((language) => {
     const base = language.code.split("-")[0].toLowerCase();

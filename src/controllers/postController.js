@@ -1,3 +1,4 @@
+import { prepareWallVoiceTranscript } from "../services/transcriptionService.js";
 import { isRequestWallPost, wallResolutionTarget } from "../services/wallResolutionService.js";
 import { readWallFeedFilters, wallFeedPipeline } from "../services/wallFeedFilterService.js";
 import mongoose from "mongoose";
@@ -372,8 +373,11 @@ async function uploadPostMedia({ imageFiles = [], post, req, userId, voiceFile =
       uploaded.push(await uploadFeedPostImage({ file, postId: post._id, userId, sortOrder: index }));
     }
     if (voiceFile) {
-      const transcript = cleanString(req.body.voiceTranscript, POST_TEXT_MAX_LENGTH);
-      const transcriptLanguage = normalizeVoiceLanguageCode(req.body.voiceTranscriptLanguage);
+      const { transcript, transcriptLanguage } = await prepareWallVoiceTranscript({
+        file: voiceFile,
+        transcript: cleanString(req.body.voiceTranscript, POST_TEXT_MAX_LENGTH),
+        transcriptLanguage: normalizeVoiceLanguageCode(req.body.voiceTranscriptLanguage),
+      });
 
       uploaded.push(await uploadFeedPostVoice({
         file: voiceFile,
