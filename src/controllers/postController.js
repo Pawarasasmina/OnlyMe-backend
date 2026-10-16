@@ -1,3 +1,5 @@
+import { isRequestWallPost, wallResolutionTarget } from "../services/wallResolutionService.js";
+import { readWallFeedFilters, wallFeedPipeline } from "../services/wallFeedFilterService.js";
 import mongoose from "mongoose";
 import FeedPost from "../models/FeedPost.js";
 import MessageReport from "../models/MessageReport.js";
@@ -23,9 +25,11 @@ import { messageVoiceUrl, uploadMessageVoice } from "../services/messageVoiceSto
 import { getVoiceLanguageName, normalizeVoiceLanguageCode, resolveSupportedVoiceLanguage } from "../constants/voiceTranslationLanguages.js";
 
 function pageOptions(req) {
+  const page = Math.floor(Number(req.query.page));
+  const limit = Math.floor(Number(req.query.limit));
   return {
-    page: Math.max(1, Number(req.query.page) || 1),
-    limit: Math.min(50, Math.max(1, Number(req.query.limit) || 20)),
+    page: Number.isSafeInteger(page) && page > 0 ? page : 1,
+    limit: Number.isSafeInteger(limit) && limit > 0 ? Math.min(50, limit) : 20,
   };
 }
 
@@ -215,6 +219,10 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
     feedCreatedAt: activity.feedCreatedAt || post.publishedAt || post.createdAt,
     author: authorPayload(author),
     text: post.text || "",
+    resolvedAt: post.resolvedAt || null,
+    canResolve: Boolean(viewerId && authorId === viewerId && post.status === "published" && (isRequestWallPost(post) || post.resolvedAt)),
+    postType: post.postType || "",
+    topic: post.topic || "",
     context: post.context || "",
     location: post.location || "",
     attachedEntities: post.attachedEntities || [],
@@ -394,6 +402,8 @@ async function createPostRecord({ imageFiles = [], req, status, voiceFile = null
 
   const post = new FeedPost({
     author: req.user._id,
+    postType: cleanString(req.body.postType, 40),
+    topic: cleanString(req.body.topic, 40),
     text,
     context,
     location,
@@ -423,56 +433,42 @@ export const listFeedPosts = asyncHandler(async (req, res) => {
   const { page, limit } = pageOptions(req);
   const blocks = await UserBlock.find({ $or: [{ blocker: req.user._id }, { blocked: req.user._id }] }).select("blocker blocked").lean();
   const blockedAuthorIds = blocks.map((block) => String(block.blocker) === String(req.user._id) ? block.blocked : block.blocker);
-  const blockedIdSet = new Set(blockedAuthorIds.map((id) => String(id)));
+  const options = readWallFeedFilters(req.query);
+  const legacy = feedFilterQuery({ filter: req.query.filter || req.query.context });
   const filter = {
     status: "published",
     deletedAt: null,
     author: { $nin: blockedAuthorIds },
     "hiddenBy.user": { $ne: req.user._id },
-    ...feedFilterQuery(req.query),
+    ...legacy,
+    ...options.match,
   };
-  const fetchLimit = Math.min(150, Math.max(limit * page * 2, limit));
-  const [items, sharedSourcePosts, total] = await Promise.all([
-    FeedPost.find(filter)
-      .sort({ publishedAt: -1, createdAt: -1 })
-      .limit(fetchLimit)
-      .populate([
-        { path: "author", select: "name username avatar isVerified" },
-        { path: "comments.user", select: "name username avatar isVerified" },
-      ])
-      .lean(),
-    FeedPost.find({ ...filter, "shares.0": { $exists: true } })
-      .sort({ "shares.createdAt": -1 })
-      .limit(fetchLimit)
-      .populate([
-        { path: "author", select: "name username avatar isVerified" },
-        { path: "comments.user", select: "name username avatar isVerified" },
-        { path: "shares.user", select: "name username avatar isVerified role status" },
-      ])
-      .lean(),
-    FeedPost.countDocuments(filter),
-  ]);
-
-  await attachSavedCommentState([...items, ...sharedSourcePosts], req.user?._id);
-  await attachEntityMetadata([...items, ...sharedSourcePosts], req.user || null);
-
-  const sharedItems = sharedSourcePosts.flatMap((post) => (post.shares || [])
-    .filter((share) => share.user && String(share.user.status || "active") === "active" && !blockedIdSet.has(String(share.user._id || share.user)))
-    .map((share) => serializePostFeedItem(post, req.user, {
-      feedId: `share-${share._id}`,
-      shareId: String(share._id),
-      feedCreatedAt: share.createdAt,
-      shareCaption: share.caption || "",
-      sharedBy: authorPayload(share.user),
-    })));
-  const originalItems = items.map((item) => serializePostFeedItem(item, req.user));
-  const mergedItems = [...originalItems, ...sharedItems]
-    .sort((left, right) => new Date(right.feedCreatedAt || right.publishedAt || right.createdAt) - new Date(left.feedCreatedAt || left.publishedAt || left.createdAt));
-  const offset = (page - 1) * limit;
-
+  const [result] = await FeedPost.aggregate(wallFeedPipeline(filter, options, blockedAuthorIds, page, limit)).allowDiskUse(true);
+  const rows = result?.items || [];
+  const total = result?.total?.[0]?.count || 0;
+  const items = rows.length ? await FeedPost.find({ _id: { $in: rows.map((row) => row._id) } })
+    .populate([
+      { path: "author", select: "name username avatar isVerified" },
+      { path: "comments.user", select: "name username avatar isVerified" },
+    ]).lean() : [];
+  await attachSavedCommentState(items, req.user?._id);
+  await attachEntityMetadata(items, req.user || null);
+  const byId = new Map(items.map((item) => [String(item._id), item]));
+  const feed = rows.flatMap((row) => {
+    const post = byId.get(String(row._id));
+    if (!post) return [];
+    const activity = row.__activity;
+    return [serializePostFeedItem(post, req.user, activity.shareId ? {
+      feedId: `share-${activity.shareId}`,
+      shareId: String(activity.shareId),
+      feedCreatedAt: activity.createdAt,
+      shareCaption: activity.caption || "",
+      sharedBy: authorPayload(row.__sharer),
+    } : {})];
+  });
   return sendResponse(res, 200, "Feed posts fetched", {
-    items: mergedItems.slice(offset, offset + limit),
-    pagination: { page, limit, total: total + sharedItems.length, pages: Math.ceil((total + sharedItems.length) / limit) },
+    items: feed,
+    pagination: { page, limit, total, pages: Math.ceil(total / limit) },
   });
 });
 
@@ -559,6 +555,22 @@ export const createDraftPost = asyncHandler(async (req, res) => {
   const post = await createPostRecord({ imageFiles: req.files || [], req, status: "draft" });
   await attachEntityMetadata(post, req.user || null);
   return sendResponse(res, 201, "Draft saved", { post: serializePost(post, req.user) });
+});
+
+export const setPostResolution = asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid post ID");
+  if (typeof req.body?.solved !== "boolean") throw new ApiError(400, "Solved must be true or false");
+  // Update just the resolution field, so simultaneous replies and reactions stay intact.
+  const post = await FeedPost.findOneAndUpdate(
+    wallResolutionTarget(req.params.id, req.user._id),
+    { $set: { resolvedAt: req.body.solved ? new Date() : null } },
+    { new: true, runValidators: true },
+  );
+  if (!post) throw new ApiError(404, "Request post not found or unavailable");
+  await populatePostForResponse(post);
+  await attachSavedCommentState([post], req.user._id);
+  await attachEntityMetadata(post, req.user || null);
+  return sendResponse(res, 200, req.body.solved ? "Request marked as Solved" : "Request reopened", { post: serializePost(post, req.user) });
 });
 
 export const updateFeedPost = asyncHandler(async (req, res) => {

@@ -413,7 +413,7 @@ async function searchContent(params) {
   return resultPage(items.slice(params.cursor, params.cursor + params.limit), params.cursor, params.limit, total);
 }
 
-function serializePost(post, query, viewerId = "") {
+export function serializePostSearchResult(post, query, viewerId = "", legacy = false) {
   const author = post.author || {};
   const thumbnail = (post.media || [])[0]?.url || "";
   return {
@@ -423,7 +423,7 @@ function serializePost(post, query, viewerId = "") {
     subtitle: [author.name, post.context].filter(Boolean).join(" - "),
     description: cleanText(post.text, 220),
     image: thumbnail,
-    route: `/wall?post=${String(post._id)}`,
+    route: legacy ? `/wall/notes/${String(post._id)}` : `/posts/${String(post._id)}`,
     verified: Boolean(author.isVerified),
     category: post.context || "",
     location: publicLocation(post.location, ""),
@@ -456,7 +456,7 @@ async function searchFeedPosts({ blockedIds, category, cursor = 0, limit, locati
     FeedPost.find(filter).sort(baseSort(sort)).skip(cursor).limit(limit).populate("author", "name username avatar isVerified role status").lean(),
     FeedPost.countDocuments(filter),
   ]);
-  return resultPage(records.map((item) => serializePost(item, query, user?._id)), cursor, limit, total);
+  return resultPage(records.map((item) => serializePostSearchResult(item, query, user?._id)), cursor, limit, total);
 }
 
 async function searchWallPosts({ blockedIds, category, cursor = 0, limit, location, query, sort, user }) {
@@ -478,7 +478,7 @@ async function searchWallPosts({ blockedIds, category, cursor = 0, limit, locati
       .lean(),
     WallPost.countDocuments(filter),
   ]);
-  const items = records.map((item) => serializePost({ ...item, author: item.creator, publishedAt: item.createdAt }, query, user?._id));
+  const items = records.map((item) => serializePostSearchResult({ ...item, author: item.creator, publishedAt: item.createdAt }, query, user?._id, true));
   return resultPage(items, cursor, limit, total);
 }
 

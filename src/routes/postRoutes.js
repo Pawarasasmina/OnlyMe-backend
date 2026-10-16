@@ -1,5 +1,6 @@
 import { Router } from "express";
 import {
+  setPostResolution,
   createDraftPost,
   createFeedPost,
   createPostComment,
@@ -44,6 +45,7 @@ router.post("/:id/report", protect, reportFeedPost);
 router.post("/:id/archive", ...consumerOnly, archiveFeedPost);
 router.put("/:id/block-author", protect, blockPostAuthor);
 router.post("/:id/comments", protect, uploadVoiceMessage.single("voice"), createPostComment);
+router.put("/:id/resolution", ...consumerOnly, setPostResolution);
 router.put("/:id", ...consumerOnly, updateFeedPost);
 router.delete("/:id", ...consumerOnly, deleteFeedPost);
 

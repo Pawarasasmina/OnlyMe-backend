@@ -117,6 +117,9 @@ const feedPostSchema = new mongoose.Schema(
   {
     author: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     text: { type: String, trim: true, default: "", maxlength: 2000 },
+    resolvedAt: { type: Date, default: null },
+    postType: { type: String, enum: ["", "Looking for", "Offering", "Need Help", "Question", "Recommendation", "Right Now", "Event"], default: "" },
+    topic: { type: String, enum: ["", "Buy / Sell", "Places", "Food", "Travel", "Work", "Wellness", "Learning", "Lifestyle", "Services", "Community"], default: "" },
     context: { type: String, enum: ["", ...POST_CONTEXTS], default: "" },
     location: { type: String, trim: true, default: "", maxlength: 120 },
     entityRefs: { type: [entityRefSchema], default: [] },
