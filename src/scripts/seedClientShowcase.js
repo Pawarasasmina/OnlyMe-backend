@@ -187,15 +187,16 @@ async function seedUser(c, index, passwordHash) {
   const now = new Date();
   await User.findOneAndUpdate({ _id: id }, { $set: {
     name: `${c.first} ${c.last}`, username: c.username, email: `${c.first.toLowerCase()}@gmail.com`, password: passwordHash,
-    role: "fan", creatorApprovalStatus: "approved", avatar, isVerified: true, status: "active", lastSeenAt: at(index / 2),
+    role: "fan", creatorApprovalStatus: "approved", isVerified: true, status: "active", lastSeenAt: at(index / 2),
     activeStatus: activeStatusFor(index),
     onboarding: { version: 1, status: "completed", currentStep: "completed", startedAt: at(24 * 60), welcomeCompleted: true, interestsCompleted: true, instinctsCompleted: true, peopleCompleted: true, checklistAcknowledged: true, skippedSteps: [], completedAt: at(24 * 58), skippedAt: null },
     onboardingChecklist: { watchedIntro: true, openedOrbit: true, openedStudio: true, createdFirstPost: true, sharedFirstStory: true, createdFirstWorld: true, followedFirstPeople: true, reactedToStory: true, visitedWorld: true, completedProfile: true, dismissedAt: now, completedAt: now, rewardGrantedAt: now },
-  } }, { upsert: true, setDefaultsOnInsert: true });
+  }, $setOnInsert: { avatar } }, { upsert: true, setDefaultsOnInsert: true });
 
   const commonProfile = { coverPhoto: imageUrl(c, coverIds[index % coverIds.length], 1600, 700), bio: c.bio, interests: [c.category, "Creativity", "Community"], city: c.city, country: c.country, orbitStatus: c.quote, profileVisibility: "public", preferredLanguage: "en", timezone: "UTC", privacySettings: { showOnlineStatus: true, showActivityStatus: true, showLocation: true, allowDiscovery: true, allowDirectMessages: true, allowMentions: true, allowTags: true, savedPlacesVisibility: "everyone", showMemberBadge: "everyone", orbitVisibility: "everyone" } };
-  await FanProfile.findOneAndUpdate({ user: id }, { $set: { user: id, ...commonProfile } }, { upsert: true, setDefaultsOnInsert: true });
-  await CreatorProfile.findOneAndUpdate({ user: id }, { $set: { user: id, ...commonProfile, category: c.category, categories: [c.category], orbitQuote: c.quote, monthlyPrice: 1.9 + index % 3, subscriptionPriceCents: 300, verificationStatus: "verified", messagingEnabled: true, directAccessEnabled: true, directAccessPriceStars: 100 + (index % 3) * 50, directCallEnabled: index % 3 === 0, directCallPriceStars: 300, directCallDurationMinutes: 5, freePreviewEnabled: true, socialLinks: [{ platform: "Instagram", url: `https://instagram.com/${c.username}` }] } }, { upsert: true, setDefaultsOnInsert: true });
+  const { coverPhoto, ...profileFields } = commonProfile;
+  await FanProfile.findOneAndUpdate({ user: id }, { $set: { user: id, ...profileFields }, $setOnInsert: { coverPhoto } }, { upsert: true, setDefaultsOnInsert: true });
+  await CreatorProfile.findOneAndUpdate({ user: id }, { $set: { user: id, ...profileFields, category: c.category, categories: [c.category], orbitQuote: c.quote, monthlyPrice: 1.9 + index % 3, subscriptionPriceCents: 300, verificationStatus: "verified", messagingEnabled: true, directAccessEnabled: true, directAccessPriceStars: 100 + (index % 3) * 50, directCallEnabled: index % 3 === 0, directCallPriceStars: 300, directCallDurationMinutes: 5, freePreviewEnabled: true, socialLinks: [{ platform: "Instagram", url: `https://instagram.com/${c.username}` }] }, $setOnInsert: { coverPhoto } }, { upsert: true, setDefaultsOnInsert: true });
   await Wallet.findOneAndUpdate({ user: id }, { $setOnInsert: { user: id, balance: 5000, bonusBalance: 5000, purchasedBalance: 0, earnedBalance: 0, currency: "STARS", ledgerActivatedAt: now, reconciliationStatus: "MATCHED" } }, { upsert: true, setDefaultsOnInsert: true });
   return { ...c, id, avatar };
 }
