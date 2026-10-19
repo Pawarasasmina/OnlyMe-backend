@@ -8,6 +8,8 @@
     "seed:creator-demos": "node src/scripts/seedCreatorDemoContent.js",
     "seed:creator-stories": "node src/scripts/seedCreatorStories.js",
     "seed:client-showcase": "node src/scripts/seedClientShowcase.js",
+    "showcase:avatars:restore:dry-run": "node src/scripts/restoreShowcaseAvatars.js",
+    "showcase:avatars:restore": "node src/scripts/restoreShowcaseAvatars.js --apply",
     "dev": "nodemon --watch src --watch .env --watch src/controllers/.env --ext js,mjs,cjs,json,env src/server.js",
     "start": "node src/server.js",
     "lint": "eslint .",
