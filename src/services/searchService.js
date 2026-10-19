@@ -331,6 +331,10 @@ function serializePublicationResult(publication, type, query, creatorProfile = n
   const id = String(publication._id);
   const sourceMedia = publication.coverMedia?.secureUrl ? publication.coverMedia : publication.introMedia;
   const image = publicationDeliveryUrl(sourceMedia) || sourceMedia?.secureUrl || sourceMedia?.url || "";
+  const chapterPreviews = (publication.publishedSnapshot?.chapters || []).slice(0, 3).map((chapter, index) => ({
+    id: String(chapter.stableChapterId || chapter.id || `${id}-${index}`),
+    title: cleanText(chapter.title, 100) || `Chapter ${index + 1}`,
+  }));
   return {
     id,
     type: type === "seen" ? "seen" : type === "experience" ? "experience" : "world",
@@ -357,6 +361,7 @@ function serializePublicationResult(publication, type, query, creatorProfile = n
       price: publication.pricing?.starsAmount || null,
       pricingMode: publication.pricing?.mode || "FREE",
       chapterCount: publication.publishedSnapshot?.chapters?.length || 0,
+      chapters: chapterPreviews,
       viewCount,
       matchReason: query ? "Matched published content fields" : "",
     },
