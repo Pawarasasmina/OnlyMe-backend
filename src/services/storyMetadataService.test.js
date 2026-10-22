@@ -20,12 +20,24 @@ test("story metadata clamps unsafe visual values and limits collection sizes", (
     transform: { scale: 99, translateX: -999 },
     textOverlays: Array.from({ length: 20 }, (_, index) => ({ text: `Text ${index}`, x: 999, fontSize: 200, color: "red" })),
   });
-  assert.equal(metadata.transform.scale, 2.2);
+  assert.equal(metadata.transform.scale, 4);
   assert.equal(metadata.transform.translateX, -35);
   assert.equal(metadata.textOverlays.length, 10);
   assert.equal(metadata.textOverlays[0].x, 100);
   assert.equal(metadata.textOverlays[0].fontSize, 54);
   assert.equal(metadata.textOverlays[0].color, "#FFFFFF");
+});
+
+test("story metadata preserves sanitized photo framing", () => {
+  const metadata = parseStoryEditorMetadata({
+    mediaFraming: { fitMode: "fit", scale: 0.4, translateX: 120, translateY: -120 },
+  });
+  assert.deepEqual(metadata.mediaFraming, {
+    fitMode: "fit",
+    scale: 0.4,
+    translateX: 100,
+    translateY: -100,
+  });
 });
 
 test("story metadata preserves safe internal share cards and their position", () => {

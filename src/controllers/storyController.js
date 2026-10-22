@@ -9,6 +9,7 @@ import PublicationPreference from "../models/PublicationPreference.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import Conversation from "../models/Conversation.js";
 import Message from "../models/Message.js";
+import Notification from "../models/Notification.js";
 import OrbitSignal from "../models/OrbitSignal.js";
 import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
@@ -272,6 +273,61 @@ export const getCreatorHighlights = asyncHandler(async (req, res) => {
     return [{ id: String(highlight._id), name: highlight.name, coverStoryId: cover.originalStoryId, coverUrl: cover.thumbnailUrl, stories }];
   });
   return sendResponse(res, 200, "Story highlights fetched", { items });
+});
+
+async function ownedHighlight(id, ownerId) {
+  if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid highlight ID");
+  const highlight = await StoryHighlight.findOne({ _id: id, creator: ownerId });
+  if (!highlight) throw new ApiError(404, "Highlight not found");
+  return highlight;
+}
+
+export const updateStoryHighlight = asyncHandler(async (req, res) => {
+  const highlight = await ownedHighlight(req.params.highlightId, req.user._id);
+  if (req.body.name !== undefined) {
+    const name = cleanString(req.body.name, 30);
+    if (!name) throw new ApiError(400, "Highlight name is required");
+    highlight.name = name;
+  }
+  if (req.body.coverStoryId !== undefined) {
+    const coverStoryId = String(req.body.coverStoryId || "");
+    if (!highlight.stories.some((story) => String(story.storyId) === coverStoryId)) throw new ApiError(400, "Choose a cover from this highlight");
+    highlight.coverStoryId = coverStoryId;
+  }
+  await highlight.save();
+  return sendResponse(res, 200, "Highlight updated", { id: String(highlight._id), name: highlight.name, coverStoryId: String(highlight.coverStoryId) });
+});
+
+export const addStoryToHighlight = asyncHandler(async (req, res) => {
+  const highlight = await ownedHighlight(req.params.highlightId, req.user._id);
+  const storyId = String(req.body.storyId || "");
+  if (!mongoose.isValidObjectId(storyId)) throw new ApiError(400, "Invalid story ID");
+  if (highlight.stories.some((story) => String(story.storyId) === storyId)) return sendResponse(res, 200, "Story is already in this highlight", { added: false });
+  if (highlight.stories.length >= 100) throw new ApiError(409, "A highlight may contain at most 100 stories");
+  const archive = await StoryArchive.findOne({ creator: req.user._id, storyId }).lean();
+  if (!archive) throw new ApiError(404, "Archived story not found");
+  highlight.stories.push(archive.snapshot);
+  await highlight.save();
+  return sendResponse(res, 200, "Story added to highlight", { added: true });
+});
+
+export const removeStoryFromHighlight = asyncHandler(async (req, res) => {
+  const highlight = await ownedHighlight(req.params.highlightId, req.user._id);
+  const storyId = String(req.params.storyId || "");
+  highlight.stories = highlight.stories.filter((story) => String(story.storyId) !== storyId);
+  if (!highlight.stories.length) {
+    await highlight.deleteOne();
+    return sendResponse(res, 200, "Empty highlight removed", { deleted: true });
+  }
+  if (String(highlight.coverStoryId) === storyId) highlight.coverStoryId = highlight.stories[0].storyId;
+  await highlight.save();
+  return sendResponse(res, 200, "Story removed from highlight", { deleted: false });
+});
+
+export const deleteStoryHighlight = asyncHandler(async (req, res) => {
+  const highlight = await ownedHighlight(req.params.highlightId, req.user._id);
+  await highlight.deleteOne();
+  return sendResponse(res, 200, "Highlight deleted", { deleted: true });
 });
 
 export const getStory = asyncHandler(async (req, res) => {
@@ -600,6 +656,11 @@ export const listStories = asyncHandler(async (req, res) => {
       || recentTime([right.latestStoryAt]) - recentTime([left.latestStoryAt]))
     .map(({ followed: _followed, latestActivityAt: _latestActivityAt, latestStoryAt: _latestStoryAt, ...item }) => item);
   const personalizedStories = await personalizeCandidates({ items: rankedStoryGroups, req, surface: "STORIES" });
+  const orderedStoryGroups = personalizedStories.items
+    .map((item, personalizedIndex) => ({ item, personalizedIndex }))
+    .sort((left, right) => Number(Boolean(right.item.hasUnseenStories)) - Number(Boolean(left.item.hasUnseenStories))
+      || left.personalizedIndex - right.personalizedIndex)
+    .map(({ item }) => item);
 
   viewerStories.sort((left, right) => new Date(left.createdAt) - new Date(right.createdAt));
 
@@ -612,7 +673,7 @@ export const listStories = asyncHandler(async (req, res) => {
       stories: viewerStories,
       presence: { isOnline: false, lastActiveAt: req.user.lastSeenAt || null },
     },
-    items: personalizedStories.items,
+    items: orderedStoryGroups,
     recommendation: personalizedStories.recommendation,
   });
 });
@@ -641,6 +702,26 @@ export const reactStory = asyncHandler(async (req, res) => {
     { $set: { reaction, viewedAt: new Date(), actorAccountType: req.user.accountType } },
     { upsert: true, new: true },
   );
+  const conversation = await Conversation.findOneAndUpdate({ fan: req.user._id, creator: story.creator }, { $set: { status: "ACTIVE", declinedAt: null }, $setOnInsert: { fan: req.user._id, creator: story.creator, acceptedAt: new Date(), acceptedByCreator: false } }, { new: true, upsert: true });
+  const storyReply = { story: story._id, imageUrl: story.image.url, caption: story.caption, expiresAt: story.expiresAt, questionPrompt: "" };
+  const created = await Message.create({ sender: req.user._id, recipient: story.creator, body: `Reacted ${reaction} to your story`, mediaType: "text", ppm: false, storyReply });
+  await Notification.findOneAndUpdate(
+    { dedupeKey: `story-reaction:${story._id}:${req.user._id}` },
+    {
+      $set: {
+        user: story.creator,
+        type: "story_reaction",
+        title: `${req.user.name || "Someone"} reacted ${reaction} to your story`,
+        message: story.caption || "",
+        readAt: null,
+        acknowledgedAt: null,
+      },
+      $setOnInsert: { dedupeKey: `story-reaction:${story._id}:${req.user._id}` },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  req.app.get("io")?.to(`user:${story.creator}`).emit("message:new", { message: { id: String(created._id), senderId: String(created.sender), recipientId: String(created.recipient), body: created.body, mediaType: "text", readAt: null, createdAt: created.createdAt, storyReply: { storyId: String(story._id), imageUrl: story.image.url, caption: story.caption, expiresAt: story.expiresAt, questionPrompt: "" } }, participant: { id: String(req.user._id), displayName: req.user.name, username: req.user.username, avatarUrl: req.user.avatar || null, role: req.user.role, isVerified: Boolean(req.user.isVerified), lastSeenAt: req.user.lastSeenAt || null }, conversationStatus: conversation.status });
+  req.app.get("io")?.to(`user:${story.creator}`).emit("activity:updated", { type: "story_reaction", storyId: String(story._id) });
   return sendResponse(res, 200, "Reaction sent", { reaction: engagement.reaction, reactedAt: engagement.updatedAt });
 });
 
