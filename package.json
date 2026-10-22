@@ -25,11 +25,12 @@
     "migrate:content": "node src/scripts/migrateContentWorkflow.js --apply",
     "analyze:publications": "node src/scripts/analyzeLegacyContentForPublications.js",
     "analyze:financial-migration": "node src/scripts/analyzeFinancialMigration.js",
-    "analyze:wallet-reconciliation": "node src/scripts/analyzeWalletReconciliation.js"
-    ,"recommendations:rebuild:dry-run": "node src/scripts/rebuildInterestProfiles.js"
-    ,"recommendations:rebuild": "node src/scripts/rebuildInterestProfiles.js --apply"
-    ,"migrate:account-types:dry-run": "node src/scripts/migrateAccountTypes.js"
-    ,"migrate:account-types": "node src/scripts/migrateAccountTypes.js --apply"
+    "analyze:wallet-reconciliation": "node src/scripts/analyzeWalletReconciliation.js",
+    "recommendations:rebuild:dry-run": "node src/scripts/rebuildInterestProfiles.js",
+    "recommendations:rebuild": "node src/scripts/rebuildInterestProfiles.js --apply",
+    "migrate:account-types:dry-run": "node src/scripts/migrateAccountTypes.js",
+    "migrate:account-types": "node src/scripts/migrateAccountTypes.js --apply",
+    "setup:wall-indexes": "node src/scripts/ensureWallCreationIndexes.js"
   },
   "dependencies": {
     "@deepgram/sdk": "^5.8.0",
@@ -52,6 +53,7 @@
     "@eslint/js": "^9.8.0",
     "eslint": "^9.8.0",
     "globals": "^15.8.0",
+    "mongodb-memory-server": "^11.3.0",
     "nodemon": "^3.1.4"
   }
 }

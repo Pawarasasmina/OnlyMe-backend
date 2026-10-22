@@ -1,6 +1,7 @@
 import { getWallContentLanguage, translateWallPostContent, wallTranslationLimiter } from "../controllers/wallTranslationController.js";
 import { Router } from "express";
 import {
+  getWallNeedCounts,
   setPostResolution,
   createDraftPost,
   createFeedPost,
@@ -28,6 +29,7 @@ const router = Router();
 const consumerOnly = [protect, authorize("fan", "creator")];
 
 router.get("/", protect, listFeedPosts);
+router.get("/need-counts", protect, getWallNeedCounts);
 router.get("/mine", ...consumerOnly, listMyPosts);
 router.get("/drafts", ...consumerOnly, (req, res, next) => {
   req.query.status = "draft";

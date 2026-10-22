@@ -7,7 +7,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootEnv = dotenv.config({ path: resolve(__dirname, "../../.env") });
 dotenv.config({ path: resolve(__dirname, "../controllers/.env"), override: true });
 
-for (const key of ["NODE_ENV", "PORT", "CLIENT_URL"]) {
+for (const key of ["NODE_ENV", "PORT", "CLIENT_URL", "LARA_ACCESS_KEY_ID", "LARA_ACCESS_KEY_SECRET", "LARA_TRANSLATION_TIMEOUT_MS"]) {
   if (rootEnv.parsed?.[key]) {
     process.env[key] = rootEnv.parsed[key];
   }

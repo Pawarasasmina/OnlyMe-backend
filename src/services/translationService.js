@@ -46,6 +46,9 @@ function normalizeProviderError(error) {
     if ([400, 404, 422].includes(statusCode)) {
       return new ApiError(400, "Unsupported translation language.", "UNSUPPORTED_LANGUAGE");
     }
+    if (statusCode === 429 && /quota/i.test(String(error.type || error.name || ""))) {
+      return new ApiError(429, "Translation quota has been reached. The service account needs more credits or a quota reset. Your recording and transcript are still available.", "TRANSLATION_QUOTA_EXCEEDED");
+    }
     if (statusCode === 429) {
       return new ApiError(429, "Translation service is busy. Please try again shortly.", "TRANSLATION_FAILED");
     }

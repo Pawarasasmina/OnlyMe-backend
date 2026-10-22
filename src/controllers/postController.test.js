@@ -8,7 +8,9 @@ const { feedFilterQuery } = postControllerTestUtils;
 
 test("feed filter query maps Home chips to existing post contexts", () => {
   assert.deepEqual(feedFilterQuery({ filter: "all" }), {});
-  assert.deepEqual(feedFilterQuery({ filter: "right_now" }), { context: "Right now" });
+  const nowFilter = feedFilterQuery({ filter: "right_now" });
+  assert.deepEqual(nowFilter.$or, [{ rightNow: true }, { postType: "Right Now" }, { context: "Right now" }]);
+  assert.ok(nowFilter.$expr.$and);
   assert.deepEqual(feedFilterQuery({ filter: "events" }), { context: "Events" });
   assert.deepEqual(feedFilterQuery({ filter: "things_to_do" }), { context: "Things to do" });
   assert.deepEqual(feedFilterQuery({ filter: "food" }), { context: { $in: ["Coffee", "Restaurant"] } });

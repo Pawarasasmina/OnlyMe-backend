@@ -192,13 +192,13 @@ test("provider authentication failures are sanitized", async () => {
 test("provider quota failures are sanitized", async () => {
   const translator = {
     translate: async () => {
-      throw Object.assign(new Error("quota detail"), { statusCode: 429, type: "QuotaExceeded" });
+      throw Object.assign(new Error("quota detail"), { statusCode: 429, type: "ApiQuotaExceededError" });
     },
   };
 
   await assert.rejects(
     () => translateVoiceTranscript({ targetLanguage: "fr-FR", text: "Hello", translator }),
-    (error) => error.code === "TRANSLATION_FAILED" && error.statusCode === 429
+    (error) => error.code === "TRANSLATION_QUOTA_EXCEEDED" && error.statusCode === 429 && !error.message.includes("quota detail")
   );
 });
 
@@ -224,4 +224,10 @@ test("malformed provider translation response is sanitized", async () => {
     () => translateVoiceTranscript({ targetLanguage: "fr-FR", text: "Hello", translator }),
     (error) => error.code === "TRANSLATION_FAILED" && error.statusCode === 502
   );
+});
+
+
+test("temporary rate limits remain retryable busy errors", async () => {
+  const translator = { translate: async () => { throw Object.assign(new Error("rate limited"), {statusCode:429,type:"RateLimitError"}); } };
+  await assert.rejects(() => translateVoiceTranscript({targetLanguage:"fr-FR",text:"Hello",translator}),error=>error.statusCode===429 && error.code==="TRANSLATION_FAILED" && error.message.includes("busy"));
 });

@@ -9,11 +9,11 @@ const owner = "507f1f77bcf86cd799439012";
 const other = "507f1f77bcf86cd799439013";
 const response = () => ({ status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
 
-test("only request types are eligible, with legacy compatibility", () => {
-  for (const postType of ["Looking for", "Offering", "Need Help", "Question", "Recommendation"]) assert.equal(isRequestWallPost({ postType }), true);
+test("Wall types are eligible, with legacy compatibility", () => {
+  for (const postType of ["Looking for", "Offering", "Need Help", "Question", "Recommendation", "Buy & Sell", "Event", "Right Now"]) assert.equal(isRequestWallPost({ postType }), true);
   for (const context of ["Looking for", "Buy/Sell", "Need help", "Advice", "Recommendation", "Shopping"]) assert.equal(isRequestWallPost({ context }), true);
-  assert.equal(isRequestWallPost({ postType: "Event", context: "Need help" }), false);
-  assert.equal(isRequestWallPost({ postType: "Right Now", topic: "Buy / Sell" }), false);
+  assert.equal(isRequestWallPost({ postType: "Event", context: "Need help" }), true);
+  assert.equal(isRequestWallPost({ postType: "Right Now", topic: "Buy / Sell" }), true);
   assert.equal(isRequestWallPost({ context: "Coffee" }), false);
 });
 
@@ -27,7 +27,7 @@ test("only published request authors receive resolution controls", () => {
   assert.equal(serializePost(post, { _id: owner }).canResolve, false);
   post.status = "published";
   post.postType = "Event";
-  assert.equal(serializePost(post, { _id: owner }).canResolve, false);
+  assert.equal(serializePost(post, { _id: owner }).canResolve, true);
   post.resolvedAt = new Date();
   assert.equal(serializePost(post, { _id: owner }).canResolve, true);
 });
