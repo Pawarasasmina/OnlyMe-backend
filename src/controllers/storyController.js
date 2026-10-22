@@ -1,5 +1,7 @@
 import mongoose from "mongoose";
 import Story from "../models/Story.js";
+import StoryArchive from "../models/StoryArchive.js";
+import StoryHighlight from "../models/StoryHighlight.js";
 import StoryEngagement from "../models/StoryEngagement.js";
 import MessageReport from "../models/MessageReport.js";
 import Publication from "../models/Publication.js";
@@ -148,6 +150,66 @@ const serialize = (story, viewer, engagement, insights = null) => {
 
 const REPORT_REASONS = new Set(["SPAM", "FALSE_INFORMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "OTHER"]);
 
+const highlightSnapshot = (story) => ({
+  storyId: story._id,
+  caption: story.caption || "",
+  image: story.image,
+  mediaType: story.mediaType || "image",
+  duration: story.duration || (story.mediaType === "video" ? 15 : 5),
+  editorMetadata: story.editorMetadata || defaultEditorMetadata(),
+  audience: story.audience || "everyone",
+  sourceType: story.sourceType || "original",
+  sourceSeen: story.sourceSeen || null,
+  storyCreatedAt: story.createdAt,
+});
+
+const archiveStory = (story) => StoryArchive.findOneAndUpdate(
+  { storyId: story._id },
+  { $setOnInsert: { creator: story.creator?._id || story.creator, storyId: story._id, snapshot: highlightSnapshot(story), storyCreatedAt: story.createdAt } },
+  { upsert: true, new: true },
+);
+
+const serializeHighlightStory = (story, creator, viewerId) => {
+  const mediaUrl = story.image?.url || story.editorMetadata?.sharedCard?.imageUrl || "";
+  return {
+    id: `highlight:${story.storyId}`,
+    originalStoryId: String(story.storyId),
+    ownerId: String(creator._id),
+    creatorId: String(creator._id),
+    owner: serializeUser(creator),
+    name: creator.name,
+    username: creator.username,
+    avatar: creator.avatar || "",
+    verified: Boolean(creator.isVerified),
+    image: mediaUrl,
+    mediaUrl,
+    thumbnailUrl: mediaUrl,
+    mediaType: story.mediaType || "image",
+    duration: story.duration || 5,
+    editorMetadata: story.editorMetadata || defaultEditorMetadata(),
+    audience: story.audience || "everyone",
+    allowReactions: false,
+    allowReplies: false,
+    allowSharing: false,
+    caption: story.caption || "",
+    createdAt: story.storyCreatedAt,
+    expiresAt: null,
+    timeAgo: timeAgo(story.storyCreatedAt),
+    isOwn: String(creator._id) === String(viewerId),
+    viewed: false,
+    sourceType: story.sourceType || "original",
+    isHighlight: true,
+  };
+};
+
+async function highlightAudience(creatorId, viewerId) {
+  if (String(creatorId) === String(viewerId)) return new Set(["everyone", "followers", "close_circle", "only_me"]);
+  const follows = await ProfileRelationship.exists({ actor: viewerId, target: creatorId, type: "FOLLOW" });
+  if (!follows) return new Set(["everyone"]);
+  const followsBack = await ProfileRelationship.exists({ actor: creatorId, target: viewerId, type: "FOLLOW" });
+  return new Set(followsBack ? ["everyone", "followers", "close_circle"] : ["everyone", "followers"]);
+}
+
 function cleanString(value, maxLength) {
   const clean = String(value || "").trim().replace(/\r\n/g, "\n");
   return clean.length > maxLength ? clean.slice(0, maxLength) : clean;
@@ -158,6 +220,59 @@ function readReportReason(value) {
   if (!REPORT_REASONS.has(reason)) throw new ApiError(400, "Select a valid report reason");
   return reason;
 }
+
+export const getStoryArchive = asyncHandler(async (req, res) => {
+  const unarchivedStories = await Story.find({ creator: req.user._id }).lean();
+  await Promise.all(unarchivedStories.map(archiveStory));
+  const [archives, creator] = await Promise.all([
+    StoryArchive.find({ creator: req.user._id }).sort({ storyCreatedAt: -1 }).lean(),
+    User.findById(req.user._id).select("name username avatar isVerified role creatorApprovalStatus").lean(),
+  ]);
+  return sendResponse(res, 200, "Story archive fetched", {
+    items: archives.map((archive) => serializeHighlightStory(archive.snapshot, creator, req.user._id)).map((story) => ({ ...story, id: story.originalStoryId, isHighlight: false })),
+  });
+});
+
+export const createStoryHighlight = asyncHandler(async (req, res) => {
+  const name = cleanString(req.body.name, 30);
+  const storyIds = [...new Set(Array.isArray(req.body.storyIds) ? req.body.storyIds.map(String) : [])];
+  const coverStoryId = String(req.body.coverStoryId || "");
+  if (!name) throw new ApiError(400, "Highlight name is required");
+  if (!storyIds.length || storyIds.length > 100 || storyIds.some((id) => !mongoose.isValidObjectId(id))) throw new ApiError(400, "Select between 1 and 100 valid stories");
+  if (!storyIds.includes(coverStoryId)) throw new ApiError(400, "Choose a cover from the selected stories");
+  const archives = await StoryArchive.find({ storyId: { $in: storyIds }, creator: req.user._id }).lean();
+  if (archives.length !== storyIds.length) throw new ApiError(404, "One or more archived stories are unavailable");
+  const byId = new Map(archives.map((archive) => [String(archive.storyId), archive.snapshot]));
+  const highlight = await StoryHighlight.create({
+    creator: req.user._id,
+    name,
+    coverStoryId,
+    stories: storyIds.map((id) => byId.get(id)),
+  });
+  await highlight.populate("creator", "name username avatar isVerified role creatorApprovalStatus status");
+  const items = highlight.stories.map((story) => serializeHighlightStory(story, highlight.creator, req.user._id));
+  return sendResponse(res, 201, "Highlight created", {
+    highlight: { id: String(highlight._id), name: highlight.name, coverStoryId, coverUrl: items.find((item) => item.originalStoryId === coverStoryId)?.thumbnailUrl || items[0]?.thumbnailUrl || "", stories: items },
+  });
+});
+
+export const getCreatorHighlights = asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.creatorId)) throw new ApiError(400, "Invalid creator ID");
+  const creatorId = req.params.creatorId;
+  const viewerId = req.user._id;
+  const blocked = String(creatorId) !== String(viewerId) && await UserBlock.exists({ $or: [{ blocker: viewerId, blocked: creatorId }, { blocker: creatorId, blocked: viewerId }] });
+  if (blocked) throw new ApiError(403, "These highlights are unavailable");
+  const allowed = await highlightAudience(creatorId, viewerId);
+  const highlights = await StoryHighlight.find({ creator: creatorId }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified role creatorApprovalStatus status").lean();
+  const items = highlights.flatMap((highlight) => {
+    if (!highlight.creator || highlight.creator.status !== "active") return [];
+    const stories = highlight.stories.filter((story) => allowed.has(story.audience || "everyone")).map((story) => serializeHighlightStory(story, highlight.creator, viewerId));
+    if (!stories.length) return [];
+    const cover = stories.find((story) => story.originalStoryId === String(highlight.coverStoryId)) || stories[0];
+    return [{ id: String(highlight._id), name: highlight.name, coverStoryId: cover.originalStoryId, coverUrl: cover.thumbnailUrl, stories }];
+  });
+  return sendResponse(res, 200, "Story highlights fetched", { items });
+});
 
 export const getStory = asyncHandler(async (req, res) => {
   const story = await followedStory(req.params.id, req.user._id);
@@ -264,6 +379,7 @@ export const createStory = asyncHandler(async (req, res) => {
     ...options,
     expiresAt: storyExpiresAt(req.user.accountType),
   });
+  await archiveStory(story);
   await story.populate("creator", "name username avatar isVerified");
   return sendResponse(res, 201, isPermanentTestStory(req.user.accountType) ? "Test story is live without expiry" : "Story is live for 24 hours", { story: serialize(story, req.user._id) });
 });
@@ -341,6 +457,7 @@ export const shareSeenAsStory = asyncHandler(async (req, res) => {
     ...options,
     expiresAt: storyExpiresAt(req.user.accountType),
   });
+  await archiveStory(story);
   await story.populate("creator", "name username avatar isVerified");
   await story.populate({ path: "sourceSeen", populate: [{ path: "creator", select: "name username avatar isVerified" }, { path: "series", select: "name" }] });
   return sendResponse(res, 201, isPermanentTestStory(req.user.accountType) ? "Shared to your permanent test story" : "Shared to your story for 24 hours", { story: serialize(story, req.user._id) });
