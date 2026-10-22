@@ -1,5 +1,5 @@
-const REQUEST_TYPES = ["Looking for", "Offering", "Need Help", "Question", "Recommendation"];
-const REQUEST_CONTEXTS = ["Looking for", "Buy/Sell", "Need help", "Advice", "Recommendation", "Shopping"];
+const REQUEST_TYPES = ["Buy & Sell", "Looking for", "Offering", "Need Help", "Question", "Recommendation", "Event", "Right Now", "Meet people"];
+const REQUEST_CONTEXTS = ["Looking for", "Buy/Sell", "Need help", "Advice", "Recommendation", "Shopping", "Events", "Right now", "Meet people"];
 
 export function isRequestWallPost(post) {
   return post.postType ? REQUEST_TYPES.includes(post.postType) : REQUEST_CONTEXTS.includes(post.context);

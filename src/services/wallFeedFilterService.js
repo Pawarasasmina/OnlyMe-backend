@@ -1,6 +1,8 @@
+import { wallActiveExpression } from "./wallLifecycleService.js";
 import ApiError from "../utils/ApiError.js";
 
 export const WALL_TYPES = {
+  buy_sell: { value: "Buy & Sell", legacy: ["Buy/Sell", "Shopping"] },
   looking_for: { value: "Looking for", legacy: ["Looking for"] },
   offering: { value: "Offering", legacy: ["Buy/Sell", "Shopping"] },
   need_help: { value: "Need Help", legacy: ["Need help"] },
@@ -10,6 +12,9 @@ export const WALL_TYPES = {
   event: { value: "Event", legacy: ["Events"] },
 };
 export const WALL_TOPICS = {
+  meet_people: { value: "Meet people", legacy: ["Meet people"] },
+  housing: { value: "Housing", legacy: ["Housing"] },
+  kids_family: { value: "Kids & Family", legacy: ["Kids & Family"] },
   buy_sell: { value: "Buy / Sell", legacy: ["Buy/Sell", "Shopping"] },
   places: { value: "Places", legacy: ["Place"] },
   food: { value: "Food", legacy: ["Coffee", "Restaurant"] },
@@ -46,7 +51,8 @@ export function readWallFeedFilters(query = {}) {
   if (scope !== "worldwide" && !location && !(scope === "nearby" && near)) throw new ApiError(400, "Choose a location for this filter");
   if ((scope === "nearby" || sort === "nearby") && !near) throw new ApiError(400, "Choose a city to use Nearby");
   const and = [];
-  if (type !== "all") and.push(categoryMatch("postType", WALL_TYPES[type]));
+  if (type !== "all") and.push(type === "right_now" ? { $or: [{ rightNow: true }, categoryMatch("postType", WALL_TYPES[type])] } : categoryMatch("postType", WALL_TYPES[type]));
+  if (type === "right_now") and.push({ $expr: wallActiveExpression() });
   if (topic !== "all") and.push(categoryMatch("topic", WALL_TOPICS[topic]));
   const matchLocation = scope === "nearby" ? near : location;
   // A legacy location parameter is still supported even without a scope.
@@ -63,7 +69,7 @@ export function wallFeedPipeline(match, { sort, near }, blockedIds, page, limit)
   return [
     { $match: match },
     { $set: {
-      __solved: { $cond: [{ $ne: [{ $ifNull: ["$resolvedAt", null] }, null] }, 1, 0] },
+      __solved: { $cond: [wallActiveExpression(), 0, 1] },
       __popularity: { $add: [publicCount("reactions"), publicCount("comments", { deletedAt: null }), publicCount("shares")] },
       __nearby: { $cond: [{ $regexMatch: { input: { $ifNull: ["$location", ""] }, regex: escapeRegex(near), options: "i" } }, 0, 1] },
       __activities: { $concatArrays: [

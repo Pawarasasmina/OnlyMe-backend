@@ -85,9 +85,9 @@ export async function uploadFeedPostVoice({
     });
 
     const duration = Number(result.duration);
-    if (!Number.isFinite(duration) || duration < 1 || duration > env.maxVoiceNoteDurationSeconds) {
+    if (!Number.isFinite(duration) || duration < 1 || duration > 30) {
       await cloudinary.uploader.destroy(result.public_id, { resource_type: "video", invalidate: true }).catch(() => {});
-      throw new ApiError(400, `Voice notes must be between 1 second and ${Math.round(env.maxVoiceNoteDurationSeconds / 60)} minutes`);
+      throw new ApiError(400, `Voice notes must be between 1 second and 30 seconds`);
     }
 
     return {

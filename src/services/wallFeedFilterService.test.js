@@ -48,7 +48,14 @@ test("every Wall sort keeps solved posts below active posts without excluding th
     assert.equal(order.__solved, 1);
     assert.equal(pipeline[0].$match.resolvedAt, undefined);
     const rank = pipeline.find((stage) => stage.$set?.__solved).$set.__solved;
-    assert.deepEqual(rank.$cond[0].$ne[0], { $ifNull: ["$resolvedAt", null] });
+    assert.deepEqual(rank.$cond[0].$and[0].$eq[0], { $ifNull: ["$resolvedAt", null] });
+    assert.deepEqual(rank.$cond.slice(1), [0, 1]);
     assert.equal(pipeline.find((stage) => stage.$project?.__solved).$project.__solved, 1);
   }
+});
+
+test("Right now includes independently flagged categories and legacy types", () => {
+  const match = readWallFeedFilters({ type: "right_now" }).match;
+  assert.equal(match.$and[0].$or[0].rightNow, true);
+  assert.equal(match.$and[0].$or[1].$or[0].postType, "Right Now");
 });

@@ -424,9 +424,9 @@ export function serializePostSearchResult(post, query, viewerId = "", legacy = f
   return {
     id: String(post._id),
     type: "post",
-    title: cleanText(post.text, 90) || "Home post",
+    title: cleanText(post.text || post.media?.find((item) => item.type === "audio")?.transcript, 90) || "Voice note",
     subtitle: [author.name, post.context].filter(Boolean).join(" - "),
-    description: cleanText(post.text, 220),
+    description: cleanText(post.text || post.media?.find((item) => item.type === "audio")?.transcript, 220),
     image: thumbnail,
     route: legacy ? `/wall/notes/${String(post._id)}` : `/posts/${String(post._id)}`,
     verified: Boolean(author.isVerified),
@@ -435,6 +435,8 @@ export function serializePostSearchResult(post, query, viewerId = "", legacy = f
     metadata: {
       author: { id: String(author._id || ""), name: author.name || "", username: author.username || "", avatar: author.avatar || "" },
       isOwn: Boolean(viewerId && String(author._id || "") === String(viewerId)),
+      postType: post.postType || "",
+      resolvedAt: post.resolvedAt || null,
       reactionCount: (post.reactions || []).length || post.supportCount || 0,
       commentCount: (post.comments || []).filter((comment) => !comment.deletedAt).length || post.commentCount || 0,
       saveCount: post.saveCount || 0,
@@ -453,8 +455,9 @@ async function searchFeedPosts({ blockedIds, category, cursor = 0, limit, locati
     status: "published",
     visibility: "public",
     deletedAt: null,
+    "hiddenBy.user": { $ne: user?._id },
   };
-  if (query) filter.$or = queryOr(query, ["text", "context", "location"]);
+  if (query) filter.$or = queryOr(query, ["text", "context", "location", "postType", "topic", "media.transcript"]);
   if (category) filter.context = regexFor(category);
   if (location) filter.location = regexFor(location);
   const [records, total] = await Promise.all([

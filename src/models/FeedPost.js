@@ -118,8 +118,11 @@ const feedPostSchema = new mongoose.Schema(
     author: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     text: { type: String, trim: true, default: "", maxlength: 2000 },
     resolvedAt: { type: Date, default: null },
-    postType: { type: String, enum: ["", "Looking for", "Offering", "Need Help", "Question", "Recommendation", "Right Now", "Event"], default: "" },
-    topic: { type: String, enum: ["", "Buy / Sell", "Places", "Food", "Travel", "Work", "Wellness", "Learning", "Lifestyle", "Services", "Community"], default: "" },
+    rightNow: { type: Boolean, default: false },
+    creationKey: { type: String },
+    creationFingerprint: { type: String },
+    postType: { type: String, enum: ["", "Buy & Sell", "Looking for", "Offering", "Need Help", "Question", "Recommendation", "Right Now", "Event"], default: "" },
+    topic: { type: String, enum: ["", "Meet people", "Housing", "Kids & Family", "Buy / Sell", "Places", "Food", "Travel", "Work", "Wellness", "Learning", "Lifestyle", "Services", "Community"], default: "" },
     context: { type: String, enum: ["", ...POST_CONTEXTS], default: "" },
     location: { type: String, trim: true, default: "", maxlength: 120 },
     entityRefs: { type: [entityRefSchema], default: [] },
@@ -157,5 +160,9 @@ feedPostSchema.index({ "views.user": 1, status: 1, publishedAt: -1 });
 feedPostSchema.index({ "shares.user": 1, status: 1, publishedAt: -1 });
 feedPostSchema.index({ "shares.createdAt": -1, status: 1, deletedAt: 1 });
 feedPostSchema.index({ "hiddenBy.user": 1, status: 1, publishedAt: -1 });
+
+
+
+feedPostSchema.index({ author: 1, creationKey: 1 }, { unique: true, partialFilterExpression: { creationKey: { $type: "string" } } });
 
 export default mongoose.model("FeedPost", feedPostSchema);

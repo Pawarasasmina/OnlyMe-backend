@@ -1,3 +1,6 @@
+import { wallViewCount } from "../services/wallViewCount.js";
+import { cleanupWallFiles, creationKey, reserveWallCreation, validateWallCreation, wallFingerprint } from "../services/wallCreationService.js";
+import { wallActiveExpression, wallClosedReason } from "../services/wallLifecycleService.js";
 import { prepareWallVoiceTranscript } from "../services/transcriptionService.js";
 import { isRequestWallPost, wallResolutionTarget } from "../services/wallResolutionService.js";
 import { readWallFeedFilters, wallFeedPipeline } from "../services/wallFeedFilterService.js";
@@ -80,7 +83,7 @@ function feedFilterQuery(query = {}) {
   const extra = {};
 
   if (filter && filter !== "all") {
-    if (filter === "right_now") extra.context = "Right now";
+    if (filter === "right_now") { extra.$or = [{ rightNow: true }, { postType: "Right Now" }, { context: "Right now" }]; extra.$expr = wallActiveExpression(); }
     else if (filter === "events") extra.context = "Events";
     else if (filter === "things_to_do") extra.context = "Things to do";
     else if (filter === "food") extra.context = { $in: ["Coffee", "Restaurant"] };
@@ -101,7 +104,7 @@ function feedFilterQuery(query = {}) {
   return extra;
 }
 
-export const postControllerTestUtils = { feedFilterQuery };
+export const postControllerTestUtils = { feedFilterQuery, personalizeCandidates };
 
 async function trackPostEvent(req, eventType, postId, extra = {}) {
   const sessionId = readAnalyticsSessionId(req);
@@ -222,6 +225,9 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
     author: authorPayload(author),
     text: post.text || "",
     resolvedAt: post.resolvedAt || null,
+    closedReason: wallClosedReason(post),
+    isClosed: Boolean(wallClosedReason(post)),
+    rightNow: Boolean(post.rightNow),
     canResolve: Boolean(viewerId && authorId === viewerId && post.status === "published" && (isRequestWallPost(post) || post.resolvedAt)),
     postType: post.postType || "",
     topic: post.topic || "",
@@ -267,7 +273,7 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
     supportCount: reactions.length || post.supportCount || 0,
     commentCount: comments.length || post.commentCount || 0,
     saveCount: saves.length || post.saveCount || 0,
-    viewCount: Number(post.viewCount ?? views.length) || 0,
+    viewCount: wallViewCount(post),
     shareCount: shares.length || post.shareCount || 0,
     reportCount: (post.reports || []).length,
     createdAt: post.createdAt,
@@ -407,6 +413,9 @@ async function createPostRecord({ imageFiles = [], req, status, voiceFile = null
 
   const post = new FeedPost({
     author: req.user._id,
+    creationKey: status === "published" ? req.wallCreationKey : undefined,
+    creationFingerprint: status === "published" ? req.wallFingerprint : undefined,
+    rightNow: req.body.rightNow === true || req.body.rightNow === "true",
     postType: cleanString(req.body.postType, 40),
     topic: cleanString(req.body.topic, 40),
     text,
@@ -433,6 +442,48 @@ async function createPostRecord({ imageFiles = [], req, status, voiceFile = null
   await populatePostForResponse(post);
   return post;
 }
+
+// Count original, unresolved notes once; shares must not inflate category totals.
+export const getWallNeedCounts = asyncHandler(async (req, res) => {
+  const options = readWallFeedFilters({ scope: req.query.scope || "worldwide", location: req.query.location, near: req.query.near });
+  const blocks = await UserBlock.find({ $or: [{ blocker: req.user._id }, { blocked: req.user._id }] }).select("blocker blocked").lean();
+  const blockedIds = blocks.map((block) => String(block.blocker) === String(req.user._id) ? block.blocked : block.blocker);
+  const categories = ["need_help", "looking_for", "offering", "buy_sell", "question", "recommendation", "event"];
+  const topics = ["meet_people", "work", "services", "housing", "places", "food", "travel", "kids_family", "community"];
+  const sellMatch = readWallFeedFilters({ type: "buy_sell" }).match;
+  const facets = Object.fromEntries(categories.map((category) => {
+    const match = category === "buy_sell" ? sellMatch : readWallFeedFilters({ type: category }).match;
+    return [category, [{ $match: category === "offering" ? { $and: [match, { $nor: [sellMatch] }] } : match }, { $count: "count" }]];
+  }));
+  for (const topic of topics) facets[`topic_${topic}`] = [{ $match: readWallFeedFilters({ topic }).match }, { $count: "count" }];
+  // Return a small, recent preview alongside each count, never simulated activity.
+  const previewMatches = {
+    right_now: readWallFeedFilters({ type: "right_now" }).match,
+    ...Object.fromEntries(topics.map(topic => [topic, readWallFeedFilters({ topic }).match])),
+    ...Object.fromEntries(categories.map((category) => [category, category === "offering"
+      ? { $and: [readWallFeedFilters({ type: category }).match, { $nor: [sellMatch] }] }
+      : readWallFeedFilters({ type: category }).match])),
+  };
+  for (const [key, match] of Object.entries(previewMatches)) {
+    facets[`preview_${key}`] = [
+      { $match: match }, { $sort: { publishedAt: -1, createdAt: -1, _id: -1 } }, { $limit: 3 },
+      { $lookup: { from: "users", localField: "author", foreignField: "_id", as: "person" } },
+      { $project: { _id: 0, text: { $cond: [
+        { $gt: [{ $strLenCP: { $trim: { input: { $ifNull: ["$text", ""] } } } }, 0] }, "$text",
+        { $ifNull: [{ $arrayElemAt: [{ $map: { input: { $filter: { input: { $ifNull: ["$media", []] }, as: "media", cond: { $eq: ["$$media.type", "audio"] } } }, as: "audio", in: "$$audio.transcript" } }, 0] }, ""] },
+      ] }, author: { $arrayElemAt: ["$person", 0] } } },
+      { $project: { text: 1, "author._id": 1, "author.name": 1, "author.avatar": 1 } },
+    ];
+  }
+  facets.right_now = [{ $match: previewMatches.right_now }, { $count: "count" }];
+  const [result = {}] = await FeedPost.aggregate([
+    { $match: { status: "published", visibility: "public", deletedAt: null, resolvedAt: null, $expr: wallActiveExpression(), author: { $nin: blockedIds }, "hiddenBy.user": { $ne: req.user._id }, ...options.match } },
+    { $facet: facets },
+  ]);
+  const counts = Object.fromEntries([...categories, "right_now"].map((category) => [category, result[category]?.[0]?.count || 0]));
+  const topicCounts = Object.fromEntries(topics.map((topic) => [topic, result[`topic_${topic}`]?.[0]?.count || 0]));
+  return sendResponse(res, 200, "Wall need counts fetched", { counts, topicCounts, previews: Object.fromEntries(Object.keys(previewMatches).map((key) => [key, result[`preview_${key}`] || []])), location: String(req.query.location || req.query.near || "").trim().slice(0, 120) });
+});
 
 export const listFeedPosts = asyncHandler(async (req, res) => {
   const { page, limit } = pageOptions(req);
@@ -471,7 +522,11 @@ export const listFeedPosts = asyncHandler(async (req, res) => {
       sharedBy: authorPayload(row.__sharer),
     } : {})];
   });
-  const personalized = await personalizeCandidates({ exposureLimit: limit, items: feed, req, surface: "WALL" });
+  // Recent is chronological, including after a reload. Recommendation ranking
+  // must not replace the database order with older posts or shares.
+  const personalized = options.sort === "recent"
+    ? { items: feed, recommendation: null }
+    : await postControllerTestUtils.personalizeCandidates({ exposureLimit: limit, items: feed, req, surface: "WALL" });
   return sendResponse(res, 200, "Feed posts fetched", {
     items: personalized.items,
     recommendation: personalized.recommendation,
@@ -496,7 +551,7 @@ export const markFeedPostViewed = asyncHandler(async (req, res) => {
   const post = await findPublishedPost(req.params.id);
   const authorId = post.author?._id || post.author;
   const viewerId = req.user._id;
-  const currentCount = Number(post.viewCount ?? post.views?.length) || 0;
+  const currentCount = wallViewCount(post);
 
   const blocked = await UserBlock.exists({ $or: [{ blocker: viewerId, blocked: authorId }, { blocker: authorId, blocked: viewerId }] });
   if (blocked || post.hiddenBy.some((item) => String(item.user) === String(viewerId))) {
@@ -514,13 +569,14 @@ export const markFeedPostViewed = asyncHandler(async (req, res) => {
   const updated = await FeedPost.findOneAndUpdate(
     { _id: post._id, "views.user": { $ne: viewerId } },
     { $push: { views: { user: viewerId, actorAccountType: req.user.accountType, viewedAt: new Date() } }, ...(req.user.accountType === "TEST" ? {} : { $inc: { viewCount: 1 } }) },
-    { new: true, runValidators: true, select: "viewCount views" }
+    { new: true, runValidators: true, select: "viewCount views author" }
   ).lean();
   if (updated) await trackPostEvent(req, "CONTENT_VIEW", post._id, { source: req.body.source || "home" });
 
+  const countedPost = updated || await FeedPost.findById(post._id).select("viewCount views author").lean() || post;
   return sendResponse(res, 200, updated ? "Post view recorded" : "Post view already recorded", {
     postId: String(post._id),
-    viewCount: Number(updated?.viewCount ?? currentCount) || 0,
+    viewCount: wallViewCount(countedPost),
     viewed: Boolean(updated),
   });
 });
@@ -552,10 +608,32 @@ export const listMyPosts = asyncHandler(async (req, res) => {
 
 export const createFeedPost = asyncHandler(async (req, res) => {
   const files = req.files || {};
-  const post = await createPostRecord({ imageFiles: files.media || [], req, status: "published", voiceFile: files.voice?.[0] || null });
-  await recordChecklistEvent(req.user._id, "createdFirstPost");
-  await attachEntityMetadata(post, req.user || null);
-  return sendResponse(res, 201, "Post published", { post: serializePost(post, req.user) });
+  let release;
+  let published = false;
+  try {
+    const text = validateWallCreation(req.body, files);
+    req.wallCreationKey = creationKey(req);
+    req.wallFingerprint = await wallFingerprint(req);
+    const previous = await FeedPost.findOne({ author: req.user._id, creationKey: req.wallCreationKey });
+    if (previous) {
+      if (previous.creationFingerprint !== req.wallFingerprint) throw new ApiError(409, "This request key was used for a different note");
+      if (previous.deletedAt || previous.status !== "published") throw new ApiError(409, "This note was already published and later removed");
+      await populatePostForResponse(previous);
+      return sendResponse(res, 200, "Note already published", { post: serializePost(previous, req.user) });
+    }
+    release = await reserveWallCreation(req.user._id, text, req.wallCreationKey);
+    const post = await createPostRecord({ imageFiles: files.media || [], req, status: "published", voiceFile: files.voice?.[0] || null });
+    published = true;
+    await recordChecklistEvent(req.user._id, "createdFirstPost").catch(() => {});
+    await attachEntityMetadata(post, req.user || null);
+    return sendResponse(res, 201, "Post published", { post: serializePost(post, req.user) });
+  } finally {
+    if (release && !published) {
+      const saved = await FeedPost.exists({ author: req.user._id, creationKey: req.wallCreationKey });
+      if (!saved) await release();
+    }
+    await cleanupWallFiles(files);
+  }
 });
 
 export const createDraftPost = asyncHandler(async (req, res) => {
@@ -599,19 +677,28 @@ export const updateFeedPost = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Post text is required");
   }
 
+  if (Object.hasOwn(req.body, "rightNow")) post.rightNow = req.body.rightNow === true || req.body.rightNow === "true";
+  if (Object.hasOwn(req.body, "postType")) post.postType = req.body.postType;
+  if (Object.hasOwn(req.body, "topic")) post.topic = req.body.topic;
   post.text = text;
   post.context = context;
   post.entityRefs = entityRefs;
   post.location = location;
 
+  let release;
   if (post.status === "draft" && req.body.publish === "true") {
-    if (!text) throw new ApiError(400, "Post text is required");
+    const media = post.media || [];
+    validateWallCreation({ ...req.body, postType: post.postType, rightNow: post.rightNow }, { media: media.filter((item) => item.type === "image"), voice: media.filter((item) => item.type === "audio") });
+    if (media.some((item) => item.type === "audio" && item.duration > 30)) throw new ApiError(400, "Wall voice notes must be 30 seconds or shorter");
+    post.creationKey = post.creationKey || creationKey(req);
+    await post.validate();
+    release = await reserveWallCreation(req.user._id, text, post.creationKey);
     post.status = "published";
     post.visibility = "public";
     post.publishedAt = new Date();
   }
 
-  await post.save();
+  try { await post.save(); } catch (error) { if (release) await release(); throw error; }
   if (post.status === "published") await recordChecklistEvent(req.user._id, "createdFirstPost");
   await populatePostForResponse(post);
   await attachEntityMetadata(post, req.user || null);
@@ -738,6 +825,7 @@ export const blockPostAuthor = asyncHandler(async (req, res) => {
 
 export const createPostComment = asyncHandler(async (req, res) => {
   const post = await findPublishedPost(req.params.id);
+  if (wallClosedReason(post)) throw new ApiError(409, "This note is closed. Existing replies remain visible.");
   const hasVoiceFile = Boolean(req.file?.buffer?.length);
   const text = String(req.body.text || "").trim();
   if ((!text && !hasVoiceFile) || text.length > 500) throw new ApiError(400, hasVoiceFile ? "Voice comment text must not exceed 500 characters" : "Comment must contain 1 to 500 characters");
