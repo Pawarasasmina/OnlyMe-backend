@@ -125,6 +125,8 @@ export const debitWallet = (input, session) => post({ ...input, direction: "DEBI
 export async function transferStars({ fromUser, toUser, amount, debitType, creditType, referenceType, referenceId, publication, creator, command, idempotencyKey, metadata }, session) {
   const debit = await debitWallet({ user: fromUser, amount, entryType: debitType, entryRole: "FAN_DEBIT", referenceType, referenceId, publication, creator, counterpartyUser: toUser, command, idempotencyKey, metadata }, session);
   const credit = await creditWallet({ user: toUser, amount, entryType: creditType, entryRole: "CREATOR_EARNING", referenceType, referenceId, publication, creator, counterpartyUser: fromUser, command, idempotencyKey, metadata: { ...metadata, settlementStatus: "UNSETTLED", grossStars: amount } }, session);
+  const { awardReferralEarnings } = await import("./referralFinancialService.js");
+  await awardReferralEarnings({ fromUser, toUser, amount, referenceType, sourceDebit: debit, sourceCredit: credit, publication, creator, command, idempotencyKey }, session);
   return { debit, credit };
 }
 export const safeWallet = (wallet, financialMode = "REAL_SEED") => {

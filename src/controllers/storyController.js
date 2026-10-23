@@ -1,5 +1,7 @@
 import mongoose from "mongoose";
 import Story from "../models/Story.js";
+import StoryArchive from "../models/StoryArchive.js";
+import StoryHighlight from "../models/StoryHighlight.js";
 import StoryEngagement from "../models/StoryEngagement.js";
 import MessageReport from "../models/MessageReport.js";
 import Publication from "../models/Publication.js";
@@ -7,6 +9,7 @@ import PublicationPreference from "../models/PublicationPreference.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import Conversation from "../models/Conversation.js";
 import Message from "../models/Message.js";
+import Notification from "../models/Notification.js";
 import OrbitSignal from "../models/OrbitSignal.js";
 import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
@@ -148,6 +151,66 @@ const serialize = (story, viewer, engagement, insights = null) => {
 
 const REPORT_REASONS = new Set(["SPAM", "FALSE_INFORMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "OTHER"]);
 
+const highlightSnapshot = (story) => ({
+  storyId: story._id,
+  caption: story.caption || "",
+  image: story.image,
+  mediaType: story.mediaType || "image",
+  duration: story.duration || (story.mediaType === "video" ? 15 : 5),
+  editorMetadata: story.editorMetadata || defaultEditorMetadata(),
+  audience: story.audience || "everyone",
+  sourceType: story.sourceType || "original",
+  sourceSeen: story.sourceSeen || null,
+  storyCreatedAt: story.createdAt,
+});
+
+const archiveStory = (story) => StoryArchive.findOneAndUpdate(
+  { storyId: story._id },
+  { $setOnInsert: { creator: story.creator?._id || story.creator, storyId: story._id, snapshot: highlightSnapshot(story), storyCreatedAt: story.createdAt } },
+  { upsert: true, new: true },
+);
+
+const serializeHighlightStory = (story, creator, viewerId) => {
+  const mediaUrl = story.image?.url || story.editorMetadata?.sharedCard?.imageUrl || "";
+  return {
+    id: `highlight:${story.storyId}`,
+    originalStoryId: String(story.storyId),
+    ownerId: String(creator._id),
+    creatorId: String(creator._id),
+    owner: serializeUser(creator),
+    name: creator.name,
+    username: creator.username,
+    avatar: creator.avatar || "",
+    verified: Boolean(creator.isVerified),
+    image: mediaUrl,
+    mediaUrl,
+    thumbnailUrl: mediaUrl,
+    mediaType: story.mediaType || "image",
+    duration: story.duration || 5,
+    editorMetadata: story.editorMetadata || defaultEditorMetadata(),
+    audience: story.audience || "everyone",
+    allowReactions: false,
+    allowReplies: false,
+    allowSharing: false,
+    caption: story.caption || "",
+    createdAt: story.storyCreatedAt,
+    expiresAt: null,
+    timeAgo: timeAgo(story.storyCreatedAt),
+    isOwn: String(creator._id) === String(viewerId),
+    viewed: false,
+    sourceType: story.sourceType || "original",
+    isHighlight: true,
+  };
+};
+
+async function highlightAudience(creatorId, viewerId) {
+  if (String(creatorId) === String(viewerId)) return new Set(["everyone", "followers", "close_circle", "only_me"]);
+  const follows = await ProfileRelationship.exists({ actor: viewerId, target: creatorId, type: "FOLLOW" });
+  if (!follows) return new Set(["everyone"]);
+  const followsBack = await ProfileRelationship.exists({ actor: creatorId, target: viewerId, type: "FOLLOW" });
+  return new Set(followsBack ? ["everyone", "followers", "close_circle"] : ["everyone", "followers"]);
+}
+
 function cleanString(value, maxLength) {
   const clean = String(value || "").trim().replace(/\r\n/g, "\n");
   return clean.length > maxLength ? clean.slice(0, maxLength) : clean;
@@ -158,6 +221,114 @@ function readReportReason(value) {
   if (!REPORT_REASONS.has(reason)) throw new ApiError(400, "Select a valid report reason");
   return reason;
 }
+
+export const getStoryArchive = asyncHandler(async (req, res) => {
+  const unarchivedStories = await Story.find({ creator: req.user._id }).lean();
+  await Promise.all(unarchivedStories.map(archiveStory));
+  const [archives, creator] = await Promise.all([
+    StoryArchive.find({ creator: req.user._id }).sort({ storyCreatedAt: -1 }).lean(),
+    User.findById(req.user._id).select("name username avatar isVerified role creatorApprovalStatus").lean(),
+  ]);
+  return sendResponse(res, 200, "Story archive fetched", {
+    items: archives.map((archive) => serializeHighlightStory(archive.snapshot, creator, req.user._id)).map((story) => ({ ...story, id: story.originalStoryId, isHighlight: false })),
+  });
+});
+
+export const createStoryHighlight = asyncHandler(async (req, res) => {
+  const name = cleanString(req.body.name, 30);
+  const storyIds = [...new Set(Array.isArray(req.body.storyIds) ? req.body.storyIds.map(String) : [])];
+  const coverStoryId = String(req.body.coverStoryId || "");
+  if (!name) throw new ApiError(400, "Highlight name is required");
+  if (!storyIds.length || storyIds.length > 100 || storyIds.some((id) => !mongoose.isValidObjectId(id))) throw new ApiError(400, "Select between 1 and 100 valid stories");
+  if (!storyIds.includes(coverStoryId)) throw new ApiError(400, "Choose a cover from the selected stories");
+  const archives = await StoryArchive.find({ storyId: { $in: storyIds }, creator: req.user._id }).lean();
+  if (archives.length !== storyIds.length) throw new ApiError(404, "One or more archived stories are unavailable");
+  const byId = new Map(archives.map((archive) => [String(archive.storyId), archive.snapshot]));
+  const highlight = await StoryHighlight.create({
+    creator: req.user._id,
+    name,
+    coverStoryId,
+    stories: storyIds.map((id) => byId.get(id)),
+  });
+  await highlight.populate("creator", "name username avatar isVerified role creatorApprovalStatus status");
+  const items = highlight.stories.map((story) => serializeHighlightStory(story, highlight.creator, req.user._id));
+  return sendResponse(res, 201, "Highlight created", {
+    highlight: { id: String(highlight._id), name: highlight.name, coverStoryId, coverUrl: items.find((item) => item.originalStoryId === coverStoryId)?.thumbnailUrl || items[0]?.thumbnailUrl || "", stories: items },
+  });
+});
+
+export const getCreatorHighlights = asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.creatorId)) throw new ApiError(400, "Invalid creator ID");
+  const creatorId = req.params.creatorId;
+  const viewerId = req.user._id;
+  const blocked = String(creatorId) !== String(viewerId) && await UserBlock.exists({ $or: [{ blocker: viewerId, blocked: creatorId }, { blocker: creatorId, blocked: viewerId }] });
+  if (blocked) throw new ApiError(403, "These highlights are unavailable");
+  const allowed = await highlightAudience(creatorId, viewerId);
+  const highlights = await StoryHighlight.find({ creator: creatorId }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified role creatorApprovalStatus status").lean();
+  const items = highlights.flatMap((highlight) => {
+    if (!highlight.creator || highlight.creator.status !== "active") return [];
+    const stories = highlight.stories.filter((story) => allowed.has(story.audience || "everyone")).map((story) => serializeHighlightStory(story, highlight.creator, viewerId));
+    if (!stories.length) return [];
+    const cover = stories.find((story) => story.originalStoryId === String(highlight.coverStoryId)) || stories[0];
+    return [{ id: String(highlight._id), name: highlight.name, coverStoryId: cover.originalStoryId, coverUrl: cover.thumbnailUrl, stories }];
+  });
+  return sendResponse(res, 200, "Story highlights fetched", { items });
+});
+
+async function ownedHighlight(id, ownerId) {
+  if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid highlight ID");
+  const highlight = await StoryHighlight.findOne({ _id: id, creator: ownerId });
+  if (!highlight) throw new ApiError(404, "Highlight not found");
+  return highlight;
+}
+
+export const updateStoryHighlight = asyncHandler(async (req, res) => {
+  const highlight = await ownedHighlight(req.params.highlightId, req.user._id);
+  if (req.body.name !== undefined) {
+    const name = cleanString(req.body.name, 30);
+    if (!name) throw new ApiError(400, "Highlight name is required");
+    highlight.name = name;
+  }
+  if (req.body.coverStoryId !== undefined) {
+    const coverStoryId = String(req.body.coverStoryId || "");
+    if (!highlight.stories.some((story) => String(story.storyId) === coverStoryId)) throw new ApiError(400, "Choose a cover from this highlight");
+    highlight.coverStoryId = coverStoryId;
+  }
+  await highlight.save();
+  return sendResponse(res, 200, "Highlight updated", { id: String(highlight._id), name: highlight.name, coverStoryId: String(highlight.coverStoryId) });
+});
+
+export const addStoryToHighlight = asyncHandler(async (req, res) => {
+  const highlight = await ownedHighlight(req.params.highlightId, req.user._id);
+  const storyId = String(req.body.storyId || "");
+  if (!mongoose.isValidObjectId(storyId)) throw new ApiError(400, "Invalid story ID");
+  if (highlight.stories.some((story) => String(story.storyId) === storyId)) return sendResponse(res, 200, "Story is already in this highlight", { added: false });
+  if (highlight.stories.length >= 100) throw new ApiError(409, "A highlight may contain at most 100 stories");
+  const archive = await StoryArchive.findOne({ creator: req.user._id, storyId }).lean();
+  if (!archive) throw new ApiError(404, "Archived story not found");
+  highlight.stories.push(archive.snapshot);
+  await highlight.save();
+  return sendResponse(res, 200, "Story added to highlight", { added: true });
+});
+
+export const removeStoryFromHighlight = asyncHandler(async (req, res) => {
+  const highlight = await ownedHighlight(req.params.highlightId, req.user._id);
+  const storyId = String(req.params.storyId || "");
+  highlight.stories = highlight.stories.filter((story) => String(story.storyId) !== storyId);
+  if (!highlight.stories.length) {
+    await highlight.deleteOne();
+    return sendResponse(res, 200, "Empty highlight removed", { deleted: true });
+  }
+  if (String(highlight.coverStoryId) === storyId) highlight.coverStoryId = highlight.stories[0].storyId;
+  await highlight.save();
+  return sendResponse(res, 200, "Story removed from highlight", { deleted: false });
+});
+
+export const deleteStoryHighlight = asyncHandler(async (req, res) => {
+  const highlight = await ownedHighlight(req.params.highlightId, req.user._id);
+  await highlight.deleteOne();
+  return sendResponse(res, 200, "Highlight deleted", { deleted: true });
+});
 
 export const getStory = asyncHandler(async (req, res) => {
   const story = await followedStory(req.params.id, req.user._id);
@@ -264,6 +435,7 @@ export const createStory = asyncHandler(async (req, res) => {
     ...options,
     expiresAt: storyExpiresAt(req.user.accountType),
   });
+  await archiveStory(story);
   await story.populate("creator", "name username avatar isVerified");
   return sendResponse(res, 201, isPermanentTestStory(req.user.accountType) ? "Test story is live without expiry" : "Story is live for 24 hours", { story: serialize(story, req.user._id) });
 });
@@ -341,6 +513,7 @@ export const shareSeenAsStory = asyncHandler(async (req, res) => {
     ...options,
     expiresAt: storyExpiresAt(req.user.accountType),
   });
+  await archiveStory(story);
   await story.populate("creator", "name username avatar isVerified");
   await story.populate({ path: "sourceSeen", populate: [{ path: "creator", select: "name username avatar isVerified" }, { path: "series", select: "name" }] });
   return sendResponse(res, 201, isPermanentTestStory(req.user.accountType) ? "Shared to your permanent test story" : "Shared to your story for 24 hours", { story: serialize(story, req.user._id) });
@@ -483,6 +656,11 @@ export const listStories = asyncHandler(async (req, res) => {
       || recentTime([right.latestStoryAt]) - recentTime([left.latestStoryAt]))
     .map(({ followed: _followed, latestActivityAt: _latestActivityAt, latestStoryAt: _latestStoryAt, ...item }) => item);
   const personalizedStories = await personalizeCandidates({ items: rankedStoryGroups, req, surface: "STORIES" });
+  const orderedStoryGroups = personalizedStories.items
+    .map((item, personalizedIndex) => ({ item, personalizedIndex }))
+    .sort((left, right) => Number(Boolean(right.item.hasUnseenStories)) - Number(Boolean(left.item.hasUnseenStories))
+      || left.personalizedIndex - right.personalizedIndex)
+    .map(({ item }) => item);
 
   viewerStories.sort((left, right) => new Date(left.createdAt) - new Date(right.createdAt));
 
@@ -495,7 +673,7 @@ export const listStories = asyncHandler(async (req, res) => {
       stories: viewerStories,
       presence: { isOnline: false, lastActiveAt: req.user.lastSeenAt || null },
     },
-    items: personalizedStories.items,
+    items: orderedStoryGroups,
     recommendation: personalizedStories.recommendation,
   });
 });
@@ -524,6 +702,26 @@ export const reactStory = asyncHandler(async (req, res) => {
     { $set: { reaction, viewedAt: new Date(), actorAccountType: req.user.accountType } },
     { upsert: true, new: true },
   );
+  const conversation = await Conversation.findOneAndUpdate({ fan: req.user._id, creator: story.creator }, { $set: { status: "ACTIVE", declinedAt: null }, $setOnInsert: { fan: req.user._id, creator: story.creator, acceptedAt: new Date(), acceptedByCreator: false } }, { new: true, upsert: true });
+  const storyReply = { story: story._id, imageUrl: story.image.url, caption: story.caption, expiresAt: story.expiresAt, questionPrompt: "" };
+  const created = await Message.create({ sender: req.user._id, recipient: story.creator, body: `Reacted ${reaction} to your story`, mediaType: "text", ppm: false, storyReply });
+  await Notification.findOneAndUpdate(
+    { dedupeKey: `story-reaction:${story._id}:${req.user._id}` },
+    {
+      $set: {
+        user: story.creator,
+        type: "story_reaction",
+        title: `${req.user.name || "Someone"} reacted ${reaction} to your story`,
+        message: story.caption || "",
+        readAt: null,
+        acknowledgedAt: null,
+      },
+      $setOnInsert: { dedupeKey: `story-reaction:${story._id}:${req.user._id}` },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  req.app.get("io")?.to(`user:${story.creator}`).emit("message:new", { message: { id: String(created._id), senderId: String(created.sender), recipientId: String(created.recipient), body: created.body, mediaType: "text", readAt: null, createdAt: created.createdAt, storyReply: { storyId: String(story._id), imageUrl: story.image.url, caption: story.caption, expiresAt: story.expiresAt, questionPrompt: "" } }, participant: { id: String(req.user._id), displayName: req.user.name, username: req.user.username, avatarUrl: req.user.avatar || null, role: req.user.role, isVerified: Boolean(req.user.isVerified), lastSeenAt: req.user.lastSeenAt || null }, conversationStatus: conversation.status });
+  req.app.get("io")?.to(`user:${story.creator}`).emit("activity:updated", { type: "story_reaction", storyId: String(story._id) });
   return sendResponse(res, 200, "Reaction sent", { reaction: engagement.reaction, reactedAt: engagement.updatedAt });
 });
 

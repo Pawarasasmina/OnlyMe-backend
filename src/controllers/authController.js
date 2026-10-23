@@ -12,6 +12,7 @@ import { sendWelcomeEmail } from "../services/emailService.js";
 import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyticsEventService.js";
 import { env } from "../config/env.js";
 import jwt from "jsonwebtoken";
+import { attributeReferral, resolveReferral } from "../services/referralService.js";
 
 void mongoose;
 
@@ -71,6 +72,8 @@ async function recordAuthAnalytics(req, user, eventType) {
 export const register = asyncHandler(async (req, res) => {
   const { name, username, email, password } = validateRegisterPayload(req.body);
 
+  if (req.body.referralCode) await resolveReferral(req.body.referralCode);
+
   const existingUser = await User.findOne({ $or: [{ email }, { username }] });
   if (existingUser) throw new ApiError(409, "A user with that email or username already exists");
 
@@ -85,6 +88,7 @@ export const register = asyncHandler(async (req, res) => {
 
   const user = await User.create(userData);
   await createRoleProfile(user);
+  await attributeReferral({ code: req.body.referralCode, invitee: user });
 
   // Email is a post-registration side effect: a provider outage must never
   // roll back an account that was created successfully.

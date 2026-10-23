@@ -1,11 +1,18 @@
 import { Router } from "express";
-import { createStory, deleteStory, getCreatorStories, getStory, getStoryInsights, hideStoriesFromCreator, hideStoryCreator, listStories, reactStory, replyStory, reportStory, seeStory, shareSeenAsStory, unfollowCreatorFromStories, unfollowStoryCreator, updateStoryStatus, viewStory } from "../controllers/storyController.js";
+import { addStoryToHighlight, createStory, createStoryHighlight, deleteStory, deleteStoryHighlight, getCreatorHighlights, getCreatorStories, getStory, getStoryArchive, getStoryInsights, hideStoriesFromCreator, hideStoryCreator, listStories, reactStory, removeStoryFromHighlight, replyStory, reportStory, seeStory, shareSeenAsStory, unfollowCreatorFromStories, unfollowStoryCreator, updateStoryHighlight, updateStoryStatus, viewStory } from "../controllers/storyController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { uploadStoryMedia } from "../middleware/uploadMiddleware.js";
 import { requireMessagingAccess } from "../services/messagingAccessService.js";
 const router = Router();
 router.get("/active", protect, authorize("fan", "creator"), listStories);
+router.get("/archive", protect, authorize("fan", "creator"), getStoryArchive);
+router.post("/highlights", protect, authorize("fan", "creator"), createStoryHighlight);
+router.patch("/highlights/:highlightId", protect, authorize("fan", "creator"), updateStoryHighlight);
+router.post("/highlights/:highlightId/stories", protect, authorize("fan", "creator"), addStoryToHighlight);
+router.delete("/highlights/:highlightId/stories/:storyId", protect, authorize("fan", "creator"), removeStoryFromHighlight);
+router.delete("/highlights/:highlightId", protect, authorize("fan", "creator"), deleteStoryHighlight);
+router.get("/creators/:creatorId/highlights", protect, authorize("fan", "creator"), getCreatorHighlights);
 router.get("/me", protect, authorize("fan", "creator"), (req, res, next) => {
   req.params.creatorId = String(req.user._id);
   return getCreatorStories(req, res, next);

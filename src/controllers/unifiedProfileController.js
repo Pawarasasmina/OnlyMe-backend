@@ -147,6 +147,28 @@ async function loadProfile(owner, viewer) {
     { $group: { _id: "$publication", ownerCount: { $sum: 1 } } },
   ]) : [];
   const experienceOwnerCounts = new Map(experienceOwnerRows.map((item) => [String(item._id), Number(item.ownerCount) || 0]));
+  const premiumWorldIds = planets.filter((item) => item.kind === "PREMIUM_WORLD").map((item) => item._id);
+  const activeWorldMemberFilter = {
+    premiumPublication: { $in: premiumWorldIds },
+    status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] },
+    currentPeriodEnd: { $gt: new Date() },
+  };
+  const [worldMemberRows, worldMemberPreviewRows] = premiumWorldIds.length ? await Promise.all([
+    PremiumMembership.aggregate([
+      { $match: activeWorldMemberFilter },
+      { $group: { _id: "$premiumPublication", memberCount: { $sum: 1 } } },
+    ]),
+    PremiumMembership.find(activeWorldMemberFilter).sort({ createdAt: 1 }).limit(12).populate("user", "name username avatar").lean(),
+  ]) : [[], []];
+  const worldMemberCounts = new Map(worldMemberRows.map((item) => [String(item._id), Number(item.memberCount) || 0]));
+  const worldMemberPreviews = new Map();
+  for (const membership of worldMemberPreviewRows) {
+    if (!membership.user) continue;
+    const key = String(membership.premiumPublication);
+    const preview = worldMemberPreviews.get(key) || [];
+    if (preview.length < 4) preview.push({ id: String(membership.user._id), name: membership.user.name, username: membership.user.username, avatar: membership.user.avatar || "" });
+    worldMemberPreviews.set(key, preview);
+  }
   const viewerFollowsOwner = profileOwner || viewerRelationships.some((item) => item.type === "FOLLOW");
   const activeStories = await Story.find({
     creator: owner._id,
@@ -203,7 +225,7 @@ async function loadProfile(owner, viewer) {
   const currentWallPosts = await Promise.all(ownCurrentWallPosts.map(async (post) => serializeWallPost(post, await engagementForWallPost(post._id, viewer?._id))));
   const ownWallPosts = [...ownFeedPosts.map((post) => serializePost(post, viewer)), ...currentWallPosts]
     .sort((left, right) => new Date(right.feedCreatedAt || right.publishedAt || right.createdAt) - new Date(left.feedCreatedAt || left.publishedAt || left.createdAt));
-  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, membershipIncludedExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, seenByCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal), activeStoryCount, profileStories });
+  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, membershipIncludedExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, seenByCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal), activeStoryCount, profileStories, worldMemberCounts, worldMemberPreviews });
 }
 
 async function relationshipTarget(username) {

@@ -7,6 +7,7 @@
     "seed:seen-flow": "node src/scripts/seedSeenFlowSamples.js",
     "seed:creator-demos": "node src/scripts/seedCreatorDemoContent.js",
     "seed:creator-stories": "node src/scripts/seedCreatorStories.js",
+    "seed:maya-grow-referrals": "node src/scripts/seedMayaGrowReferrals.js",
     "seed:client-showcase": "node src/scripts/seedClientShowcase.js",
     "showcase:avatars:restore:dry-run": "node src/scripts/restoreShowcaseAvatars.js",
     "showcase:avatars:restore": "node src/scripts/restoreShowcaseAvatars.js --apply",

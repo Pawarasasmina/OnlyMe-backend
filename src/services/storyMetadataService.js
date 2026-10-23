@@ -16,6 +16,9 @@ export function parseStoryEditorMetadata(value) {
   }
   if (!input || typeof input !== "object" || Array.isArray(input)) input = {};
   const transform = input.transform || {};
+  const mediaFramingInput = input.mediaFraming && typeof input.mediaFraming === "object" && !Array.isArray(input.mediaFraming)
+    ? input.mediaFraming
+    : null;
   const inputQuestionSticker = input.questionSticker && typeof input.questionSticker === "object" && !Array.isArray(input.questionSticker)
     ? input.questionSticker
     : null;
@@ -40,8 +43,16 @@ export function parseStoryEditorMetadata(value) {
     y: finite(inputSharedCard.y, 50, 20, 78),
   } : null;
   return {
+    ...(mediaFramingInput ? {
+      mediaFraming: {
+        fitMode: mediaFramingInput.fitMode === "fit" ? "fit" : "fill",
+        scale: finite(mediaFramingInput.scale, 1, 0.4, 4),
+        translateX: finite(mediaFramingInput.translateX, 0, -100, 100),
+        translateY: finite(mediaFramingInput.translateY, 0, -100, 100),
+      },
+    } : {}),
     transform: {
-      scale: finite(transform.scale, 1, 1, 2.2),
+      scale: finite(transform.scale, 1, 0.4, 4),
       translateX: finite(transform.translateX, 0, -35, 35),
       translateY: finite(transform.translateY, 0, -35, 35),
       rotation: finite(transform.rotation, 0, -180, 180),
