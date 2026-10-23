@@ -2,6 +2,8 @@
 import {
   getCreatorByUsername,
   getCreatorDashboard,
+  getGrowDashboard,
+  getReferralInvitation,
   listCreators,
 } from "../controllers/creatorController.js";
 import { protect } from "../middleware/authMiddleware.js";
@@ -11,6 +13,8 @@ import { requireApprovedCreator } from "../middleware/creatorApprovalMiddleware.
 const router = Router();
 
 router.get("/dashboard", protect, authorize("fan", "creator"), requireApprovedCreator, getCreatorDashboard);
+router.get("/grow", protect, authorize("fan", "creator"), requireApprovedCreator, getGrowDashboard);
+router.get("/referrals/:code", getReferralInvitation);
 router.get("/", listCreators);
 router.get("/:username", getCreatorByUsername);
 

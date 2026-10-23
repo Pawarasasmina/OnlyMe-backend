@@ -6,6 +6,7 @@ import Content from "../models/Content.js";
 import Subscription from "../models/Subscription.js";
 import ApiError from "../utils/ApiError.js";
 import { buildCreatorDashboard } from "../services/creatorDashboardService.js";
+import { buildGrowDashboard, resolveReferral } from "../services/referralService.js";
 
 async function buildCreatorView(user) {
   const [profile, posts, members] = await Promise.all([
@@ -56,4 +57,12 @@ export const getCreatorByUsername = asyncHandler(async (req, res) => {
 export const getCreatorDashboard = asyncHandler(async (req, res) => {
   const dashboard = await buildCreatorDashboard(req.user._id);
   return sendResponse(res, 200, "Creator dashboard fetched", dashboard);
+});
+
+export const getGrowDashboard = asyncHandler(async (req, res) => {
+  return sendResponse(res, 200, "Grow dashboard fetched", await buildGrowDashboard(req.user));
+});
+
+export const getReferralInvitation = asyncHandler(async (req, res) => {
+  return sendResponse(res, 200, "Invitation fetched", await resolveReferral(req.params.code));
 });
