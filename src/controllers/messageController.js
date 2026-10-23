@@ -557,11 +557,16 @@ export const sendChatGift = asyncHandler(async (req, res) => {
     if (!await giftAllowedForRecipient(other._id, gift._id, session)) throw new ApiError(409, "This person is not accepting that gift");
     const recordId = new mongoose.Types.ObjectId();
     const moved = await transferStars({ fromUser: req.user._id, toUser: other._id, amount: gift.stars, debitType: "CHAT_GIFT_DEBIT", creditType: "CHAT_GIFT_EARNING", referenceType: "CHAT_GIFT", referenceId: recordId, creator: other._id, command, idempotencyKey: key, metadata: { giftId: String(gift._id), giftName: gift.name, giftImageUrl: gift.image.url, giftSource: sourceType } }, session);
-    const [record] = await ChatGift.create([{ _id: recordId, message: recordId, sender: req.user._id, recipient: other._id, gift: gift._id, giftName: gift.name, giftImageUrl: gift.image.url, sourceType, messageText, visibility, starsAmount: gift.stars, debitLedgerEntry: moved.debit.entry._id, creditLedgerEntry: moved.credit.entry._id, idempotencyKey: key }], { session });
-    await Notification.create([{ user: other._id, type: "chat_gift", title: `${req.user.name} sent you ${gift.name} (✦${gift.stars})`, dedupeKey: `chat-gift:${record._id}` }], { session });
+    const thankedAt = new Date();
+    const [record] = await ChatGift.create([{ _id: recordId, message: recordId, sender: req.user._id, recipient: other._id, gift: gift._id, giftName: gift.name, giftImageUrl: gift.image.url, sourceType, messageText, visibility, starsAmount: gift.stars, debitLedgerEntry: moved.debit.entry._id, creditLedgerEntry: moved.credit.entry._id, idempotencyKey: key, thankedAt }], { session });
+    await Notification.create([
+      { user: other._id, type: "chat_gift", title: `${req.user.name} sent you ${gift.name} (✦${gift.stars})`, dedupeKey: `chat-gift:${record._id}` },
+      { user: req.user._id, type: "gift_thanks", title: `${other.name || other.username} thanked you for ${gift.name}`, message: "Thank you — I saw it right away.", dedupeKey: `gift-thanks:chat:${record._id}` },
+    ], { session, ordered: true });
     return { resultReference: record._id, gift: { id: gift._id, name: gift.name, stars: gift.stars, imageUrl: gift.image.url }, sourceType, message: messageText, visibility, wallet: safeWallet(moved.debit.wallet, command.financialMode) };
   });
   req.app.get("io")?.to(`user:${other._id}`).emit("activity:updated");
+  req.app.get("io")?.to(`user:${req.user._id}`).emit("activity:updated");
   return sendResponse(res, 201, "Gift sent", result);
 });
 
