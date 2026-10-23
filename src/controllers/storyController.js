@@ -696,32 +696,42 @@ export const reactStory = asyncHandler(async (req, res) => {
   const story = await followedStory(req.params.id, req.user._id);
   if (story.allowReactions === false) throw new ApiError(403, "Reactions are disabled for this story");
   const reaction = String(req.body.reaction || "").trim();
-  if (!reaction || reaction.length > 12) throw new ApiError(400, "A valid reaction is required");
+  if (reaction.length > 12) throw new ApiError(400, "A valid reaction is required");
+  if (!reaction) {
+    const engagement = await StoryEngagement.findOneAndUpdate(
+      { story: story._id, fan: req.user._id },
+      { $set: { viewedAt: new Date(), actorAccountType: req.user.accountType }, $unset: { reaction: 1 } },
+      { upsert: true, new: true },
+    );
+    return sendResponse(res, 200, "Reaction removed", { reaction: null, reactedAt: engagement.updatedAt });
+  }
   const engagement = await StoryEngagement.findOneAndUpdate(
     { story: story._id, fan: req.user._id },
     { $set: { reaction, viewedAt: new Date(), actorAccountType: req.user.accountType } },
     { upsert: true, new: true },
   );
-  const conversation = await Conversation.findOneAndUpdate({ fan: req.user._id, creator: story.creator }, { $set: { status: "ACTIVE", declinedAt: null }, $setOnInsert: { fan: req.user._id, creator: story.creator, acceptedAt: new Date(), acceptedByCreator: false } }, { new: true, upsert: true });
-  const storyReply = { story: story._id, imageUrl: story.image.url, caption: story.caption, expiresAt: story.expiresAt, questionPrompt: "" };
-  const created = await Message.create({ sender: req.user._id, recipient: story.creator, body: `Reacted ${reaction} to your story`, mediaType: "text", ppm: false, storyReply });
-  await Notification.findOneAndUpdate(
-    { dedupeKey: `story-reaction:${story._id}:${req.user._id}` },
-    {
-      $set: {
-        user: story.creator,
-        type: "story_reaction",
-        title: `${req.user.name || "Someone"} reacted ${reaction} to your story`,
-        message: story.caption || "",
-        readAt: null,
-        acknowledgedAt: null,
+  if (String(story.creator) !== String(req.user._id)) {
+    const conversation = await Conversation.findOneAndUpdate({ fan: req.user._id, creator: story.creator }, { $set: { status: "ACTIVE", declinedAt: null }, $setOnInsert: { fan: req.user._id, creator: story.creator, acceptedAt: new Date(), acceptedByCreator: false } }, { new: true, upsert: true });
+    const storyReply = { story: story._id, imageUrl: story.image.url, caption: story.caption, expiresAt: story.expiresAt, questionPrompt: "" };
+    const created = await Message.create({ sender: req.user._id, recipient: story.creator, body: `Reacted ${reaction} to your story`, mediaType: "text", ppm: false, storyReply });
+    await Notification.findOneAndUpdate(
+      { dedupeKey: `story-reaction:${story._id}:${req.user._id}` },
+      {
+        $set: {
+          user: story.creator,
+          type: "story_reaction",
+          title: `${req.user.name || "Someone"} reacted ${reaction} to your story`,
+          message: story.caption || "",
+          readAt: null,
+          acknowledgedAt: null,
+        },
+        $setOnInsert: { dedupeKey: `story-reaction:${story._id}:${req.user._id}` },
       },
-      $setOnInsert: { dedupeKey: `story-reaction:${story._id}:${req.user._id}` },
-    },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
-  );
-  req.app.get("io")?.to(`user:${story.creator}`).emit("message:new", { message: { id: String(created._id), senderId: String(created.sender), recipientId: String(created.recipient), body: created.body, mediaType: "text", readAt: null, createdAt: created.createdAt, storyReply: { storyId: String(story._id), imageUrl: story.image.url, caption: story.caption, expiresAt: story.expiresAt, questionPrompt: "" } }, participant: { id: String(req.user._id), displayName: req.user.name, username: req.user.username, avatarUrl: req.user.avatar || null, role: req.user.role, isVerified: Boolean(req.user.isVerified), lastSeenAt: req.user.lastSeenAt || null }, conversationStatus: conversation.status });
-  req.app.get("io")?.to(`user:${story.creator}`).emit("activity:updated", { type: "story_reaction", storyId: String(story._id) });
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
+    req.app.get("io")?.to(`user:${story.creator}`).emit("message:new", { message: { id: String(created._id), senderId: String(created.sender), recipientId: String(created.recipient), body: created.body, mediaType: "text", readAt: null, createdAt: created.createdAt, storyReply: { storyId: String(story._id), imageUrl: story.image.url, caption: story.caption, expiresAt: story.expiresAt, questionPrompt: "" } }, participant: { id: String(req.user._id), displayName: req.user.name, username: req.user.username, avatarUrl: req.user.avatar || null, role: req.user.role, isVerified: Boolean(req.user.isVerified), lastSeenAt: req.user.lastSeenAt || null }, conversationStatus: conversation.status });
+    req.app.get("io")?.to(`user:${story.creator}`).emit("activity:updated", { type: "story_reaction", storyId: String(story._id) });
+  }
   return sendResponse(res, 200, "Reaction sent", { reaction: engagement.reaction, reactedAt: engagement.updatedAt });
 });
 

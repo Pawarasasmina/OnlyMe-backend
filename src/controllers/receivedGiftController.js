@@ -134,12 +134,12 @@ export const getPublicReceivedGifts = asyncHandler(async (req, res) => {
   const limit = Math.min(12, Math.max(1, Number(req.query.limit) || 12));
   const activeGiftIds = await Gift.find({ isActive: true }).distinct("_id");
   const [chatGifts, dreamGifts] = await Promise.all([
-    ChatGift.find({ recipient: owner._id, gift: { $in: activeGiftIds }, visibility: "EVERYONE", hiddenFromProfile: { $ne: true } }).sort({ featuredOnProfile: -1, createdAt: -1 }).limit(limit).lean(),
-    DreamGift.find({ creator: owner._id, gift: { $in: activeGiftIds }, privateSupport: false, hiddenFromProfile: { $ne: true } }).sort({ featuredOnProfile: -1, createdAt: -1 }).limit(limit).lean(),
+    ChatGift.find({ recipient: owner._id, gift: { $in: activeGiftIds }, visibility: "EVERYONE", hiddenFromProfile: { $ne: true } }).sort({ featuredOnProfile: -1, createdAt: -1 }).limit(limit).populate("sender", "name username avatar").lean(),
+    DreamGift.find({ creator: owner._id, gift: { $in: activeGiftIds }, privateSupport: false, hiddenFromProfile: { $ne: true } }).sort({ featuredOnProfile: -1, createdAt: -1 }).limit(limit).populate("supporter", "name username avatar").lean(),
   ]);
   const gifts = [
-    ...chatGifts.map((gift) => serializeGift(gift, "chat")),
-    ...dreamGifts.map((gift) => serializeGift(gift, "dream")),
+    ...chatGifts.map((gift) => serializeGift(gift, "chat", gift.sender)),
+    ...dreamGifts.map((gift) => serializeGift(gift, "dream", gift.supporter)),
   ].sort((left, right) => Number(right.featuredOnProfile) - Number(left.featuredOnProfile) || new Date(right.createdAt) - new Date(left.createdAt)).slice(0, limit);
   return sendResponse(res, 200, "Public gifts fetched", { gifts, total: chatGifts.length + dreamGifts.length });
 });
