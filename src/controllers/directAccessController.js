@@ -203,22 +203,31 @@ export const listDirectAccessWindows = asyncHandler(async (req, res) => {
     .populate("fan creator", "name username avatar")
     .lean();
   const windowIds = windows.map((item) => item._id);
-  const fanMessages = await Message.find({
+  const windowMessages = await Message.find({
     directAccessWindow: { $in: windowIds },
-    messageKind: "USER_MESSAGE",
-  }).sort({ createdAt: 1 }).select("directAccessWindow sender body").lean();
+    deletedAt: null,
+  }).sort({ createdAt: -1 }).select("directAccessWindow sender body mediaType createdAt").lean();
   const firstFanMessageByWindow = new Map();
+  const latestMessageByWindow = new Map();
   windows.forEach((window) => {
-    const first = fanMessages.find((message) => (
+    const messages = windowMessages.filter((message) => String(message.directAccessWindow) === String(window._id));
+    const first = [...messages].reverse().find((message) => (
       String(message.directAccessWindow) === String(window._id)
       && String(message.sender) === String(window.fan?._id || window.fan)
     ));
     if (first) firstFanMessageByWindow.set(String(window._id), first.body);
+    if (messages[0]) latestMessageByWindow.set(String(window._id), {
+      body: messages[0].body,
+      mediaType: messages[0].mediaType || "text",
+      senderId: String(messages[0].sender),
+      createdAt: messages[0].createdAt,
+    });
   });
   return sendResponse(res, 200, "Direct Access windows fetched", {
     windows: windows.map((window) => ({
       ...serializeDAWindow(window),
       questionQuote: firstFanMessageByWindow.get(String(window._id)) || "",
+      latestMessage: latestMessageByWindow.get(String(window._id)) || null,
     })),
   });
 });
