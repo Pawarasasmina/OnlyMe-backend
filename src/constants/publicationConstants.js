@@ -21,7 +21,7 @@ export const MAX_MODERATORS_PER_EXPERIENCE = 2;
 export const PLANET_MARKER_COLORS = ["ICE_BLUE", "AMBER", "CORAL", "MINT", "LILAC", "WHITE"];
 export const PUBLICATION_LIMITS = { title: 120, summary: 300, description: 2000, category: 40, tags: 15, tag: 40, chapterTitle: 120, chapterText: 2000, blockLabel: 120, seriesName: 24 };
 export const KIND_RULES = {
-  SEEN: { minChapters: 1, maxChapters: 5, pricingMode: "FREE", previewMin: 1, previewMax: 5, placement: "SEEN" },
+  SEEN: { minChapters: 1, maxChapters: 10, pricingMode: ["FREE", "ONE_TIME"], previewMin: 1, previewMax: 10, placement: "SEEN" },
   WORLD: { minChapters: 1, maxChapters: 7, pricingMode: "FREE", previewMin: 1, previewMax: 7, placement: "PROFILE_ORBIT" },
   // World content is assembled from preview stories and included Experiences.
   // Chapters remain an internal storage detail for legacy records/story media.

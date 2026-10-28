@@ -175,7 +175,7 @@ async function serializeMemberWorld(publication, user) {
     PremiumMembership.countDocuments(activeFilter),
     PremiumMembership.countDocuments({ premiumPublication: publicationId }),
     memberWorldEngagement(publicationId, user._id),
-    publication.includedExperienceIds?.length ? Publication.find({ _id: { $in: publication.includedExperienceIds }, creator: publication.creator, kind: "EXPERIENCE", status: { $ne: "REMOVED" } }).lean() : [],
+    publication.includedExperienceIds?.length ? Publication.find({ _id: { $in: publication.includedExperienceIds }, creator: publication.creator, kind: "SEEN", "pricing.mode": "ONE_TIME", status: { $ne: "REMOVED" } }).lean() : [],
   ]);
   const serialized = serializePublication(publication, user, { audienceAllowed: true, entitlement: "ACTIVE_PREMIUM_MEMBER" });
   if (!serialized) throw new ApiError(404, "World not found");
@@ -203,7 +203,7 @@ async function serializeWorldManagement(publication, user) {
     SeenEngagement.aggregate([{ $match: { publication: publicationId, createdAt: { $gte: sincePreviousWeek } } }, { $group: { _id: { type: "$type", day: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } } }, count: { $sum: 1 } } }]),
     StarsLedgerEntry.aggregate([{ $match: { accountUser: publication.creator, publication: publicationId, direction: "CREDIT", entryType: { $in: ["PREMIUM_CREATOR_EARNING", "WORLD_CREATOR_EARNING"] }, createdAt: { $gte: monthAgo() } } }, { $group: { _id: "$entryType", stars: { $sum: "$starsAmount" } } }]),
     AnalyticsEvent.aggregate([{ $match: { entityId: String(publicationId), entityType: { $in: ["world", "publication", "seen"] }, createdAt: { $gte: sincePreviousWeek } } }, { $group: { _id: { eventType: "$eventType", day: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } } }, count: { $sum: 1 }, users: { $addToSet: "$userId" } } }]),
-    publication.includedExperienceIds?.length ? Publication.find({ _id: { $in: publication.includedExperienceIds }, creator: publication.creator, kind: "EXPERIENCE", status: { $ne: "REMOVED" } }).lean() : [],
+    publication.includedExperienceIds?.length ? Publication.find({ _id: { $in: publication.includedExperienceIds }, creator: publication.creator, kind: "SEEN", "pricing.mode": "ONE_TIME", status: { $ne: "REMOVED" } }).lean() : [],
     publication.worldModerators?.length ? User.find({ _id: { $in: publication.worldModerators.map((item) => item.user) } }).select("name username avatar isVerified").lean() : [],
     WorldWaitlist.countDocuments({ publication: publicationId, status: "WAITING" }),
     WorldEntitlement.countDocuments({ publication: publicationId, status: "ACTIVE" }),
@@ -468,9 +468,9 @@ export const removeWorldStoryPreview = asyncHandler(async (req, res) => {
 export const includeWorldExperience = asyncHandler(async (req, res) => {
   const publication = await ownerWorld(req.user._id, req.params.id);
   ensurePublicationId(req.params.experienceId);
-  const experience = await Publication.findOne({ _id: req.params.experienceId, creator: req.user._id, kind: "EXPERIENCE", status: { $ne: "REMOVED" } }).select("+submittedSnapshot");
-  if (!experience) throw new ApiError(404, "Experience not found");
-  if (publication.includedExperienceIds.map(String).includes(String(experience._id))) throw new ApiError(409, "Experience is already included");
+  const experience = await Publication.findOne({ _id: req.params.experienceId, creator: req.user._id, kind: "SEEN", "pricing.mode": "ONE_TIME", status: { $ne: "REMOVED" } }).select("+submittedSnapshot");
+  if (!experience) throw new ApiError(404, "Paid Seen not found");
+  if (publication.includedExperienceIds.map(String).includes(String(experience._id))) throw new ApiError(409, "Paid Seen is already included");
   publication.includedExperienceIds.push(experience._id);
   publication.statusVersion += 1;
   updateSnapshotMetadata(publication, { includedExperienceIds: publication.includedExperienceIds });
@@ -479,7 +479,7 @@ export const includeWorldExperience = asyncHandler(async (req, res) => {
   experience.statusVersion += 1;
   updateSnapshotMetadata(experience, { includedInWorld: true });
   await experience.save();
-  return sendResponse(res, 200, "Experience included", await serializeWorldManagement(publication, req.user));
+  return sendResponse(res, 200, "Paid Seen included", await serializeWorldManagement(publication, req.user));
 });
 export const removeWorldExperience = asyncHandler(async (req, res) => {
   const publication = await ownerWorld(req.user._id, req.params.id);
@@ -488,14 +488,14 @@ export const removeWorldExperience = asyncHandler(async (req, res) => {
   publication.statusVersion += 1;
   updateSnapshotMetadata(publication, { includedExperienceIds: publication.includedExperienceIds });
   await publication.save();
-  const experience = await Publication.findOne({ _id: req.params.experienceId, creator: req.user._id, kind: "EXPERIENCE" }).select("+submittedSnapshot");
+  const experience = await Publication.findOne({ _id: req.params.experienceId, creator: req.user._id, kind: "SEEN", "pricing.mode": "ONE_TIME" }).select("+submittedSnapshot");
   if (experience) {
     experience.includedInWorld = false;
     experience.statusVersion += 1;
     updateSnapshotMetadata(experience, { includedInWorld: false });
     await experience.save();
   }
-  return sendResponse(res, 200, "Experience removed", await serializeWorldManagement(publication, req.user));
+  return sendResponse(res, 200, "Paid Seen removed", await serializeWorldManagement(publication, req.user));
 });
 export const openWorldWave = asyncHandler(async (req, res) => {
   const publication = await ownerWorld(req.user._id, req.params.id);
@@ -735,6 +735,7 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
   } else if (req.query.tab === "friends") {
     filter.creator = { $in: [] };
   }
+  if (!req.query.creator) filter["pricing.mode"] = "FREE";
   Object.assign(filter, await seenVisibilityFilter(req.user || null, candidateCreatorIds));
   if (req.user?._id) {
     const [blocks, preferences] = await Promise.all([
@@ -832,7 +833,21 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
     };
   }).filter(Boolean);
   const personalized = recommendationConfig ? await personalizeCandidates({ items: itemsWithEngagement, req, surface: "SEEN" }) : { items: itemsWithEngagement, recommendation: null };
-  return sendResponse(res, 200, "Published Seens fetched", { items: personalized.items.slice(0, paging.limit), recommendation: personalized.recommendation, pagination: { ...paging, hasMore: !recommendationConfig && items.length === paging.limit } });
+  let renderedItems = personalized.items.slice(0, paging.limit);
+  if (!req.query.creator && renderedItems.length) {
+    const paidRows = await Publication.find({ creator: { $in: creatorIds }, kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, "pricing.mode": "ONE_TIME", publishedSnapshot: { $exists: true } }).select("creator title pricing coverMedia publishedAt").sort({ publishedAt: -1 }).lean();
+    const paidByCreator = new Map();
+    paidRows.forEach((item) => { const key = String(item.creator); if (!paidByCreator.has(key)) paidByCreator.set(key, item); });
+    const promotedCreators = new Set();
+    renderedItems = renderedItems.map((item) => {
+      const creatorId = String(item.creator?.id || item.creator?._id || "");
+      const paid = paidByCreator.get(creatorId);
+      if (!paid || promotedCreators.has(creatorId)) return item;
+      promotedCreators.add(creatorId);
+      return { ...item, moreFrom: { id: String(paid._id), title: paid.title, priceStars: paid.pricing?.starsAmount || 0 } };
+    });
+  }
+  return sendResponse(res, 200, "Published Seens fetched", { items: renderedItems, recommendation: personalized.recommendation, pagination: { ...paging, hasMore: !recommendationConfig && items.length === paging.limit } });
 });
 export const getPublishedPublication = asyncHandler(async (req, res) => {
   const publication = await Publication.findById(req.params.id).select("+shareToken").populate("creator", "name username avatar isVerified").populate("series", "name").lean();
@@ -841,6 +856,12 @@ export const getPublishedPublication = asyncHandler(async (req, res) => {
   const audienceAllowed = publication ? await canAccessPublicationAudience(publication, req.user || null, { shareToken: req.query.access || req.query.token }) : false;
   const serialized = publication && serializePublication(publication, req.user || null, { audienceAllowed, entitlement });
   if (!serialized) throw new ApiError(404, "Publication not found");
+  if (publication.kind === "SEEN" && publication.pricing?.mode === "ONE_TIME") {
+    serialized.ownerCount = await WorldEntitlement.countDocuments({ publication: publication._id, status: "ACTIVE" });
+  }
+  if (publication.kind === "SEEN" && publication.pricing?.mode === "ONE_TIME") {
+    serialized.ownerCount = await WorldEntitlement.countDocuments({ publication: publication._id, status: "ACTIVE" });
+  }
 
   if (publication.kind === "PREMIUM_WORLD") {
     const activeFilter = { premiumPublication: publication._id, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } };
