@@ -5,6 +5,7 @@ import Publication from "../models/Publication.js";
 import Story from "../models/Story.js";
 import User from "../models/User.js";
 import MessageReport from "../models/MessageReport.js";
+import Repost from "../models/Repost.js";
 import { deleteProfileMediaFile, uploadProfileMediaFile } from "./profileMediaStorageService.js";
 import { publicationDeliveryUrl } from "./publicationMediaStorageService.js";
 import ApiError from "../utils/ApiError.js";
@@ -68,7 +69,8 @@ export async function listProfileMediaForUser(userId, { limit = 60, viewerId = n
     .sort({ sortOrder: -1, createdAt: -1, _id: -1 })
     .limit(Math.min(100, Math.max(1, Number(limit) || 60)))
     .lean();
-  return items.map((item) => serializeProfileMedia(item, { viewerId }));
+  const repostedIds = viewerId ? new Set((await Repost.find({ user: viewerId, kind: "photo", targetId: { $in: items.map((item) => item._id) } }).select("targetId").lean()).map((row) => String(row.targetId))) : new Set();
+  return items.map((item) => ({ ...serializeProfileMedia(item, { viewerId }), viewerReposted: repostedIds.has(String(item._id)) }));
 }
 
 export async function listOwnProfileMedia(userId, { limit = 60 } = {}) {

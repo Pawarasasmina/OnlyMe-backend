@@ -757,9 +757,10 @@ function filterCreators(creators, term) {
 export const getDiscover = asyncHandler(async (req, res) => {
   const viewerModel = roleProfileModel(req.user.role, req.user.creatorApprovalStatus);
   const slidesOnly = req.query.view === "slides";
-  const [viewerProfile, initialBlockedIds] = await Promise.all([
+  const [viewerProfile, initialBlockedIds, followingCount] = await Promise.all([
     ["fan", "creator"].includes(req.user.role) ? viewerModel.findOne({ user: req.user._id }).lean() : null,
     blockedIdsFor(req.user._id),
+    ProfileRelationship.countDocuments({ actor: req.user._id, type: "FOLLOW" }),
   ]);
   const settings = discoverSettings(viewerProfile);
   const blockedIds = initialBlockedIds;
@@ -768,6 +769,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const search = cleanText(req.query.search, 80);
   const requestedFilter = cleanText(req.query.filter, 40).toLowerCase();
   const filter = DISCOVER_FILTERS.some((item) => item.id === requestedFilter) ? requestedFilter : "for_you";
+  const requestedTopic = cleanText(req.query.topic, 40).toLowerCase();
   const limit = parseLimit(req.query.limit);
   const cursor = parseCursor(req.query.cursor);
 
@@ -902,12 +904,53 @@ export const getDiscover = asyncHandler(async (req, res) => {
     .map(({ profile, slide }) => ({ slide, score: slideScore(profile, slideMeta) }))
     .sort((left, right) => right.score - left.score || left.slide.creator.name.localeCompare(right.slide.creator.name))
     .map((item) => item.slide);
-  const filteredSlides = filterSlides(allSlides, filter, settings);
+  const topicCounts = new Map();
+  const topicLabels = new Map();
+  allSlides.forEach((slide) => (slide.match?.tags || []).forEach((tag) => {
+    const label = cleanText(tag, 40);
+    const key = label.toLowerCase();
+    if (!key) return;
+    topicCounts.set(key, (topicCounts.get(key) || 0) + 1);
+    if (!topicLabels.has(key)) topicLabels.set(key, label);
+  }));
+  const viewerInterestKeys = [...new Set([...(viewerProfile?.interests || []), ...(viewerProfile?.categories || []), viewerProfile?.category].map((item) => cleanText(item, 40).toLowerCase()).filter(Boolean))];
+  const orderedTopicKeys = [
+    ...viewerInterestKeys.filter((key) => topicCounts.has(key)),
+    ...[...topicCounts.keys()].filter((key) => !viewerInterestKeys.includes(key)).sort((left, right) => topicCounts.get(right) - topicCounts.get(left) || left.localeCompare(right)),
+  ];
+  const topicChips = orderedTopicKeys.map((key) => ({ id: key, label: topicLabels.get(key), peopleCount: topicCounts.get(key), isInterest: viewerInterestKeys.includes(key) }));
+  const baseSlides = filterSlides(allSlides, filter, settings);
+  const filteredSlides = requestedTopic && topicCounts.has(requestedTopic)
+    ? baseSlides.filter((slide) => (slide.match?.tags || []).some((tag) => cleanText(tag, 40).toLowerCase() === requestedTopic))
+    : baseSlides;
   const personalizedSlides = filter === "for_you"
     ? await personalizeCandidates({ exposureLimit: limit, items: filteredSlides, req, surface: "DISCOVER" })
     : { items: filteredSlides, recommendation: null };
   const pageSlides = personalizedSlides.items.slice(filter === "for_you" ? 0 : cursor, filter === "for_you" ? limit : cursor + limit).map(publicSlide);
   const nextCursor = cursor + limit < filteredSlides.length ? String(cursor + limit) : null;
+  const cityGroups = new Map();
+  visibleProfiles.forEach((profile) => {
+    const city = cleanText(profile.city, 80);
+    if (!city) return;
+    const key = city.toLowerCase();
+    const group = cityGroups.get(key) || { city, profiles: [] };
+    group.profiles.push(profile);
+    cityGroups.set(key, group);
+  });
+  const preferredLocalCity = cleanText(viewerCity, 80);
+  const fallbackCityGroup = [...cityGroups.values()].sort((left, right) => right.profiles.length - left.profiles.length || left.city.localeCompare(right.city))[0] || null;
+  const selectedCityGroup = cityGroups.get(preferredLocalCity.toLowerCase()) || fallbackCityGroup;
+  const localCity = selectedCityGroup?.city || "";
+  const localProfiles = selectedCityGroup?.profiles || [];
+  const localProfileIds = new Set(localProfiles.map((profile) => String(profile.user?._id || profile.user)));
+  const localStories = stories.filter((story) => localProfileIds.has(String(story.creator?._id || story.creator)));
+  const localTonight = followingCount < 10 && localProfiles.length ? {
+    city: localCity,
+    title: `${localCity} tonight`,
+    subtitle: `${localStories.length || localProfiles.length} ${localStories.length === 1 ? "story" : "stories"} · last hours`,
+    route: `/search?location=${encodeURIComponent(localCity)}`,
+    avatars: localProfiles.slice(0, 4).map((profile) => ({ id: String(profile.user._id), name: profile.user.name || profile.user.username || localCity, avatar: profile.user.avatar || "" })),
+  } : null;
 
   if (slidesOnly) {
     return sendResponse(res, 200, "Discover fetched", {
@@ -922,6 +965,10 @@ export const getDiscover = asyncHandler(async (req, res) => {
         filter,
       },
       filters: DISCOVER_FILTERS,
+      topicChips,
+      activeTopic: requestedTopic && topicCounts.has(requestedTopic) ? requestedTopic : "",
+      followingCount,
+      localTonight,
       following: connections.following,
       sharedWalks,
       settings,

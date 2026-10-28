@@ -17,6 +17,9 @@ import PremiumMembership from "../models/PremiumMembership.js";
 import WorldEntitlement from "../models/WorldEntitlement.js";
 import Story from "../models/Story.js";
 import StoryEngagement from "../models/StoryEngagement.js";
+import Repost from "../models/Repost.js";
+import ProfileMedia from "../models/ProfileMedia.js";
+import WallShareEngagement from "../models/WallShareEngagement.js";
 import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
 import { activeIncludedExperienceIds } from "../services/publicationEntitlementService.js";
 import { attachEntityMetadata } from "../services/contentEntityService.js";
@@ -225,7 +228,40 @@ async function loadProfile(owner, viewer) {
   const currentWallPosts = await Promise.all(ownCurrentWallPosts.map(async (post) => serializeWallPost(post, await engagementForWallPost(post._id, viewer?._id))));
   const ownWallPosts = [...ownFeedPosts.map((post) => serializePost(post, viewer)), ...currentWallPosts]
     .sort((left, right) => new Date(right.feedCreatedAt || right.publishedAt || right.createdAt) - new Date(left.feedCreatedAt || left.publishedAt || left.createdAt));
-  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, membershipIncludedExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, seenByCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal), activeStoryCount, profileStories, worldMemberCounts, worldMemberPreviews });
+  const legacyRepostOps = [
+    ...sharedSeens.filter((item) => String(item.creator?._id || item.creator) !== String(owner._id)).map((item) => ({ updateOne: { filter: { user: owner._id, kind: "seen", targetId: item._id }, update: { $set: { targetModel: "Publication", originalAuthor: item.creator?._id || item.creator }, $setOnInsert: { createdAt: item.feedCreatedAt || item.createdAt } }, upsert: true } })),
+    ...sharedWallPosts.filter((item) => String(item.creator?._id || item.creator) !== String(owner._id)).map((item) => ({ updateOne: { filter: { user: owner._id, kind: "note", targetId: item._id }, update: { $set: { targetModel: "WallPost", originalAuthor: item.creator?._id || item.creator }, $setOnInsert: { createdAt: item.feedCreatedAt || item.createdAt } }, upsert: true } })),
+    ...feedSharePosts.filter((item) => String(item.author?._id || item.author) !== String(owner._id)).map((item) => { const share = (item.shares || []).find((entry) => String(entry.user?._id || entry.user) === String(owner._id)); return { updateOne: { filter: { user: owner._id, kind: "note", targetId: item._id }, update: { $set: { targetModel: "FeedPost", originalAuthor: item.author?._id || item.author }, $setOnInsert: { createdAt: share?.createdAt || item.createdAt } }, upsert: true } }; }),
+  ];
+  if (legacyRepostOps.length) await Repost.bulkWrite(legacyRepostOps, { ordered: false });
+  const repostRows = await Repost.find({ user: owner._id }).sort({ createdAt: -1 }).limit(100).populate("originalAuthor", "name username avatar isVerified").lean();
+  const idsFor = (kind) => repostRows.filter((row) => row.kind === kind).map((row) => row.targetId);
+  const feedNoteIds = repostRows.filter((row) => row.kind === "note" && row.targetModel === "FeedPost").map((row) => row.targetId);
+  const wallNoteIds = repostRows.filter((row) => row.kind === "note" && row.targetModel !== "FeedPost").map((row) => row.targetId);
+  const feedCommentIds = repostRows.filter((row) => row.kind === "cm" && row.targetModel === "FeedPost").map((row) => row.targetId);
+  const [repostSeens, repostNotes, repostFeedNotes, repostPhotos, seenComments, wallComments, shareComments, feedCommentPosts] = await Promise.all([
+    Publication.find({ _id: { $in: idsFor("seen") }, kind: "SEEN", status: "PUBLISHED", ...seenAudienceFilter }).select("title coverMedia creator").lean(),
+    WallPost.find({ _id: { $in: wallNoteIds }, status: "PUBLISHED" }).select("text media creator").lean(),
+    FeedPost.find({ _id: { $in: feedNoteIds }, status: "published", deletedAt: null }).select("text images author").lean(),
+    ProfileMedia.find({ _id: { $in: idsFor("photo") }, type: "image" }).select("url thumbnailUrl caption user").lean(),
+    SeenEngagement.find({ _id: { $in: repostRows.filter((row) => row.kind === "cm" && row.targetModel === "SeenEngagement").map((row) => row.targetId) }, type: "COMMENT" }).select("text publication user").lean(),
+    WallEngagement.find({ _id: { $in: repostRows.filter((row) => row.kind === "cm" && row.targetModel === "WallEngagement").map((row) => row.targetId) }, type: "COMMENT" }).select("text post user").lean(),
+    WallShareEngagement.find({ _id: { $in: repostRows.filter((row) => row.kind === "cm" && row.targetModel === "WallShareEngagement").map((row) => row.targetId) }, type: "COMMENT" }).select("text share user").lean(),
+    FeedPost.find({ "comments._id": { $in: feedCommentIds }, status: "published", deletedAt: null }).select("comments").lean(),
+  ]);
+  const sources = new Map([...repostSeens, ...repostNotes, ...repostFeedNotes, ...repostPhotos, ...seenComments, ...wallComments, ...shareComments].map((item) => [String(item._id), item]));
+  feedCommentPosts.forEach((post) => (post.comments || []).forEach((comment) => { if (feedCommentIds.some((id) => String(id) === String(comment._id))) sources.set(String(comment._id), { ...comment, post: post._id }); }));
+  const reposts = repostRows.flatMap((row) => {
+    const source = sources.get(String(row.targetId)); if (!source) return [];
+    const author = row.originalAuthor || {};
+    const base = { id: String(row._id), kind: row.kind, targetId: String(row.targetId), repostedAt: row.createdAt, author: { id: String(author._id || ""), name: author.name || author.username || "Author", username: author.username || "", avatar: author.avatar || "", verified: Boolean(author.isVerified) } };
+    if (row.kind === "seen") return [{ ...base, title: source.title || "Untitled Seen", imageUrl: source.coverMedia?.secureUrl || source.coverMedia?.url || "", route: `/seen/${source._id}` }];
+    if (row.kind === "note") return [{ ...base, title: source.text || "Wall note", imageUrl: source.media?.[0]?.url || source.images?.[0]?.url || "", route: `/posts/${source._id}` }];
+    if (row.kind === "photo") return [{ ...base, title: source.caption || "Photo", imageUrl: source.thumbnailUrl || source.url, route: author.username ? `/profile/${author.username}?media=${source._id}` : "" }];
+    const route = source.publication ? `/seen/${source.publication}` : source.post ? `/posts/${source.post}` : "";
+    return [{ ...base, title: source.text || "Reply", imageUrl: author.avatar || "", route }];
+  });
+  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, membershipIncludedExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, reposts, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, seenByCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal), activeStoryCount, profileStories, worldMemberCounts, worldMemberPreviews });
 }
 
 async function relationshipTarget(username) {

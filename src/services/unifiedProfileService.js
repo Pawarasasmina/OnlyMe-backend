@@ -38,7 +38,7 @@ function completion(owner, roleProfile) {
   return { completed, total: checks.length, percentage: Math.round((completed / checks.length) * 100) };
 }
 
-export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], entitledExperienceIds = new Set(), experienceOwnerCounts = new Map(), experiences = [], followerCount = 0, followingCount = 0, seenByCount = 0, media = [], membershipIncludedExperienceIds = new Set(), owner, ownWallPosts = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, profileStories = [], publishedContentCount = content.length, roleProfile, seens = [], series = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [], viewerSeeSignalSent = false, worldMemberCounts = new Map(), worldMemberPreviews = new Map() }) {
+export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], entitledExperienceIds = new Set(), experienceOwnerCounts = new Map(), experiences = [], followerCount = 0, followingCount = 0, seenByCount = 0, media = [], membershipIncludedExperienceIds = new Set(), owner, ownWallPosts = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, profileStories = [], publishedContentCount = content.length, reposts = [], roleProfile, seens = [], series = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [], viewerSeeSignalSent = false, worldMemberCounts = new Map(), worldMemberPreviews = new Map() }) {
   const capabilities = profileViewerCapabilities(owner, viewer, roleProfile);
   const creatorEnabled = owner.creatorApprovalStatus === "approved";
   const contentViewer = capabilities.isOwner ? viewer : null;
@@ -95,6 +95,7 @@ export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], en
     sharedWallPosts: sharedWallPosts
       .map((item) => item.author ? item : ({ id: `share-${item.shareId}`, originalPostId: item._id, shareId: item.shareId, text: item.text, shareCaption: item.shareCaption || "", context: item.context, location: item.location, media: item.media || [], createdAt: item.createdAt, feedCreatedAt: item.feedCreatedAt, sharedBy: { id: owner._id, name: owner.name, username: owner.username, avatar: owner.avatar || "", verified: Boolean(owner.isVerified) }, reactionCount: item.engagement?.reactionCount || 0, reactionBreakdown: item.engagement?.reactionBreakdown || {}, topReactions: item.engagement?.topReactions || [], viewerReaction: item.engagement?.viewerReaction || null, commentCount: item.engagement?.commentCount || 0, shareCount: item.engagement?.shareCount || 0, saveCount: item.engagement?.saveCount || 0, viewerShared: Boolean(item.engagement?.viewerShared), viewerSaved: Boolean(item.engagement?.viewerSaved), creator: { name: item.creator?.name, username: item.creator?.username, avatar: item.creator?.avatar || "", verified: Boolean(item.creator?.isVerified) } }))
       .sort((left, right) => new Date(right.feedCreatedAt || right.createdAt) - new Date(left.feedCreatedAt || left.createdAt)),
+    reposts,
     wallPosts: ownWallPosts,
     planets: planets.map((item) => {
       const publication = serializePublication(item, contentViewer, { entitlement: premiumMembershipPublicationId && String(item._id) === String(premiumMembershipPublicationId) ? "ACTIVE_PREMIUM_MEMBER" : null });
