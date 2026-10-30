@@ -131,10 +131,11 @@ export function assertCompletePublication(publication, chapters) {
     const paid = publication.pricing?.mode === "ONE_TIME";
     if (!paid && (publication.pricing?.mode !== "FREE" || publication.pricing?.starsAmount != null)) throw new ApiError(400, "Free Seens cannot charge Stars");
     if (paid && (!Number.isSafeInteger(publication.pricing?.starsAmount) || publication.pricing.starsAmount < 10)) throw new ApiError(400, "Paid Seen price must be at least 10 Stars");
-    const max = paid ? 10 : 5;
+    const max = 5;
     if (paid && chapters.length < 2) throw new ApiError(400, "A Paid Seen needs at least 2 chapters — one free preview and one locked chapter");
     if (chapters.length > max) throw new ApiError(400, `${paid ? "Paid" : "Free"} Seen supports at most ${max} chapters`);
-    if (paid && previews >= chapters.length) throw new ApiError(400, "Paid Seens must keep at least one chapter locked");
+    if (paid && !chapters[0]?.isPreview) throw new ApiError(400, "The first Paid Seen chapter must be the free preview");
+    if (paid && chapters.slice(1).some((chapter) => chapter.isPreview)) throw new ApiError(400, "Only the first Paid Seen chapter can be the free preview");
     if (!paid && previews !== chapters.length) throw new ApiError(400, "Every Free Seen chapter must be public");
   }
   if (publication.kind === "WORLD") { if (publication.pricing?.mode !== "FREE" || publication.pricing?.starsAmount != null) throw new ApiError(400, "Free Worlds cannot charge Stars"); if (previews !== chapters.length) throw new ApiError(400, "Every free World chapter must be open"); }

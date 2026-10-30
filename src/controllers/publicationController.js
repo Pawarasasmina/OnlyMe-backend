@@ -735,7 +735,9 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
   } else if (req.query.tab === "friends") {
     filter.creator = { $in: [] };
   }
-  if (!req.query.creator) filter["pricing.mode"] = "FREE";
+  // Feed/discovery placement must reflect the version readers actually receive,
+  // not an unpublished creator revision that may currently be in progress.
+  if (!req.query.creator) filter["publishedSnapshot.metadata.pricing.mode"] = "FREE";
   Object.assign(filter, await seenVisibilityFilter(req.user || null, candidateCreatorIds));
   if (req.user?._id) {
     const [blocks, preferences] = await Promise.all([
@@ -835,7 +837,14 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
   const personalized = recommendationConfig ? await personalizeCandidates({ items: itemsWithEngagement, req, surface: "SEEN" }) : { items: itemsWithEngagement, recommendation: null };
   let renderedItems = personalized.items.slice(0, paging.limit);
   if (!req.query.creator && renderedItems.length) {
-    const paidRows = await Publication.find({ creator: { $in: creatorIds }, kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, "pricing.mode": "ONE_TIME", publishedSnapshot: { $exists: true } }).select("creator title pricing coverMedia publishedAt").sort({ publishedAt: -1 }).lean();
+    const paidRows = await Publication.find({
+      creator: { $in: creatorIds },
+      kind: "SEEN",
+      status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] },
+      "publishedSnapshot.metadata.pricing.mode": "ONE_TIME",
+      $or: [{ "publishedSnapshot.metadata.visibility": "PUBLIC" }, { "publishedSnapshot.metadata.visibility": { $exists: false } }],
+      publishedSnapshot: { $exists: true },
+    }).select("creator publishedSnapshot.metadata.title publishedSnapshot.metadata.pricing publishedAt").sort({ publishedAt: -1 }).lean();
     const paidByCreator = new Map();
     paidRows.forEach((item) => { const key = String(item.creator); if (!paidByCreator.has(key)) paidByCreator.set(key, item); });
     const promotedCreators = new Set();
@@ -844,7 +853,7 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
       const paid = paidByCreator.get(creatorId);
       if (!paid || promotedCreators.has(creatorId)) return item;
       promotedCreators.add(creatorId);
-      return { ...item, moreFrom: { id: String(paid._id), title: paid.title, priceStars: paid.pricing?.starsAmount || 0 } };
+      return { ...item, moreFrom: { id: String(paid._id), title: paid.publishedSnapshot?.metadata?.title || "Paid Seen", priceStars: paid.publishedSnapshot?.metadata?.pricing?.starsAmount || 0 } };
     });
   }
   return sendResponse(res, 200, "Published Seens fetched", { items: renderedItems, recommendation: personalized.recommendation, pagination: { ...paging, hasMore: !recommendationConfig && items.length === paging.limit } });

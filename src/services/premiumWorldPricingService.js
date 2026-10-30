@@ -118,7 +118,7 @@ export async function serializePremiumWorldPricing(publication, { session = null
     creatorPayoutShare: PREMIUM_CREATOR_PAYOUT_SHARE,
     copy: {
       description: "Monthly subscription. Everyone already inside keeps their price forever — the new price is for new residents only.",
-      helper: "Top tier ✦1,000 — opens at 100+ residents with steady renewals. First month -50% for newcomers stays on. Change once every 30 days.",
+      helper: "Top tier ✦990 — opens at 100+ residents with steady renewals. First month -50% for newcomers stays on. Change once every 30 days.",
     },
   };
 }

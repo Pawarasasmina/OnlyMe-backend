@@ -6,8 +6,9 @@ import ExperienceAccessRequest from "../models/ExperienceAccessRequest.js";
 const ACTIVE_MEMBERSHIP_STATUSES = ["ACTIVE", "CANCEL_AT_PERIOD_END"];
 
 export function worldIncludedExperienceIds(world) {
-  const ids = world?.publishedSnapshot?.metadata?.includedExperienceIds || world?.includedExperienceIds || [];
-  return new Set(ids.map(String));
+  const publishedIds = world?.publishedSnapshot?.metadata?.includedExperienceIds || [];
+  const liveIds = world?.includedExperienceIds || [];
+  return new Set([...publishedIds, ...liveIds].map(String));
 }
 
 export async function activeIncludedExperienceIds(userId, creatorId) {

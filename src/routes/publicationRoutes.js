@@ -6,9 +6,15 @@ import { requireApprovedCreatorOrSeenOwner } from "../middleware/creatorApproval
 import { uploadContentMedia, uploadVoiceMessage } from "../middleware/uploadMiddleware.js";
 import { blockSeenCreator, commentOnSeen, getSeenEngagement, hideSeen, listSeenReactors, listWorldWalkers, markWorldWalked, muteSeenCreator, reactToSeen, reactToSeenComment, removeSeenComment, removeSeenCommentReaction, removeSeenReaction, removeSeenShare, reportSeen, shareSeen, toggleSeenSave } from "../controllers/seenEngagementController.js";
 import { getPublicationPoll, votePublicationPoll } from "../controllers/publicationPollController.js";
+import { generate as generateAiSeen, linkPublication as linkAiSeenPublication, start as startAiSeen, status as aiSeenStatus } from "../controllers/aiSeenController.js";
 
 const router = Router();
 const creator = [protect, authorize("fan", "creator"), requireApprovedCreatorOrSeenOwner];
+
+router.get("/ai-seen/status", protect, authorize("fan", "creator"), aiSeenStatus);
+router.post("/ai-seen/start", protect, authorize("fan", "creator"), startAiSeen);
+router.post("/ai-seen/:sessionId/generate", protect, authorize("fan", "creator"), generateAiSeen);
+router.post("/ai-seen/:sessionId/link", protect, authorize("fan", "creator"), linkAiSeenPublication);
 
 router.post("/:id/walked", protect, authorize("fan", "creator"), markWorldWalked);
 router.get("/:id/member-world", protect, authorize("fan", "creator"), getMemberWorld);

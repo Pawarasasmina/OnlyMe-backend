@@ -12,6 +12,7 @@ const idString = (value) => String(value?._id || value || "");
 const tokenMatches = (publication, token) => Boolean(token && publication.shareToken && String(token) === String(publication.shareToken));
 const legacyPublicVisibility = [{ visibility: "PUBLIC" }, { visibility: { $exists: false } }, { visibility: null }, { visibility: "" }];
 const clientBaseUrl = () => String(env.clientUrl || "").replace(/\/+$/u, "");
+const isOneTimePaid = (item) => item?.pricing?.mode === "ONE_TIME" || item?.publishedSnapshot?.metadata?.pricing?.mode === "ONE_TIME";
 
 export async function areMutualFriends(viewerId, creatorId) {
   if (!viewerId || !creatorId || String(viewerId) === String(creatorId)) return false;
@@ -73,7 +74,7 @@ export function publicationAccess(publication, viewer, { audienceAllowed = null,
   if (item.kind === "SEEN") {
     const allowed = audienceAllowed ?? normalizedVisibility(item.visibility || item.publishedSnapshot?.metadata?.visibility) === "PUBLIC";
     if (!allowed) return "NOT_VISIBLE";
-    const paid = (item.publishedSnapshot?.metadata?.pricing?.mode || item.pricing?.mode) === "ONE_TIME";
+    const paid = isOneTimePaid(item);
     if (!paid) return "PUBLIC_FULL";
     return ["ENTITLED_SEEN", "ACTIVE_PREMIUM_MEMBER"].includes(entitlement) ? entitlement : "PUBLIC_PREVIEW";
   }
@@ -93,6 +94,10 @@ export function serializePublication(publication, viewer, { admin = false, audie
   const visibility = normalizedVisibility(item.visibility || metadata.visibility);
   const canEditMedia = access === "OWNER" || access === "ADMIN";
   const result = { id: item._id, creator: item.creator?._id ? { id: item.creator._id, name: item.creator.name, username: item.creator.username, avatar: item.creator.avatar, verified: Boolean(item.creator.isVerified) } : { id: item.creator }, creatorId: String(item.creator?._id || item.creator || ""), kind: item.kind, title: metadata.title, summary: metadata.summary, description: metadata.description, category: metadata.category, series: seriesPayload(item, metadata), seriesId: seriesPayload(item, metadata)?.id || null, visibility, audience: visibility, tags: metadata.tags || [], taggedPeople: (metadata.taggedPeople || item.taggedPeople || []).map(String), attachedEntities: item.attachedEntities || metadata.attachedEntities || [], entityRefs: refs.map((ref) => ({ entityId: String(ref.entityId), entityType: ref.entityType })), coverMedia: safeMedia(metadata.coverMedia, canEditMedia), introMedia: safeMedia(metadata.introMedia, canEditMedia), replyToSeen: metadata.replyToSeen || item.replyToSeen || null, status: item.status, isPinned: Boolean(item.isPinned), pricing: metadata.pricing, planet: metadata.planet, includedInWorld: Boolean(metadata.includedInWorld), includedExperienceIds: (metadata.includedExperienceIds || item.includedExperienceIds || []).map(String), worldSeatCapacity: metadata.worldSeatCapacity ?? item.worldSeatCapacity ?? null, worldFoundingCapacity: metadata.worldFoundingCapacity ?? item.worldFoundingCapacity ?? null, worldWaveSize: metadata.worldWaveSize ?? item.worldWaveSize ?? null, commentsEnabled: (metadata.commentsEnabled ?? item.commentsEnabled) !== false, firstMonthOfferEnabled: Boolean(metadata.firstMonthOfferEnabled ?? item.firstMonthOfferEnabled), memberPriceLocked: (metadata.memberPriceLocked ?? item.memberPriceLocked) !== false, directAccessIncluded: (metadata.directAccessIncluded ?? item.directAccessIncluded) !== false, directAccessIncludedReplies: Number(metadata.directAccessIncludedReplies ?? item.directAccessIncludedReplies ?? 1), experiencePath: metadata.experiencePath || "", experienceLocation: metadata.experienceLocation || "", allowDownload: Boolean(metadata.allowDownload), ownerWelcomeNote: metadata.ownerWelcomeNote || "", captionsEnabled: (metadata.captionsEnabled ?? item.captionsEnabled) !== false, publishedAt: item.publishedAt, access, paymentAvailable: ["SEEN", "EXPERIENCE"].includes(item.kind) && metadata.pricing?.mode === "ONE_TIME" && access === "PUBLIC_PREVIEW" };
+  if (isOneTimePaid(item)) {
+    result.pricing = item.pricing?.mode === "ONE_TIME" ? item.pricing : metadata.pricing;
+    result.paymentAvailable = access === "PUBLIC_PREVIEW";
+  }
   result.chapters = (snapshot?.chapters || []).map((chapter, index) => {
     const firstPaidChapter = access === "PUBLIC_PREVIEW" && ["SEEN", "EXPERIENCE"].includes(item.kind) && index === 0;
     if (access === "PUBLIC_PREVIEW" && !chapter.isPreview && !firstPaidChapter) return lockedChapter(chapter, ["SEEN", "EXPERIENCE"].includes(item.kind));
@@ -101,7 +106,7 @@ export function serializePublication(publication, viewer, { admin = false, audie
   });
   result.locked = result.chapters.some((chapter) => chapter.locked);
   if ((access === "OWNER" || access === "ADMIN") && visibility === "LINK_ONLY" && item.shareToken) result.shareUrl = `${clientBaseUrl()}/seen/${item._id}?access=${encodeURIComponent(item.shareToken)}`;
-  if (access === "OWNER" || access === "ADMIN") Object.assign(result, { draftVersion: item.draftVersion, submittedVersion: item.submittedVersion, publishedVersion: item.publishedVersion, statusVersion: item.statusVersion, creatorVisibleFeedback: item.creatorVisibleFeedback, submittedAt: item.submittedAt, reviewedAt: item.reviewedAt });
+  if (access === "OWNER" || access === "ADMIN") Object.assign(result, { aiAssistance: item.aiAssistance || { sessionId: "", generated: false }, draftVersion: item.draftVersion, submittedVersion: item.submittedVersion, publishedVersion: item.publishedVersion, statusVersion: item.statusVersion, creatorVisibleFeedback: item.creatorVisibleFeedback, submittedAt: item.submittedAt, reviewedAt: item.reviewedAt });
   if (admin && access === "ADMIN") result.internalModerationNote = item.internalModerationNote || "";
   return result;
 }

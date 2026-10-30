@@ -117,11 +117,17 @@ export const getMyVerification = asyncHandler(async (req, res) => {
 
 export const saveVerificationDraft = asyncHandler(async (req, res) => {
   const verification = await getOrCreateVerification(req.user._id);
-  assertEditableStatus(verification.status);
+  const approvedNeedsSellerDetails = verification.status === "APPROVED" && (
+    !verification.ageConfirmed || !verification.dateOfBirth ||
+    !String(verification.legalFullName || "").trim() ||
+    !String(verification.country || "").trim() ||
+    !String(verification.address || "").trim()
+  );
+  if (!approvedNeedsSellerDetails) assertEditableStatus(verification.status);
   const previousStatus = verification.status;
   const draft = validateDraftPayload(req.body);
   Object.assign(verification, draft);
-  verification.status = verification.status === "NOT_STARTED" ? "DRAFT" : verification.status;
+  verification.status = approvedNeedsSellerDetails ? "CHANGES_REQUESTED" : verification.status === "NOT_STARTED" ? "DRAFT" : verification.status;
   if (draft.policyAccepted && !verification.acceptedAt) verification.acceptedAt = new Date();
   if (!draft.policyAccepted) verification.acceptedAt = null;
   await verification.save();

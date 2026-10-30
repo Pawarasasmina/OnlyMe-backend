@@ -19,6 +19,10 @@ const schema = new mongoose.Schema({
   visibility: { type: String, enum: PUBLICATION_VISIBILITIES, default: "PUBLIC", index: true },
   isPinned: { type: Boolean, default: false, index: true },
   seenDraftSlot: { type: Number, default: null, min: 1, max: 3 },
+  aiAssistance: {
+    sessionId: { type: String, default: "" },
+    generated: { type: Boolean, default: false },
+  },
   shareToken: { type: String, default: "", select: false },
   planet: { emoji: { type: String, default: "" }, faceEmoji: { type: String, default: "" }, slot: { type: String, enum: ["WORLD_1", "WORLD_2", "PREMIUM", null], default: null }, accent: { type: String, default: "" } },
   includedInWorld: { type: Boolean, default: false },

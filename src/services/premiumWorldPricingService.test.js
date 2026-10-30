@@ -6,8 +6,8 @@ import { PREMIUM_CREATOR_PAYOUT_SHARE, PREMIUM_PRICE_CHANGE_COOLDOWN_DAYS, PREMI
 import { creatorPayoutForStars, nextPriceChangeAt } from "./premiumWorldPricingService.js";
 
 test("Premium World pricing constants match supported product tiers", () => {
-  assert.deepEqual(PREMIUM_PRICE_PRESETS, [90, 190, 290, 390, 500, 1000]);
-  assert.equal(PREMIUM_PRICE_TOP_TIER, 1000);
+  assert.deepEqual(PREMIUM_PRICE_PRESETS, [190, 490, 990]);
+  assert.equal(PREMIUM_PRICE_TOP_TIER, 990);
   assert.equal(PREMIUM_PRICE_CHANGE_COOLDOWN_DAYS, 30);
 });
 

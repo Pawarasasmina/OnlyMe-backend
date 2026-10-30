@@ -35,3 +35,39 @@ export async function sendWelcomeEmail(user) {
   const template = await EmailTemplate.findOne({ key: "WELCOME" }).lean().catch(() => null);
   return sendEmail({ to: user.email, ...welcomeEmail({ name: user.name, template }), idempotencyKey: `welcome-${String(user._id)}` });
 }
+
+export function worldCancellationEmail({ currentPeriodEnd, memberName, worldTitle }) {
+  const name = String(memberName || "there").trim().split(/\s+/)[0] || "there";
+  const title = String(worldTitle || "your World membership").trim();
+  const end = new Date(currentPeriodEnd).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+  const membershipsUrl = `${env.clientUrl.replace(/\/$/, "")}/memberships`;
+  const subject = `Your ${title} membership ends ${end}`;
+  const text = `Hi ${name},\n\nYour cancellation is confirmed. You can keep using ${title} until ${end}. You will not be charged again. Your member number is held for 30 days after access ends.\n\nRestart membership: ${membershipsUrl}`;
+  const html = `<!doctype html><html><body style="margin:0;background:#0a0c0f;color:#f4f7fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"><div style="max-width:560px;margin:0 auto;padding:40px 22px"><div style="color:#9ccbff;font-size:24px;font-weight:800">@seen</div><h1 style="margin:34px 0 12px;font-size:28px">Cancellation confirmed</h1><p style="color:#b8c0cc;line-height:1.7">Hi ${escapeHtml(name)}, your access to <strong style="color:#fff">${escapeHtml(title)}</strong> stays open until ${escapeHtml(end)}. You will not be charged again.</p><p style="color:#b8c0cc;line-height:1.7">Your member number is held for 30 days after access ends. You can restart from your subscriptions whenever you want.</p><a href="${membershipsUrl}" style="display:inline-block;margin-top:20px;border-radius:14px;background:#9ccbff;color:#0a0c0f;padding:13px 18px;font-weight:800;text-decoration:none">Manage memberships</a></div></body></html>`;
+  return { subject, text, html };
+}
+
+export async function sendWorldCancellationEmail({ currentPeriodEnd, idempotencyKey, user, worldTitle }) {
+  if (!user?.email) return { delivered: false, skipped: true, reason: "EMAIL_MISSING" };
+  return sendEmail({
+    to: user.email,
+    ...worldCancellationEmail({ currentPeriodEnd, memberName: user.name, worldTitle }),
+    idempotencyKey: `world-cancel-${idempotencyKey}`,
+  });
+}
+
+export function worldRenewalReminderEmail({ currentPeriodEnd, memberName, stars, worldTitle }) {
+  const name = String(memberName || "there").trim().split(/\s+/)[0] || "there";
+  const title = String(worldTitle || "your World").trim();
+  const date = new Date(currentPeriodEnd).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+  const membershipsUrl = `${env.clientUrl.replace(/\/$/, "")}/memberships`;
+  const subject = `${title} renews in 3 days`;
+  const text = `Hi ${name},\n\nA reminder: ${title} renews for ${Number(stars).toLocaleString("en-GB")} coins on ${date}. Check your coin balance, top up, manage, or cancel anytime: ${membershipsUrl}`;
+  const html = `<!doctype html><html><body style="margin:0;background:#0a0c0f;color:#f4f7fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"><div style="max-width:560px;margin:0 auto;padding:40px 22px"><div style="color:#9ccbff;font-size:24px;font-weight:800">@seen</div><h1 style="margin:34px 0 12px;font-size:28px">Renewal in 3 days</h1><p style="color:#b8c0cc;line-height:1.7">Hi ${escapeHtml(name)}, <strong style="color:#fff">${escapeHtml(title)}</strong> renews for ${Number(stars).toLocaleString("en-GB")} coins on ${escapeHtml(date)}.</p><p style="color:#b8c0cc;line-height:1.7">Check your balance now. You can top up, manage, or cancel anytime.</p><a href="${membershipsUrl}" style="display:inline-block;margin-top:20px;border-radius:14px;background:#9ccbff;color:#0a0c0f;padding:13px 18px;font-weight:800;text-decoration:none">Manage membership</a></div></body></html>`;
+  return { subject, text, html };
+}
+
+export async function sendWorldRenewalReminderEmail({ idempotencyKey, membership, user, worldTitle }) {
+  if (!user?.email) return { delivered: false, skipped: true, reason: "EMAIL_MISSING" };
+  return sendEmail({ to: user.email, ...worldRenewalReminderEmail({ currentPeriodEnd: membership.currentPeriodEnd, memberName: user.name, stars: membership.starsPerPeriod, worldTitle }), idempotencyKey: `world-renewal-reminder-${idempotencyKey}` });
+}
