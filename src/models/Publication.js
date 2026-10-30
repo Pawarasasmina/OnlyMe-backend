@@ -36,6 +36,8 @@ const schema = new mongoose.Schema({
   experiencePath: { type: String, trim: true, default: "", maxlength: 300 },
   experienceLocation: { type: String, trim: true, default: "", maxlength: 120 },
   allowDownload: { type: Boolean, default: false },
+  ownerWelcomeNote: { type: String, trim: true, default: "", maxlength: 500 },
+  captionsEnabled: { type: Boolean, default: true },
   taggedPeople: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   pricing: { mode: { type: String, enum: ["FREE", "ONE_TIME", "MONTHLY"], required: true }, starsAmount: { type: Number, default: null }, presetId: { type: String, default: null } },
   pricingLastChangedAt: { type: Date, default: null },

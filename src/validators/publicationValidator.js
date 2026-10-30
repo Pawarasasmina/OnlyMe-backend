@@ -45,6 +45,8 @@ export function normalizePublicationDraft(payload = {}, { partial = false, kind 
   if (Object.hasOwn(payload, "experiencePath")) result.experiencePath = text(payload.experiencePath, PUBLICATION_LIMITS.summary, "Experience path");
   if (Object.hasOwn(payload, "experienceLocation")) result.experienceLocation = text(payload.experienceLocation, 120, "Experience location");
   if (Object.hasOwn(payload, "allowDownload")) result.allowDownload = Boolean(payload.allowDownload);
+  if (Object.hasOwn(payload, "ownerWelcomeNote")) result.ownerWelcomeNote = text(payload.ownerWelcomeNote, 500, "Owner welcome note");
+  if (Object.hasOwn(payload, "captionsEnabled")) result.captionsEnabled = payload.captionsEnabled !== false;
   if (Object.hasOwn(payload, "taggedPeople")) {
     if (!Array.isArray(payload.taggedPeople || [])) throw new ApiError(400, "Tagged people must be an array");
     result.taggedPeople = [...new Set((payload.taggedPeople || []).map((id) => objectId(id, "tagged person")))].filter(Boolean);
@@ -120,7 +122,8 @@ export function assertCompletePublication(publication, chapters) {
   const policy = derivedPublicationPolicy(publication.kind); const rules = KIND_RULES[publication.kind];
   text(publication.title, PUBLICATION_LIMITS.title, "Title", true); text(publication.summary || publication.description, PUBLICATION_LIMITS.summary, "Description", true); if (!["WORLD", "PREMIUM_WORLD"].includes(publication.kind)) text(publication.category, PUBLICATION_LIMITS.category, "Category", true);
   if (publication.kind === "SEEN") { seenCategory(publication.category); visibility(publication.visibility); }
-  if (!publication.coverMedia?.assetId) throw new ApiError(400, "A verified cover image is required");
+  const optionalSeenCover = publication.kind === "SEEN";
+  if (!optionalSeenCover && !publication.coverMedia?.assetId) throw new ApiError(400, "A verified cover image is required");
   if (chapters.length < rules.minChapters || (rules.maxChapters && chapters.length > rules.maxChapters)) throw new ApiError(400, rules.maxChapters ? `${publication.kind} requires ${rules.minChapters}-${rules.maxChapters} chapters` : `${publication.kind} requires at least ${rules.minChapters} chapters`);
   chapters.forEach((chapter) => normalizeChapter(chapter));
   const previews = chapters.filter((chapter) => chapter.isPreview).length;
@@ -129,8 +132,9 @@ export function assertCompletePublication(publication, chapters) {
     if (!paid && (publication.pricing?.mode !== "FREE" || publication.pricing?.starsAmount != null)) throw new ApiError(400, "Free Seens cannot charge Stars");
     if (paid && (!Number.isSafeInteger(publication.pricing?.starsAmount) || publication.pricing.starsAmount < 10)) throw new ApiError(400, "Paid Seen price must be at least 10 Stars");
     const max = paid ? 10 : 5;
+    if (paid && chapters.length < 2) throw new ApiError(400, "A Paid Seen needs at least 2 chapters — one free preview and one locked chapter");
     if (chapters.length > max) throw new ApiError(400, `${paid ? "Paid" : "Free"} Seen supports at most ${max} chapters`);
-    if (paid && (previews !== 1 || !chapters[0]?.isPreview)) throw new ApiError(400, "Paid Seens must show chapter 1 as the only free preview");
+    if (paid && previews >= chapters.length) throw new ApiError(400, "Paid Seens must keep at least one chapter locked");
     if (!paid && previews !== chapters.length) throw new ApiError(400, "Every Free Seen chapter must be public");
   }
   if (publication.kind === "WORLD") { if (publication.pricing?.mode !== "FREE" || publication.pricing?.starsAmount != null) throw new ApiError(400, "Free Worlds cannot charge Stars"); if (previews !== chapters.length) throw new ApiError(400, "Every free World chapter must be open"); }
