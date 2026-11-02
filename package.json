@@ -9,6 +9,7 @@
     "seed:creator-stories": "node src/scripts/seedCreatorStories.js",
     "seed:maya-grow-referrals": "node src/scripts/seedMayaGrowReferrals.js",
     "seed:client-showcase": "node src/scripts/seedClientShowcase.js",
+    "seed:creator-paid-seens-worlds": "node src/scripts/seedCreatorPaidSeensAndWorlds.js",
     "showcase:avatars:restore:dry-run": "node src/scripts/restoreShowcaseAvatars.js",
     "showcase:avatars:restore": "node src/scripts/restoreShowcaseAvatars.js --apply",
     "dev": "nodemon --watch src --watch .env --watch src/controllers/.env --ext js,mjs,cjs,json,env src/server.js",

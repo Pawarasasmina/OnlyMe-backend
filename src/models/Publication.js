@@ -12,7 +12,7 @@ const priceHistorySchema = new mongoose.Schema({ previousStarsAmount: { type: Nu
 const schema = new mongoose.Schema({
   creator: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   kind: { type: String, enum: PUBLICATION_KINDS, required: true }, title: { type: String, trim: true, default: "", maxlength: 120 }, summary: { type: String, trim: true, default: "", maxlength: 300 }, description: { type: String, trim: true, default: "", maxlength: 2000 }, category: { type: String, trim: true, default: "", maxlength: 40 }, tags: [{ type: String, trim: true, lowercase: true, maxlength: 40 }],
-  coverMedia: { type: mediaSchema, default: undefined }, introMedia: { type: mediaSchema, default: undefined },
+  coverMedia: { type: mediaSchema, default: undefined }, introMedia: { type: mediaSchema, default: undefined }, worldWelcomeVoiceMedia: { type: mediaSchema, default: undefined },
   entityRefs: { type: [entityRefSchema], default: [] },
   replyToSeen: { type: mongoose.Schema.Types.ObjectId, ref: "Publication", default: null, index: true },
   series: { type: mongoose.Schema.Types.ObjectId, ref: "PublicationSeries", default: null, index: true },

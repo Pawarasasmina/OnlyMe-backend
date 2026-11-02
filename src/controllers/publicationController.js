@@ -320,6 +320,11 @@ export const updateWorldManagement = asyncHandler(async (req, res) => {
     updates.description = String(req.body.description || "").trim().slice(0, PUBLICATION_LIMITS.description);
     updates.summary = updates.description.slice(0, PUBLICATION_LIMITS.summary);
   }
+  if (Object.hasOwn(req.body, "ownerWelcomeNote")) {
+    const ownerWelcomeNote = String(req.body.ownerWelcomeNote || "").trim();
+    if (ownerWelcomeNote.length > 500) throw new ApiError(400, "Welcome message cannot exceed 500 characters");
+    updates.ownerWelcomeNote = ownerWelcomeNote;
+  }
   if (Object.hasOwn(req.body, "planetFaceEmoji") || Object.hasOwn(req.body, "planetEmoji")) {
     const emoji = String(req.body.planetFaceEmoji ?? req.body.planetEmoji ?? "").trim();
     if (!emoji || emoji.length > 16) throw new ApiError(400, "Choose one planet face emoji");
@@ -360,7 +365,7 @@ export const updateWorldManagement = asyncHandler(async (req, res) => {
   publication.statusVersion += 1;
   const snapshotUpdates = { ...updates };
   if (planetFaceEmoji) snapshotUpdates.planet = { ...(publication.planet?.toObject?.() || publication.planet || {}), faceEmoji: planetFaceEmoji, emoji: publication.planet?.emoji || "🪐" };
-  if (updates.title || updates.description || updates.pricing || planetFaceEmoji || Object.hasOwn(updates, "commentsEnabled") || Object.hasOwn(updates, "firstMonthOfferEnabled") || Object.hasOwn(updates, "directAccessIncluded") || Object.hasOwn(updates, "directAccessIncludedReplies") || Object.hasOwn(updates, "allowDownload") || Object.hasOwn(updates, "includedInWorld") || Object.hasOwn(updates, "taggedPeople")) updateSnapshotMetadata(publication, snapshotUpdates);
+  if (updates.title || updates.description || Object.hasOwn(updates, "ownerWelcomeNote") || updates.pricing || planetFaceEmoji || Object.hasOwn(updates, "commentsEnabled") || Object.hasOwn(updates, "firstMonthOfferEnabled") || Object.hasOwn(updates, "directAccessIncluded") || Object.hasOwn(updates, "directAccessIncludedReplies") || Object.hasOwn(updates, "allowDownload") || Object.hasOwn(updates, "includedInWorld") || Object.hasOwn(updates, "taggedPeople")) updateSnapshotMetadata(publication, snapshotUpdates);
   await publication.save();
   if (Object.hasOwn(updates, "includedInWorld")) await syncExperienceWithPremiumWorld(req.user._id, publication._id, updates.includedInWorld, premiumWorld);
   await attachEntityMetadata(publication, req.user);
@@ -393,6 +398,36 @@ export const removeWorldCover = asyncHandler(async (req, res) => {
   if (media) await deletePublicationFile(media).catch(() => {});
   await attachEntityMetadata(publication, req.user);
   return sendResponse(res, 200, "World cover removed", await serializeWorldManagement(publication, req.user));
+});
+export const uploadWorldWelcomeVoice = asyncHandler(async (req, res) => {
+  if (!req.file) throw new ApiError(400, "Voice recording is required");
+  if (!String(req.file.mimetype || "").startsWith("audio/")) throw new ApiError(400, "Choose an audio recording");
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  const uploaded = await uploadPublicationFile({ file: req.file, creatorId: req.user._id, publicationId: publication._id, chapterId: "root", blockId: "welcome-voice", mediaType: "VOICE" });
+  if (Number(uploaded.duration || 0) > 120.1) {
+    await deletePublicationFile(uploaded).catch(() => {});
+    throw new ApiError(400, "Voice hello must be 2 minutes or shorter");
+  }
+  const trusted = await verifyPublicationAsset({ assetId: uploaded.assetId, creatorId: req.user._id, publicationId: publication._id, chapterId: "root", blockId: "welcome-voice", mediaType: "VOICE" });
+  const previous = publication.worldWelcomeVoiceMedia?.toObject?.() || publication.worldWelcomeVoiceMedia;
+  publication.worldWelcomeVoiceMedia = trusted;
+  publication.statusVersion += 1;
+  updateSnapshotMetadata(publication, { worldWelcomeVoiceMedia: trusted });
+  await publication.save();
+  if (previous?.assetId && previous.assetId !== trusted.assetId) await deletePublicationFile(previous).catch(() => {});
+  await attachEntityMetadata(publication, req.user);
+  return sendResponse(res, 201, "Welcome voice added", await serializeWorldManagement(publication, req.user));
+});
+export const removeWorldWelcomeVoice = asyncHandler(async (req, res) => {
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  const previous = publication.worldWelcomeVoiceMedia?.toObject?.() || publication.worldWelcomeVoiceMedia;
+  publication.worldWelcomeVoiceMedia = undefined;
+  publication.statusVersion += 1;
+  updateSnapshotMetadata(publication, { worldWelcomeVoiceMedia: null });
+  await publication.save();
+  if (previous?.assetId) await deletePublicationFile(previous).catch(() => {});
+  await attachEntityMetadata(publication, req.user);
+  return sendResponse(res, 200, "Welcome voice removed", await serializeWorldManagement(publication, req.user));
 });
 export const uploadWorldStoryPreview = asyncHandler(async (req, res) => {
   if (!req.file) throw new ApiError(400, "Story image is required");
