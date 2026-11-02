@@ -1,9 +1,15 @@
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 import { ACCOUNT_TYPES, DEFAULT_ACCOUNT_TYPE } from "../constants/accountTypeConstants.js";
+import { nextMemberNumber } from "../services/memberTicketService.js";
 
 const userSchema = new mongoose.Schema(
   {
+    friendInviteRingEarnedAt: { type: Date, default: null },
+    memberNumber: { type: Number, min: 1, immutable: true },
+    showMemberNumber: { type: Boolean, default: true },
+    profileAccountType: { type: String, enum: ["personal", "creator", "business"] },
+    profileCategory: { type: String, maxlength: 40 },
     name: {
       type: String,
       required: true,
@@ -119,6 +125,12 @@ const userSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+userSchema.index({ memberNumber: 1 }, { unique: true, sparse: true });
+
+userSchema.pre("validate", async function assignMemberNumber() {
+  if (this.isNew && !this.memberNumber) this.memberNumber = await nextMemberNumber();
+});
 
 userSchema.pre("save", async function hashPassword(next) {
   if (!this.isModified("password")) {

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { filterStoryAccess } from "../services/storySourceService.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
 import FeedPost from "../models/FeedPost.js";
@@ -639,11 +640,14 @@ async function discoverConnections({ blockedIds, previewByCreator, viewerId }) {
         { creator: { $in: ids }, audience: { $in: ["everyone", "followers"] } },
         { creator: { $in: ids }, audience: { $exists: false } },
         { creator: { $in: mutualObjectIds }, audience: "close_circle" },
+        { creator: { $in: ids }, audience: "world" },
       ],
     }).sort({ createdAt: 1, _id: 1 }).populate("creator", "name username avatar isVerified role").lean() : [],
     ids.length ? Publication.find({ creator: { $in: ids }, kind: "PREMIUM_WORLD", status: "PUBLISHED", publishedSnapshot: { $exists: true } }).select("creator").lean() : [],
     ids.length ? countsBy(ProfileRelationship, { target: { $in: ids }, type: "FOLLOW" }, "target") : new Map(),
   ]);
+  const permittedStoryRows = await filterStoryAccess(storyRows, viewerId);
+  storyRows.splice(0, storyRows.length, ...permittedStoryRows);
   const fetchedStoryIds = storyRows.map((story) => story._id);
   const engagementRows = fetchedStoryIds.length
     ? await StoryEngagement.find({ fan: viewerId, story: { $in: fetchedStoryIds } }).lean()
@@ -805,7 +809,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
       .limit(80)
       .select("author media")
       .lean(),
-    Story.find({ creator: { $in: creatorIds }, expiresAt: { $gt: new Date() }, audience: { $in: ["everyone", "followers"] } })
+    Story.find({ creator: { $in: creatorIds }, expiresAt: { $gt: new Date() }, audience: { $in: ["everyone", "followers", "close_circle", "world"] } })
       .sort({ createdAt: -1 })
       .limit(40)
       .populate("creator", "name username avatar isVerified role")
@@ -815,6 +819,8 @@ export const getDiscover = asyncHandler(async (req, res) => {
   ]);
 
   const followingSet = new Set(following.map((item) => String(item.target)));
+  const permittedStories = await filterStoryAccess(stories, req.user._id);
+  stories.splice(0, stories.length, ...permittedStories);
   const storyCreatorIds = new Set(stories.map((story) => String(story.creator?._id || story.creator)));
   const previewByCreator = new Map();
   for (const post of posts) {

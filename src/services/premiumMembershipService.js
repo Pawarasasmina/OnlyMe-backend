@@ -29,6 +29,7 @@ const summary = (membership) => ({
   currentPeriodStart: membership.currentPeriodStart,
   currentPeriodEnd: membership.currentPeriodEnd,
   cancelAtPeriodEnd: membership.cancelAtPeriodEnd,
+  canceledAt: membership.canceledAt,
   autoRenew: membership.status === "ACTIVE" && !membership.cancelAtPeriodEnd,
 });
 

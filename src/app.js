@@ -6,6 +6,8 @@ import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import routes from "./routes/index.js";
+import identityRoutes from "./routes/identityRoutes.js";
+import { stripeIdentityWebhook } from "./controllers/stripeIdentityWebhook.js";
 import { env } from "./config/env.js";
 import { errorHandler } from "./middleware/errorMiddleware.js";
 import { notFoundHandler } from "./middleware/notFoundMiddleware.js";
@@ -50,6 +52,7 @@ app.use(
 );
 app.use(helmet());
 app.use(morgan("dev"));
+app.post("/api/identity/webhook", express.raw({ type: "application/json", limit: "1mb" }), stripeIdentityWebhook);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
@@ -59,6 +62,7 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: env.apiRateLimit, skip: (re
 app.use(["/api/auth/login", "/api/auth/register", "/api/auth/refresh"], rateLimit({ windowMs: 15 * 60 * 1000, limit: env.authRateLimit, standardHeaders: true, legacyHeaders: false, handler: rateLimitResponse, passOnStoreError: true }));
 
 app.use("/api", routes);
+app.use("/api/identity", identityRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 

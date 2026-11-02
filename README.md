@@ -135,3 +135,15 @@ src/controllers/wallFeedController.test.js` (pass these paths on one command lin
 The isolated database test uses mongodb-memory-server, never the application DB:
 set `WALL_MONGO_INTEGRATION=1` and run
 `node --test src/services/wallCreationConcurrency.integration.test.js`.
+
+### Member tickets
+
+Before enabling registrations with this version against an existing database, run
+`npm run migrate:member-tickets:dry-run`, then `npm run migrate:member-tickets`.
+The idempotent migration assigns missing numbers in join-date order, preserves
+existing assignments, and installs the unique index. New accounts use an atomic,
+monotonically increasing counter; deleting an account never frees its number.
+The owner profile and authenticated account responses include `memberNumber` and
+`showMemberNumber`. Update visibility with `PATCH /api/settings/privacy` and
+`{ "showMemberNumber": false }`; this does not replace other privacy settings.
+The profile badge is available only for member numbers 1–10,000.

@@ -4,6 +4,7 @@ const referralSchema = new mongoose.Schema({
   inviter: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   invitee: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, unique: true, index: true },
   code: { type: String, required: true, trim: true, lowercase: true, index: true },
+  rewardEligible: { type: Boolean, default: false },
   type: { type: String, enum: ["creator", "friend"], required: true },
   attributedAt: { type: Date, default: Date.now },
   expiresAt: { type: Date, required: true, index: true },

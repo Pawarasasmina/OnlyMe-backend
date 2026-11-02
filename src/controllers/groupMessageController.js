@@ -1,3 +1,5 @@
+import Publication from "../models/Publication.js";
+import PremiumMembership from "../models/PremiumMembership.js";
 import mongoose from "mongoose";
 import GroupConversation from "../models/GroupConversation.js";
 import GroupMessage from "../models/GroupMessage.js";
@@ -54,7 +56,16 @@ export const createGroup = asyncHandler(async (req, res) => {
   if (users.length !== memberIds.length) throw new ApiError(400, "One or more members are unavailable");
   const blocked = await UserBlock.exists({ $or: [{ blocker: req.user._id, blocked: { $in: memberIds } }, { blocker: { $in: memberIds }, blocked: req.user._id }] });
   if (blocked) throw new ApiError(403, "A blocked account cannot be added to this group");
-  const group = await GroupConversation.create({ name, avatar: String(req.body.avatarUrl || ""), createdBy: req.user._id, members: [req.user._id, ...memberIds], admins: [req.user._id] });
+  let worldPublication = null;
+  if (req.body.worldPublication) {
+    if (!mongoose.isValidObjectId(req.body.worldPublication)) throw new ApiError(400, "Invalid World ID");
+    const world = await Publication.findOne({ _id: req.body.worldPublication, creator: req.user._id, kind: "PREMIUM_WORLD", status: "PUBLISHED" }).select("_id").lean();
+    if (!world) throw new ApiError(403, "Only the World owner can create a World circle");
+    const eligible = await PremiumMembership.distinct("user", { premiumPublication: world._id, user: { $in: memberIds }, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } });
+    if (eligible.length !== memberIds.length) throw new ApiError(403, "World circles require active memberships");
+    worldPublication = world._id;
+  }
+  const group = await GroupConversation.create({ name, worldPublication, avatar: String(req.body.avatarUrl || ""), createdBy: req.user._id, members: [req.user._id, ...memberIds], admins: [req.user._id] });
   await group.populate("members", "name username avatar role isVerified");
   req.app.get("io")?.to(memberIds.map((id) => `user:${id}`)).emit("group:created", serializeGroup(group, req.user._id));
   return sendResponse(res, 201, "Group created", { group: serializeGroup(group, req.user._id) });

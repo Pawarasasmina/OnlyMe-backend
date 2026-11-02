@@ -1,3 +1,4 @@
+import { restoreFeedPost } from "../controllers/postController.js";
 import { getWallContentLanguage, translateWallPostContent, wallTranslationLimiter } from "../controllers/wallTranslationController.js";
 import { Router } from "express";
 import {
@@ -48,6 +49,7 @@ router.put("/:id/share", protect, togglePostShare);
 router.post("/:id/hide", protect, hideFeedPost);
 router.post("/:id/report", protect, reportFeedPost);
 router.post("/:id/archive", ...consumerOnly, archiveFeedPost);
+router.post("/:id/restore", ...consumerOnly, restoreFeedPost);
 router.put("/:id/block-author", protect, blockPostAuthor);
 router.post("/:id/comments", protect, uploadVoiceMessage.single("voice"), createPostComment);
 router.put("/:id/resolution", ...consumerOnly, setPostResolution);

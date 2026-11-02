@@ -5,6 +5,7 @@ import CreatorVerification from "../models/CreatorVerification.js";
 import Notification from "../models/Notification.js";
 import User from "../models/User.js";
 import VerificationReviewHistory from "../models/VerificationReviewHistory.js";
+import VerifiedCreatorSubscription from "../models/VerifiedCreatorSubscription.js";
 import ApiError from "../utils/ApiError.js";
 import { assertCompleteApplication } from "../validators/verificationValidator.js";
 import { claimAtomicStatusTransition } from "./atomicStatusTransitionService.js";
@@ -54,9 +55,12 @@ async function synchronizeDecision(verification, config, previousStatus, session
   const transitionId = verification.lastTransitionId;
   await User.updateOne(
     { _id: verification.creator },
-    { $set: { creatorApprovalStatus: config.approval, ...(config.approval === "approved" ? { isVerified: false } : {}) } },
+    { $set: verification.purpose === "IDENTITY" ? { isVerified: config.approval === "approved" } : { creatorApprovalStatus: config.approval, ...(config.approval === "approved" ? { isVerified: false } : {}) } },
     options(session)
   );
+  if (verification.purpose === "IDENTITY" && config.approval === "approved") {
+    await VerifiedCreatorSubscription.updateOne({ creator: verification.creator, autoRenew: true }, { $set: { autoRenew: false, status: "CANCELLED" } }, options(session));
+  }
   await CreatorProfile.updateOne(
     { user: verification.creator },
     { $set: { verificationStatus: config.profile }, $setOnInsert: { user: verification.creator } },
@@ -82,7 +86,7 @@ async function synchronizeDecision(verification, config, previousStatus, session
   );
   await Notification.updateOne(
     { dedupeKey: transitionId },
-    { $setOnInsert: { user: verification.creator, title: config.notification, type: config.notificationType, dedupeKey: transitionId } },
+    { $setOnInsert: { user: verification.creator, title: verification.purpose === "IDENTITY" ? (config.approval === "approved" ? "Your identity is verified" : "Your identity verification needs attention") : config.notification, type: config.notificationType, dedupeKey: transitionId } },
     { ...options(session), upsert: true, runValidators: true }
   );
   await CreatorVerification.updateOne(

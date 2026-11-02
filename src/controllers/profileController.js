@@ -4,6 +4,11 @@ import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
 import PublicationPreference from "../models/PublicationPreference.js";
 import User from "../models/User.js";
+import Referral from "../models/Referral.js";
+import InvitationFan from "../models/InvitationFan.js";
+import { referralCodes } from "../services/referralService.js";
+import { profileAccountType, profileCategory } from "../constants/profileCategoryConstants.js";
+import { validateProfileAccountType } from "../validators/profileAccountTypeValidator.js";
 import UserBlock from "../models/UserBlock.js";
 import Content from "../models/Content.js";
 import Gift from "../models/Gift.js";
@@ -119,6 +124,7 @@ function serializeOwnProfile(user, profile) {
       ...serialized.profile,
       bio: profile.bio,
       categories: profile.categories?.length ? profile.categories : profile.category ? [profile.category] : [],
+      profileCategory: profile.profileCategory || "Digital creator",
       city: profile.city,
       country: profile.country,
       phoneNumber: profile.phoneNumber || "",
@@ -260,12 +266,26 @@ export const getMyPrivacySettings = asyncHandler(async (req, res) => {
   const profile = await ensureRoleProfile(req.user);
   return sendResponse(res, 200, "Privacy settings fetched", {
     role: req.user.role,
+    memberNumber: req.user.memberNumber,
+    showMemberNumber: req.user.showMemberNumber !== false,
     profileVisibility: profile.profileVisibility || (effectiveProfileRole(req.user) === "creator" ? "public" : "private"),
     privacySettings: profile.privacySettings || {},
   });
 });
 
 export const updateMyPrivacySettings = asyncHandler(async (req, res) => {
+  if (Object.hasOwn(req.body, "showMemberNumber")) {
+    if (typeof req.body.showMemberNumber !== "boolean") throw new ApiError(400, "Show my number must be true or false");
+    await User.updateOne({ _id: req.user._id }, { $set: { showMemberNumber: req.body.showMemberNumber } });
+    const profile = await ensureRoleProfile(req.user);
+    return sendResponse(res, 200, "Member number visibility updated", {
+      role: req.user.role,
+      memberNumber: req.user.memberNumber,
+      showMemberNumber: req.body.showMemberNumber,
+      profileVisibility: profile.profileVisibility,
+      privacySettings: profile.privacySettings || {},
+    });
+  }
   const updates = stripUndefined(validateSettingsPayload(req.user.role, "privacy", req.body));
   const Model = profileModels[req.user.role];
   await Model.updateOne(
@@ -276,6 +296,8 @@ export const updateMyPrivacySettings = asyncHandler(async (req, res) => {
   const profile = await ensureRoleProfile(req.user);
   return sendResponse(res, 200, "Privacy settings updated", {
     role: req.user.role,
+    memberNumber: req.user.memberNumber,
+    showMemberNumber: req.user.showMemberNumber !== false,
     profileVisibility: profile.profileVisibility || (effectiveProfileRole(req.user) === "creator" ? "public" : "private"),
     privacySettings: profile.privacySettings || {},
   });
@@ -413,10 +435,40 @@ export const updateMyGiftSettings = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Gift settings updated", { gifts: gifts.map((gift) => ({ ...serializeGift(gift), enabled: enabled.has(String(gift._id)) })) });
 });
 
+export const getMyInvitations = asyncHandler(async (req, res) => {
+  const [rows, joins] = await Promise.all([
+    Referral.find({ inviter: req.user._id }).sort({ attributedAt: -1 }).populate({ path: "invitee", match: { status: "active" }, select: "name username avatar creatorApprovalStatus role" }).lean(),
+    InvitationFan.find({ inviter: req.user._id }).sort({ createdAt: -1 }).populate({ path: "fan", match: { status: "active" }, select: "name username avatar" }).lean(),
+  ]);
+  const uniquePeople = new Map();
+  const addPerson = (person, type, joinedAt) => {
+    if (!person) return;
+    const id = String(person._id);
+    const existing = uniquePeople.get(id);
+    if (existing && new Date(existing.joinedAt) <= new Date(joinedAt)) return;
+    uniquePeople.set(id, { id, name: person.name, username: person.username, avatar: person.avatar || "", type, joinedAt });
+  };
+  rows.forEach(row => addPerson(row.invitee, row.type, row.attributedAt));
+  joins.forEach(row => addPerson(row.fan, row.type || "friend", row.createdAt));
+  const people = [...uniquePeople.values()].sort((a, b) => new Date(b.joinedAt) - new Date(a.joinedAt));
+  const friends = people.filter(person => person.type === "friend"), creators = people.filter(person => person.type === "creator");
+  const ringEarned = Boolean(req.user.friendInviteRingEarnedAt || friends.length >= 3);
+  if (ringEarned && !req.user.friendInviteRingEarnedAt) await User.updateOne({ _id: req.user._id, friendInviteRingEarnedAt: null }, { $set: { friendInviteRingEarnedAt: new Date() } });
+  return sendResponse(res, 200, "Invitations fetched", { code: referralCodes(req.user).friend, joinedCount: friends.length, friends, creators, ringEarned });
+});
+
+export const muteAccount = asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.userId) || String(req.params.userId) === String(req.user._id)) throw new ApiError(400, "Invalid account");
+  const person = await User.exists({ _id: req.params.userId, status: "active" });
+  if (!person) throw new ApiError(404, "Account not found");
+  await PublicationPreference.updateOne({ user: req.user._id, creator: req.params.userId, type: "MUTED_CREATOR" }, { $setOnInsert: { user: req.user._id, creator: req.params.userId, type: "MUTED_CREATOR" } }, { upsert: true });
+  return sendResponse(res, 200, "Account muted", { mutedUserId: req.params.userId });
+});
+
 export const getMyAccountSettings = asyncHandler(async (req, res) => {
   const profile = await ensureRoleProfile(req.user);
   return sendResponse(res, 200, "Account settings fetched", {
-    account: accountDetails(req.user),
+    account: { ...accountDetails(req.user), profileAccountType: profileAccountType(req.user), profileCategory: profileCategory(req.user, profile) },
     preferences: {
       preferredLanguage: profile.preferredLanguage,
       timezone: profile.timezone,
@@ -426,6 +478,14 @@ export const getMyAccountSettings = asyncHandler(async (req, res) => {
 });
 
 export const updateMyAccountSettings = asyncHandler(async (req, res) => {
+  if (Object.hasOwn(req.body, "profileAccountType")) {
+    const updates = validateProfileAccountType(req.user, req.body);
+    const user = await User.findByIdAndUpdate(req.user._id, { $set: updates }, { new: true, runValidators: true });
+    const profile = await ensureRoleProfile(user);
+    return sendResponse(res, 200, "Account type updated", {
+      account: { ...accountDetails(user), profileAccountType: profileAccountType(user), profileCategory: profileCategory(user, profile) },
+    });
+  }
   const updates = stripUndefined(validateSettingsPayload(req.user.role, "account", req.body));
   const Model = profileModels[req.user.role];
   await Model.updateOne(

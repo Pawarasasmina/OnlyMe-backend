@@ -11,8 +11,8 @@ export async function awardReferralEarnings({ fromUser, toUser, amount, referenc
   if (!ELIGIBLE.has(referenceType) || command.financialMode === "TEST") return [];
   const now = new Date();
   const candidates = await Promise.all([
-    Referral.findOne({ invitee: fromUser, type: "friend", expiresAt: { $gt: now } }).session(session),
-    Referral.findOne({ invitee: toUser, type: "creator", expiresAt: { $gt: now } }).session(session),
+    Referral.findOne({ invitee: fromUser, type: "friend", rewardEligible: { $ne: false }, expiresAt: { $gt: now } }).session(session),
+    Referral.findOne({ invitee: toUser, type: "creator", rewardEligible: { $ne: false }, expiresAt: { $gt: now } }).session(session),
   ]);
   const definitions = [
     { referral: candidates[0], referredUser: fromUser, relationshipType: "friend", source: sourceDebit },

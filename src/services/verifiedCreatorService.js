@@ -1,10 +1,8 @@
 import Notification from "../models/Notification.js";
 import User from "../models/User.js";
+import IdentityVerification from "../models/IdentityVerification.js";
+import CreatorVerification from "../models/CreatorVerification.js";
 import VerifiedCreatorSubscription from "../models/VerifiedCreatorSubscription.js";
-import { executeFinancialCommand } from "./financialCommandService.js";
-import { debitWallet, safeWallet } from "./walletLedgerService.js";
-import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
-import { FINANCIAL_ERROR_CODES } from "../constants/financialConstants.js";
 import ApiError from "../utils/ApiError.js";
 import PlatformSetting from "../models/PlatformSetting.js";
 
@@ -31,6 +29,7 @@ export function addMonth(date = new Date()) {
 }
 
 export async function expireVerifiedCreator(userId, now = new Date()) {
+  if (await CreatorVerification.exists({ creator: userId, purpose: "IDENTITY", status: "APPROVED", stateSyncPending: false })) return null;
   const subscription = await VerifiedCreatorSubscription.findOne({
     creator: userId,
     status: "APPROVED",
@@ -54,38 +53,24 @@ export async function expireVerifiedCreator(userId, now = new Date()) {
 }
 
 export async function processVerifiedCreatorRenewals(now = new Date()) {
-  const due = await VerifiedCreatorSubscription.find({ status: "APPROVED", currentPeriodEnd: { $lte: now } }).select("creator").lean();
-  for (const item of due) {
-    try {
-      await payVerifiedCreator({ userId: item.creator, key: `verified-renew:${item.creator}:${now.toISOString().slice(0, 10)}`, now });
-    } catch (error) {
-      if ([FINANCIAL_ERROR_CODES.INSUFFICIENT_STARS, FINANCIAL_ERROR_CODES.WALLET_UNAVAILABLE].includes(error.code)) await expireVerifiedCreator(item.creator, now);
-      else throw error;
-    }
-  }
+  const identityIds = await IdentityVerification.find({ status: "verified" }).distinct("user");
+  const manualIds = await CreatorVerification.find({ purpose: "IDENTITY", status: "APPROVED", stateSyncPending: false }).distinct("creator");
+  const due = await VerifiedCreatorSubscription.find({ creator: { $nin: [...identityIds, ...manualIds] }, status: "APPROVED", currentPeriodEnd: { $lte: now } }).select("creator").lean();
+  for (const item of due) await expireVerifiedCreator(item.creator, now);
   return due.length;
 }
 
-export async function payVerifiedCreator({ userId, key, now = new Date() }) {
-  key = idempotencyKey(key);
-  return executeFinancialCommand({ user: userId, commandType: "PAY_VERIFIED_CREATOR", idempotencyKey: key, requestFingerprint: fingerprint({ userId: String(userId) }) }, async (session, command) => {
-    const subscription = await VerifiedCreatorSubscription.findOne({ creator: userId, status: { $in: ["PENDING", "APPROVED", "EXPIRED"] } }).session(session);
-    if (!subscription) throw new ApiError(409, "Verified Creator approval is required");
-    const periodStart = subscription.currentPeriodEnd > now ? subscription.currentPeriodEnd : now;
-    const periodEnd = addMonth(periodStart);
-    const debit = await debitWallet({ user: userId, amount: subscription.starsPerMonth, entryType: "VERIFIED_CREATOR_DEBIT", entryRole: "CREATOR_SUBSCRIPTION_DEBIT", referenceType: "VERIFIED_CREATOR", referenceId: subscription._id, creator: userId, command, idempotencyKey: key, metadata: { periodStart: periodStart.toISOString(), periodEnd: periodEnd.toISOString() } }, session);
-    subscription.status = "APPROVED"; subscription.paymentStatus = "PAID"; subscription.lastPaidAt = now; subscription.currentPeriodStart = periodStart; subscription.currentPeriodEnd = periodEnd; subscription.expiryNoticeSentAt = null; subscription.latestLedgerEntry = debit.entry._id;
-    await subscription.save({ session });
-    await User.updateOne({ _id: userId }, { $set: { isVerified: true } }, { session });
-    return { resultReference: subscription._id, subscription: { id: subscription._id, status: subscription.status, starsPerMonth: subscription.starsPerMonth, paymentStatus: subscription.paymentStatus, currentPeriodStart: subscription.currentPeriodStart, currentPeriodEnd: subscription.currentPeriodEnd }, wallet: safeWallet(debit.wallet), isVerified: true };
-  });
+export async function payVerifiedCreator() {
+  throw new ApiError(410, "Paid verification has been retired. Complete identity verification in Settings.");
 }
 
-// The blue tick is subscription-backed. This also cleans legacy creator approvals
-// that previously inherited isVerified without a separate verified plan.
+// Preserve confirmed identity seals while historical paid badges run out.
 export async function reconcileVerifiedCreatorBadges(now = new Date()) {
   await processVerifiedCreatorRenewals(now);
-  const activeCreatorIds = await VerifiedCreatorSubscription.find({ status: "APPROVED", paymentStatus: "PAID", currentPeriodEnd: { $gt: now } }).distinct("creator");
+  const subscriptionIds = await VerifiedCreatorSubscription.find({ status: "APPROVED", paymentStatus: "PAID", currentPeriodEnd: { $gt: now } }).distinct("creator");
+  const identityIds = await IdentityVerification.find({ status: "verified", sealRevokedAt: null }).distinct("user");
+  const manualIds = await CreatorVerification.find({ purpose: "IDENTITY", status: "APPROVED", stateSyncPending: false }).distinct("creator");
+  const activeCreatorIds = [...subscriptionIds, ...identityIds, ...manualIds];
   await Promise.all([
     User.updateMany({ creatorApprovalStatus: "approved", _id: { $nin: activeCreatorIds }, isVerified: true }, { $set: { isVerified: false } }),
     User.updateMany({ _id: { $in: activeCreatorIds }, isVerified: false }, { $set: { isVerified: true } }),

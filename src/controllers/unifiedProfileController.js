@@ -1,4 +1,6 @@
 import Content from "../models/Content.js";
+import { storyAudiencesFor } from "../services/storyAudienceService.js";
+import { resolveStorySources } from "../services/storySourceService.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
 import User from "../models/User.js";
@@ -156,11 +158,12 @@ async function loadProfile(owner, viewer) {
   const [worldMemberRows, worldMemberPreviewRows] = premiumWorldIds.length ? await Promise.all([
     PremiumMembership.aggregate([
       { $match: activeWorldMemberFilter },
-      { $group: { _id: "$premiumPublication", memberCount: { $sum: 1 } } },
+      { $group: { _id: "$premiumPublication", memberCount: { $sum: 1 }, monthlyStars: { $sum: "$starsPerPeriod" } } },
     ]),
     PremiumMembership.find(activeWorldMemberFilter).sort({ createdAt: 1 }).limit(12).populate("user", "name username avatar").lean(),
   ]) : [[], []];
   const worldMemberCounts = new Map(worldMemberRows.map((item) => [String(item._id), Number(item.memberCount) || 0]));
+  const worldMonthlyIncomeUsd = new Map(worldMemberRows.map((item) => [String(item._id), (Number(item.monthlyStars) || 0) / 10]));
   const worldMemberPreviews = new Map();
   for (const membership of worldMemberPreviewRows) {
     if (!membership.user) continue;
@@ -169,18 +172,18 @@ async function loadProfile(owner, viewer) {
     if (preview.length < 4) preview.push({ id: String(membership.user._id), name: membership.user.name, username: membership.user.username, avatar: membership.user.avatar || "" });
     worldMemberPreviews.set(key, preview);
   }
-  const viewerFollowsOwner = profileOwner || viewerRelationships.some((item) => item.type === "FOLLOW");
+  const storyAudiences = await storyAudiencesFor(owner._id, viewer?._id);
   const activeStories = await Story.find({
     creator: owner._id,
     expiresAt: { $gt: new Date() },
     ...(profileOwner ? {} : {
       $or: [
-        { audience: "everyone" },
-        { audience: { $exists: false } },
-        ...(viewerFollowsOwner ? [{ audience: "followers" }] : []),
+        { audience: { $in: [...storyAudiences] } },
+        ...(storyAudiences.has("everyone") ? [{ audience: { $exists: false } }] : []),
       ],
     }),
   }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified role creatorApprovalStatus").lean();
+  await resolveStorySources(activeStories, viewer?._id);
   const storyEngagements = viewer?._id && activeStories.length
     ? await StoryEngagement.find({ fan: viewer._id, story: { $in: activeStories.map((story) => story._id) } }).select("story viewedAt reaction").lean()
     : [];
@@ -225,7 +228,7 @@ async function loadProfile(owner, viewer) {
   const currentWallPosts = await Promise.all(ownCurrentWallPosts.map(async (post) => serializeWallPost(post, await engagementForWallPost(post._id, viewer?._id))));
   const ownWallPosts = [...ownFeedPosts.map((post) => serializePost(post, viewer)), ...currentWallPosts]
     .sort((left, right) => new Date(right.feedCreatedAt || right.publishedAt || right.createdAt) - new Date(left.feedCreatedAt || left.publishedAt || left.createdAt));
-  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, membershipIncludedExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, seenByCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal), activeStoryCount, profileStories, worldMemberCounts, worldMemberPreviews });
+  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, membershipIncludedExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, seenByCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal), activeStoryCount, profileStories, worldMemberCounts, worldMemberPreviews, worldMonthlyIncomeUsd });
 }
 
 async function relationshipTarget(username) {
@@ -332,7 +335,7 @@ export const updateOwnProfileStatus = asyncHandler(async (req, res) => {
 
 export const getOwnProfileViewers = asyncHandler(async (req, res) => {
   if (!["fan", "creator"].includes(req.user.role)) throw new ApiError(403, "Profile activity is available to fan and creator accounts");
-  const limit = Math.min(30, Math.max(1, Number.parseInt(req.query.limit, 10) || 10));
+  const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 10));
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
   const endOfToday = new Date(startOfToday);

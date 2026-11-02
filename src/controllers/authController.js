@@ -1,5 +1,6 @@
 ﻿import mongoose from "mongoose";
 import User from "../models/User.js";
+import { profileAccountType } from "../constants/profileCategoryConstants.js";
 import AdminProfile from "../models/AdminProfile.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
@@ -32,6 +33,10 @@ function sanitizeUser(user) {
     id: user._id,
     name: user.name,
     username: user.username,
+    memberNumber: user.memberNumber,
+    showMemberNumber: user.showMemberNumber !== false,
+    profileAccountType: profileAccountType(user),
+    profileCategory: user.profileCategory,
     email: user.email,
     role: effectiveRole,
     accountRole: user.role === "admin" ? "admin" : "fan",
@@ -88,7 +93,7 @@ export const register = asyncHandler(async (req, res) => {
 
   const user = await User.create(userData);
   await createRoleProfile(user);
-  await attributeReferral({ code: req.body.referralCode, invitee: user });
+  await attributeReferral({ code: req.body.referralCode, invitee: user, shareIdentity: req.body.referralShareIdentity !== false });
 
   // Email is a post-registration side effect: a provider outage must never
   // roll back an account that was created successfully.

@@ -1,5 +1,6 @@
 import { resolveSupportedVoiceLanguage } from "../constants/voiceTranslationLanguages.js";
 import ApiError from "../utils/ApiError.js";
+import { CREATOR_PROFILE_CATEGORIES } from "../constants/profileCategoryConstants.js";
 
 export const RESERVED_USERNAMES = new Set([
   "admin",
@@ -277,6 +278,9 @@ export function validateRoleProfilePayload(role, payload, user) {
   const timezone = payload.timezone === undefined ? undefined : validateTimezone(payload.timezone);
 
   if (role === "creator") {
+    if (payload.profileCategory !== undefined && !CREATOR_PROFILE_CATEGORIES.includes(payload.profileCategory)) {
+      throw new ApiError(400, "Choose a valid profile category");
+    }
     const categories = payload.categories === undefined ? undefined : payload.categories;
 
     if (categories !== undefined) {
@@ -311,6 +315,7 @@ export function validateRoleProfilePayload(role, payload, user) {
       profile: {
         bio: payload.bio === undefined ? undefined : sanitizeText(payload.bio, 500),
         categories: categories?.map((category) => sanitizeText(category, 40)).filter(Boolean),
+        profileCategory: payload.profileCategory,
         city: payload.city === undefined ? undefined : sanitizeText(payload.city, 80),
         country: payload.country === undefined ? undefined : sanitizeText(payload.country, 80),
         phoneNumber: payload.phoneNumber === undefined ? undefined : sanitizeText(payload.phoneNumber, 40),

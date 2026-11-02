@@ -40,6 +40,7 @@ export function serializeCreatorVerification(verification) {
   return {
     id: verification._id,
     status: verification.status,
+    purpose: verification.purpose,
     category: verification.category,
     socialPages: verification.socialPages || [],
     legalFullName: verification.legalFullName,
@@ -117,9 +118,11 @@ export const getMyVerification = asyncHandler(async (req, res) => {
 
 export const saveVerificationDraft = asyncHandler(async (req, res) => {
   const verification = await getOrCreateVerification(req.user._id);
+  if (req.verificationPurpose === "IDENTITY" && verification.purpose !== "IDENTITY" && verification.status === "APPROVED") verification.status = "DRAFT";
   assertEditableStatus(verification.status);
   const previousStatus = verification.status;
   const draft = validateDraftPayload(req.body);
+  if (req.verificationPurpose === "IDENTITY") verification.purpose = "IDENTITY";
   Object.assign(verification, draft);
   verification.status = verification.status === "NOT_STARTED" ? "DRAFT" : verification.status;
   if (draft.policyAccepted && !verification.acceptedAt) verification.acceptedAt = new Date();

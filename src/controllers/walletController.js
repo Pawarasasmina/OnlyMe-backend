@@ -32,7 +32,7 @@ export const getWallet = asyncHandler(async (req, res) => {
   const financialMode = financialModeForAccountType(req.user.accountType);
   const ledgerMode = { financialMode: financialMode === "TEST" ? "TEST" : { $ne: "TEST" } };
   const now = new Date();
-  const withdrawalCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const withdrawalCutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
   const automaticFilter = { creator: req.user._id, status: "ACTIVE", cancelAtPeriodEnd: false, currentPeriodEnd: { $gt: now } };
   const [wallet, starsPerUsd, income, recentIncome, automaticMemberships, automaticSummary] = await Promise.all([
     Wallet.findOne({ user: req.user._id }).lean(),
@@ -60,7 +60,7 @@ export const getWallet = asyncHandler(async (req, res) => {
   const incomeStars = Math.max(0, Number(income[0]?.stars || 0));
   const { pendingIncomeStars, availableIncomeStars } = withdrawalBalances(earnedBalance, recentIncome[0]?.stars);
   const autoTotals = automaticSummary[0] || { count: 0, starsPerMonth: 0 };
-  return sendResponse(res, 200, "Wallet fetched", { wallet: { balance, bonusBalance, purchasedBalance, earnedBalance, version: wallet?.version || 0, currency: "STARS", role: req.user.role, starsPerUsd, lifetimeIncomeStars: incomeStars, pendingIncomeStars, availableIncomeStars, withdrawalHoldHours: 24, withdrawalMinimumUsd: 20, balanceUsd: balance / starsPerUsd, incomeUsd: earnedBalance / starsPerUsd, pendingIncomeUsd: pendingIncomeStars / starsPerUsd, availableIncomeUsd: availableIncomeStars / starsPerUsd, automaticIncome: { activeSubscriptions: Number(autoTotals.count || 0), starsPerMonth: Number(autoTotals.starsPerMonth || 0), usdPerMonth: Number(autoTotals.starsPerMonth || 0) / starsPerUsd, items: automaticMemberships.map((membership) => ({ id: membership._id, subscriber: membership.user ? { name: membership.user.name, username: membership.user.username, avatar: membership.user.avatar || "" } : null, world: { id: membership.premiumPublication?._id, title: membership.premiumPublication?.title || membership.premiumPublication?.publishedSnapshot?.metadata?.title || "Premium World" }, stars: membership.starsPerPeriod, usd: membership.starsPerPeriod / starsPerUsd, nextRenewalAt: membership.currentPeriodEnd })) } } });
+  return sendResponse(res, 200, "Wallet fetched", { wallet: { balance, bonusBalance, purchasedBalance, earnedBalance, version: wallet?.version || 0, currency: "STARS", role: req.user.role, starsPerUsd, lifetimeIncomeStars: incomeStars, pendingIncomeStars, availableIncomeStars, withdrawalHoldHours: 336, withdrawalMinimumUsd: 50, balanceUsd: balance / starsPerUsd, incomeUsd: earnedBalance / starsPerUsd, pendingIncomeUsd: pendingIncomeStars / starsPerUsd, availableIncomeUsd: availableIncomeStars / starsPerUsd, automaticIncome: { activeSubscriptions: Number(autoTotals.count || 0), starsPerMonth: Number(autoTotals.starsPerMonth || 0), usdPerMonth: Number(autoTotals.starsPerMonth || 0) / starsPerUsd, items: automaticMemberships.map((membership) => ({ id: membership._id, subscriber: membership.user ? { name: membership.user.name, username: membership.user.username, avatar: membership.user.avatar || "" } : null, world: { id: membership.premiumPublication?._id, title: membership.premiumPublication?.title || membership.premiumPublication?.publishedSnapshot?.metadata?.title || "Premium World" }, stars: membership.starsPerPeriod, usd: membership.starsPerPeriod / starsPerUsd, nextRenewalAt: membership.currentPeriodEnd })) } } });
 });
 
 export const topUpWallet = asyncHandler(async (req, res) => {
@@ -128,14 +128,14 @@ export const withdrawCreatorIncome = asyncHandler(async (req, res) => {
   const key = idempotencyKey(req.body.idempotencyKey);
   const amount = positiveStars(req.body.starsAmount);
   const starsPerUsd = await getStarExchangeRate();
-  const minimumStars = Math.ceil(20 * starsPerUsd);
-  if (amount < minimumStars) throw new ApiError(422, "The minimum withdrawal is $20", "WITHDRAWAL_BELOW_MINIMUM");
+  const minimumStars = Math.ceil(50 * starsPerUsd);
+  if (amount < minimumStars) throw new ApiError(422, "The minimum withdrawal is $50", "WITHDRAWAL_BELOW_MINIMUM");
   const result = await executeFinancialCommand(
     { user: req.user._id, commandType: "WITHDRAW_CREATOR_INCOME", idempotencyKey: key, requestFingerprint: fingerprint({ starsAmount: amount, starsPerUsd }) },
     async (session, command) => {
       const wallet = await Wallet.findOne({ user: req.user._id }).session(session);
       if (!wallet) throw new ApiError(422, "Wallet is unavailable", "WALLET_UNAVAILABLE");
-      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
       const recentRows = await StarsLedgerEntry.aggregate([
         { $match: { accountUser: req.user._id, entryType: { $in: CREATOR_EVENTS }, createdAt: { $gt: cutoff } } },
         { $lookup: { from: StarsLedgerEntry.collection.name, localField: "_id", foreignField: "reversalOf", as: "reversals" } },
@@ -143,7 +143,7 @@ export const withdrawCreatorIncome = asyncHandler(async (req, res) => {
         { $group: { _id: null, stars: { $sum: "$signedAmount" } } },
       ]).session(session);
       const { availableIncomeStars } = withdrawalBalances(wallet.earnedBalance, recentRows[0]?.stars);
-      if (amount > availableIncomeStars) throw new ApiError(422, "Available creator income is too low or still in the 24-hour hold", "INSUFFICIENT_WITHDRAWABLE_INCOME");
+      if (amount > availableIncomeStars) throw new ApiError(422, "Available creator income is too low or still in the clearing period", "INSUFFICIENT_WITHDRAWABLE_INCOME");
       const updated = await Wallet.findOneAndUpdate(
         { _id: wallet._id, balance: { $gte: amount }, earnedBalance: { $gte: amount } },
         { $inc: { balance: -amount, earnedBalance: -amount, version: 1 } },
@@ -183,11 +183,11 @@ export const getLedger = asyncHandler(async (req, res) => {
 });
 
 export const getWorldEntitlements = asyncHandler(async (req, res) => {
-  const rows = await WorldEntitlement.find({ user: req.user._id }).populate({ path: "publication", select: "title coverMedia planet pricing status creator", populate: { path: "creator", select: "name username avatar" } }).sort({ grantedAt: -1 }).lean();
+  const rows = await WorldEntitlement.find({ user: req.user._id }).populate({ path: "publication", select: "kind title coverMedia planet pricing status creator", populate: { path: "creator", select: "name username avatar" } }).sort({ grantedAt: -1 }).lean();
   return sendResponse(res, 200, "World entitlement history fetched", { items: rows.map((item) => ({ id: item._id, publication: item.publication, status: item.status, purchasedStars: item.purchasedStars, grantedAt: item.grantedAt, revokedAt: item.revokedAt, refundedAt: item.refundedAt })) });
 });
 export const effectiveMembershipStatus = (membership, now = new Date()) => ["ACTIVE", "CANCEL_AT_PERIOD_END"].includes(membership.status) && new Date(membership.currentPeriodEnd) <= now ? "EXPIRED" : membership.status;
 export const getMemberships = asyncHandler(async (req, res) => {
   const rows = await PremiumMembership.find({ user: req.user._id }).populate("premiumPublication", "title coverMedia planet pricing status").populate("creator", "name username avatar").sort({ createdAt: -1 }).lean();
-  return sendResponse(res, 200, "Memberships fetched", { items: rows.map((item) => ({ id: item._id, creator: item.creator, premiumPublication: item.premiumPublication, status: effectiveMembershipStatus(item), storedStatus: item.status, starsPerPeriod: item.starsPerPeriod, memberNumber: item.memberNumber || null, periodUnit: item.periodUnit, currentPeriodStart: item.currentPeriodStart, currentPeriodEnd: item.currentPeriodEnd, cancelAtPeriodEnd: item.cancelAtPeriodEnd, autoRenew: item.status === "ACTIVE" && !item.cancelAtPeriodEnd, canceledAt: item.canceledAt, endedAt: item.endedAt })) });
+  return sendResponse(res, 200, "Memberships fetched", { items: rows.map((item) => ({ id: item._id, creator: item.creator, premiumPublication: item.premiumPublication, status: effectiveMembershipStatus(item), storedStatus: item.status, starsPerPeriod: item.starsPerPeriod, memberNumber: item.memberNumber || null, joinedAt: item.createdAt, periodUnit: item.periodUnit, currentPeriodStart: item.currentPeriodStart, currentPeriodEnd: item.currentPeriodEnd, cancelAtPeriodEnd: item.cancelAtPeriodEnd, autoRenew: item.status === "ACTIVE" && !item.cancelAtPeriodEnd, canceledAt: item.canceledAt, endedAt: item.endedAt })) });
 });

@@ -2,6 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { validateEmail, validateRoleProfilePayload, validateUsername } from "./profileValidator.js";
 
+test("profile category is validated separately from content topics", () => {
+  const result = validateRoleProfilePayload("creator", { profileCategory: "Coach", categories: ["Fitness"] }, {});
+  assert.equal(result.profile.profileCategory, "Coach");
+  assert.deepEqual(result.profile.categories, ["Fitness"]);
+  assert.throws(() => validateRoleProfilePayload("creator", { profileCategory: "<script>" }, {}), /valid profile category/);
+  assert.equal(validateRoleProfilePayload("creator", { bio: "Updated bio" }, {}).profile.profileCategory, undefined);
+  assert.equal(validateRoleProfilePayload("fan", { profileCategory: "Coach" }, {}).profile.profileCategory, undefined);
+});
+
 test("normalizes valid usernames", () => {
   assert.equal(validateUsername("@Creator.Name_01"), "creator.name_01");
 });

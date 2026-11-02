@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { CREATOR_PROFILE_CATEGORIES } from "../constants/profileCategoryConstants.js";
 
 const creatorProfileSchema = new mongoose.Schema(
   {
@@ -8,6 +9,7 @@ const creatorProfileSchema = new mongoose.Schema(
     orbitQuote: { type: String, default: "", maxlength: 240 },
     categories: [{ type: String, trim: true }],
     category: { type: String, default: "" },
+    profileCategory: { type: String, enum: CREATOR_PROFILE_CATEGORIES, default: "Digital creator" },
     discoveryPreferences: {
       showMe: { type: String, enum: ["men", "women", "everyone"], default: "everyone" },
       creatorVibe: { type: String, enum: ["fresh", "established", "mature", "any"], default: "any" },
