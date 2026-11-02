@@ -116,7 +116,7 @@ export function normalizeBlocks(blocks = []) {
   return normalized;
 }
 
-export function normalizeChapter(payload = {}) { return { title: text(payload.title, PUBLICATION_LIMITS.chapterTitle, "Chapter title", true), blocks: normalizeBlocks(payload.blocks || []), isPreview: Boolean(payload.isPreview), releaseMode: payload.releaseMode === "SCHEDULED" ? "SCHEDULED" : "IMMEDIATE", releaseAt: payload.releaseMode === "SCHEDULED" ? new Date(payload.releaseAt) : null }; }
+export function normalizeChapter(payload = {}) { return { title: text(payload.title, PUBLICATION_LIMITS.chapterTitle, "Chapter title", true), blocks: normalizeBlocks(payload.blocks || []), isPreview: Boolean(payload.isPreview), worldBonus: Boolean(payload.worldBonus), releaseMode: payload.releaseMode === "SCHEDULED" ? "SCHEDULED" : "IMMEDIATE", releaseAt: payload.releaseMode === "SCHEDULED" ? new Date(payload.releaseAt) : null }; }
 
 export function assertCompletePublication(publication, chapters) {
   const policy = derivedPublicationPolicy(publication.kind); const rules = KIND_RULES[publication.kind];

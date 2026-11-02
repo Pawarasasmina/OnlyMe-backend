@@ -20,6 +20,8 @@ import WorldWaitlist from "../models/WorldWaitlist.js";
 import ExperienceAccessRequest from "../models/ExperienceAccessRequest.js";
 import { attachEntityMetadata } from "../services/contentEntityService.js";
 import { canAccessPublicationAudience, seenVisibilityFilter, serializePublication } from "../services/publicationAccessService.js";
+import GroupConversation from "../models/GroupConversation.js";
+import GroupMessage from "../models/GroupMessage.js";
 import { addChapter, archivePublication, cancelPublishedRevision, createPublicationDraft, deletePlanet, deleteSeenPublication, ownerPublication, removeChapter, reorderChapters, restorePublication, resubmitPublication, startPublishedRevision, submitPublication, toggleSeenPinned, updateChapter, updatePublicationDraft } from "../services/publicationService.js";
 import { deletePublicationFile, uploadPublicationFile, verifyPublicationAsset } from "../services/publicationMediaStorageService.js";
 import { publicationEntitlement } from "../services/publicationEntitlementService.js";
@@ -171,15 +173,23 @@ async function serializeMemberWorld(publication, user) {
   const membership = isOwner ? null : await PremiumMembership.findOne(memberWorldAccessFilter(publicationId, user._id)).select("status currentPeriodStart currentPeriodEnd memberNumber starsPerPeriod cancelAtPeriodEnd").lean();
   if (!isOwner && !membership) throw new ApiError(403, "Join this World to step inside");
   const activeFilter = activeMembershipFilter(publicationId);
-  const [memberCount, totalMemberships, engagement, includedExperiences] = await Promise.all([
+  const [memberCount, totalMemberships, engagement, includedExperiences, freeSeensWithBonuses] = await Promise.all([
     PremiumMembership.countDocuments(activeFilter),
     PremiumMembership.countDocuments({ premiumPublication: publicationId }),
     memberWorldEngagement(publicationId, user._id),
     publication.includedExperienceIds?.length ? Publication.find({ _id: { $in: publication.includedExperienceIds }, creator: publication.creator, kind: "SEEN", "pricing.mode": "ONE_TIME", status: { $ne: "REMOVED" } }).lean() : [],
+    Publication.find({ creator: publication.creator, kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, "publishedSnapshot.metadata.pricing.mode": "FREE", "publishedSnapshot.chapters.worldBonus": true }).select("title coverMedia publishedSnapshot").lean(),
   ]);
   const serialized = serializePublication(publication, user, { audienceAllowed: true, entitlement: "ACTIVE_PREMIUM_MEMBER" });
   if (!serialized) throw new ApiError(404, "World not found");
-  serialized.includedExperiences = includedExperiences.map((item) => ({ id: String(item._id), title: item.title, summary: item.summary, category: item.category, coverMedia: item.coverMedia || null, chapterCount: item.publishedSnapshot?.chapters?.length || item.submittedSnapshot?.chapters?.length || 0, pricing: item.pricing, included: true }));
+  serialized.includedExperiences = includedExperiences.map((item) => {
+    const experienceChapters = item.publishedSnapshot?.chapters || item.submittedSnapshot?.chapters || [];
+    return { id: String(item._id), title: item.publishedSnapshot?.metadata?.title || item.title, summary: item.publishedSnapshot?.metadata?.summary || item.summary, category: item.publishedSnapshot?.metadata?.category || item.category, coverMedia: item.publishedSnapshot?.metadata?.coverMedia || item.coverMedia || null, chapterCount: experienceChapters.length, chapters: experienceChapters.map((chapter, index) => ({ id: String(chapter.id || chapter._id || chapter.stableChapterId || index), stableChapterId: chapter.stableChapterId || null, title: chapter.title || `Chapter ${index + 1}`, summary: chapter.summary || "" })), pricing: item.publishedSnapshot?.metadata?.pricing || item.pricing, included: true };
+  });
+  serialized.bonusChapters = freeSeensWithBonuses.flatMap((item) => {
+    const metadata = item.publishedSnapshot?.metadata || item;
+    return (item.publishedSnapshot?.chapters || []).map((chapter, chapterIndex) => ({ chapter, chapterIndex })).filter(({ chapter }) => chapter.worldBonus).map(({ chapter, chapterIndex }) => ({ id: `${item._id}:${chapter.stableChapterId}`, seenId: String(item._id), seenTitle: metadata.title || item.title, coverMedia: metadata.coverMedia || item.coverMedia || null, chapterId: chapter.stableChapterId, chapterIndex, title: chapter.title || `Bonus chapter ${chapterIndex + 1}` }));
+  });
   serialized.viewer = { isOwner, isMember: Boolean(isOwner || membership), membershipStatus: membership?.status || (isOwner ? "OWNER" : null), memberNumber: membership?.memberNumber || null, currentPeriodEnd: membership?.currentPeriodEnd || null };
   serialized.members = { count: memberCount };
   return {
@@ -642,6 +652,23 @@ export const addSeenToSeries = asyncHandler(async (req, res) => { const series =
 export const removeSeenFromSeries = asyncHandler(async (req, res) => { const series = await ownerSeries(req.user._id, req.params.seriesId); const seen = await ownerSeen(req.user._id, req.params.seenId); if (String(seen.series || "") !== String(series._id)) throw new ApiError(404, "Seen is not in this Series"); seen.series = null; await seen.save(); return sendResponse(res, 200, "Seen removed from Series", { publication: serializePublication(seen, req.user) }); });
 export const createChapter = asyncHandler(async (req, res) => sendResponse(res, 201, "Chapter added", { chapter: await addChapter(req.user._id, req.params.id, req.body) }));
 export const editChapter = asyncHandler(async (req, res) => sendResponse(res, 200, "Chapter updated", { chapter: await updateChapter(req.user._id, req.params.id, req.params.chapterId, req.body) }));
+export const setWorldBonusChapter = asyncHandler(async (req, res) => {
+  const statusVersion = Number(req.body.statusVersion);
+  if (!Number.isSafeInteger(statusVersion)) throw new ApiError(400, "statusVersion is required");
+  const publication = await Publication.findOne({ _id: req.params.id, creator: req.user._id, kind: "SEEN", "pricing.mode": "FREE", status: { $in: ["DRAFT", "PUBLISHED", "CHANGES_REQUESTED"] } });
+  if (!publication) throw new ApiError(404, "Editable free Seen not found");
+  if (publication.statusVersion !== statusVersion) throw new ApiError(409, "Publication changed while updating the bonus chapter");
+  const chapter = await Chapter.findOne({ publication: publication._id, stableChapterId: req.params.chapterId });
+  if (!chapter) throw new ApiError(404, "Chapter not found");
+  const worldBonus = req.body.worldBonus === true;
+  if (Boolean(chapter.worldBonus) === worldBonus) return sendResponse(res, 200, worldBonus ? "World bonus enabled" : "World bonus removed", { chapter });
+  const updated = await Publication.findOneAndUpdate({ _id: publication._id, creator: req.user._id, statusVersion }, { $inc: { statusVersion: 1, draftVersion: 1 } }, { new: true });
+  if (!updated) throw new ApiError(409, "Publication changed while updating the bonus chapter");
+  chapter.worldBonus = worldBonus;
+  chapter.draftVersion += 1;
+  await chapter.save();
+  return sendResponse(res, 200, worldBonus ? "World bonus enabled" : "World bonus removed", { chapter, statusVersion: updated.statusVersion });
+});
 export const deleteChapter = asyncHandler(async (req, res) => {
   const publication = await Publication.findOne({ _id: req.params.id, creator: req.user._id }).select("kind").lean();
   if (publication?.kind === "EXPERIENCE" && await WorldEntitlement.exists({ publication: publication._id, status: "ACTIVE" }))
@@ -906,12 +933,16 @@ export const getPublishedPublication = asyncHandler(async (req, res) => {
   if (publication.kind === "PREMIUM_WORLD") {
     const activeFilter = { premiumPublication: publication._id, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } };
     const viewerMembershipQuery = req.user?._id ? PremiumMembership.findOne({ ...activeFilter, user: req.user._id }).select("status currentPeriodEnd memberNumber starsPerPeriod firstPeriodStars").lean() : null;
-    const [memberCount, previewMembers, viewerMembership, totalMemberships] = await Promise.all([
+    const [memberCount, previewMembers, viewerMembership, totalMemberships, circles, includedExperiences] = await Promise.all([
       PremiumMembership.countDocuments(activeFilter),
       PremiumMembership.find(activeFilter).sort({ createdAt: 1 }).limit(4).populate("user", "name username avatar").lean(),
       viewerMembershipQuery,
       PremiumMembership.countDocuments({ premiumPublication: publication._id }),
+      GroupConversation.find({ premiumWorld: publication._id, isWorldCircle: true, deletedAt: null }).select("name description members").populate("members", "name username avatar").sort({ createdAt: 1 }).lean(),
+      publication.includedExperienceIds?.length ? Publication.find({ _id: { $in: publication.includedExperienceIds }, creator: publication.creator?._id || publication.creator, kind: "SEEN", "pricing.mode": "ONE_TIME", status: { $ne: "REMOVED" } }).select("title summary coverMedia pricing publishedSnapshot.metadata.title publishedSnapshot.metadata.summary publishedSnapshot.metadata.coverMedia publishedSnapshot.metadata.pricing").lean() : [],
     ]);
+    const recentCircleMessages = circles.length ? await GroupMessage.aggregate([{ $match: { group: { $in: circles.map((circle) => circle._id) }, createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) }, deletedAt: null } }, { $group: { _id: "$group", senders: { $addToSet: "$sender" } } }]) : [];
+    const talkingByCircle = new Map(recentCircleMessages.map((row) => [String(row._id), row.senders.length]));
     const regularPrice = Number(publication.publishedSnapshot?.metadata?.pricing?.starsAmount || publication.pricing?.starsAmount || 0);
     const introEnabled = Boolean(publication.publishedSnapshot?.metadata?.firstMonthOfferEnabled ?? publication.firstMonthOfferEnabled);
     const ownerId = publication.creator?._id || publication.creator;
@@ -941,6 +972,8 @@ export const getPublishedPublication = asyncHandler(async (req, res) => {
         username: item.user?.username || "",
       })),
     };
+    serialized.privateCircles = circles.map((circle) => ({ id: String(circle._id), name: circle.name, description: circle.description || "", memberCount: circle.members.length, talkingNow: talkingByCircle.get(String(circle._id)) || 0, memberPreview: circle.members.slice(0, 3).map((member) => ({ id: String(member._id), name: member.name, username: member.username, avatar: member.avatar || "" })) }));
+    serialized.includedExperiences = includedExperiences.map((item) => ({ id: String(item._id), title: item.publishedSnapshot?.metadata?.title || item.title, summary: item.publishedSnapshot?.metadata?.summary || item.summary, coverMedia: item.publishedSnapshot?.metadata?.coverMedia || item.coverMedia || null, pricing: item.publishedSnapshot?.metadata?.pricing || item.pricing }));
   }
 
   if (publication.kind === "SEEN") {

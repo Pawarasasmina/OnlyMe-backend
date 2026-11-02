@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { addSeenToSeries, addWorldModerator, archive, cancelRevision, createChapter, createDraft, createSeries, decideExperienceAccess, deleteChapter, deleteSeries, editChapter, getExperienceAccessLink, getMemberWorld, getMine, getPublishedPublication, getSeenInsights, getSeries, getWorldManagement, getWorldPricing, includeWorldExperience, listMine, listMySeries, listPublishedSeens, listSeenCategories, listWorldModeratorCandidates, listWorldModerators, openWorldWave, pinSeen, removeMedia, removePlanet, removeSeen, removeSeenFromSeries, removeWorldCover, removeWorldExperience, removeWorldModerator, removeWorldStoryPreview, removeWorldWelcomeVoice, reorder, requestExperienceAccess, restore, resubmit, setCommentsEnabled, startRevision, submit, updateDraft, updateSeries, updateWorldManagement, updateWorldPricing, uploadMedia, uploadWorldCover, uploadWorldStoryPreview, uploadWorldWelcomeVoice } from "../controllers/publicationController.js";
+import { setWorldBonusChapter } from "../controllers/publicationController.js";
 import { optionalProtect, protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { requireApprovedCreatorOrSeenOwner } from "../middleware/creatorApprovalMiddleware.js";
@@ -58,6 +59,7 @@ router.put("/mine/:id", ...creator, updateDraft);
 router.delete("/mine/:id", ...creator, removePlanet);
 router.post("/mine/:id/chapters", ...creator, createChapter);
 router.put("/mine/:id/chapters/:chapterId", ...creator, editChapter);
+router.patch("/mine/:id/chapters/:chapterId/world-bonus", ...creator, setWorldBonusChapter);
 router.delete("/mine/:id/chapters/:chapterId", ...creator, deleteChapter);
 router.post("/mine/:id/reorder-chapters", ...creator, reorder);
 router.post("/mine/:id/media-upload", ...creator, uploadContentMedia.single("file"), uploadMedia);

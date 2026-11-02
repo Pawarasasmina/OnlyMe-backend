@@ -2,10 +2,13 @@ import PremiumMembership from "../models/PremiumMembership.js";
 import Notification from "../models/Notification.js";
 import Publication from "../models/Publication.js";
 import WorldWaitlist from "../models/WorldWaitlist.js";
+import Wallet from "../models/Wallet.js";
+import StarsLedgerEntry from "../models/StarsLedgerEntry.js";
+import GroupConversation from "../models/GroupConversation.js";
 import { executeFinancialCommand } from "./financialCommandService.js";
 import { creditWallet, debitWallet, transferStars, safeWallet } from "./walletLedgerService.js";
 import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
-import { PREMIUM_PRICE_PRESETS, PREMIUM_WORLD_DEFAULT_CAPACITY } from "../constants/publicationConstants.js";
+import { PREMIUM_WORLD_DEFAULT_CAPACITY } from "../constants/publicationConstants.js";
 import ApiError from "../utils/ApiError.js";
 import { FINANCIAL_ERROR_CODES } from "../constants/financialConstants.js";
 import { sendWorldCancellationEmail, sendWorldRenewalReminderEmail } from "./emailService.js";
@@ -88,14 +91,22 @@ export async function joinPremium({ user, publicationId, key }) {
       if (existingWaiting) return { resultReference: existingWaiting._id, queued: true, waitingList: await waitingSummary(existingWaiting, session), access: "WAITING_LIST" };
 
       const price = publication.publishedSnapshot.metadata?.pricing?.starsAmount;
-      if (!PREMIUM_PRICE_PRESETS.includes(price))
+      if (!Number.isSafeInteger(price) || price < 1)
         throw new ApiError(
           409,
-          "Premium price is invalid",
+          "Published World price is invalid",
           FINANCIAL_ERROR_CODES.PUBLICATION_NOT_PURCHASABLE,
         );
       const introEnabled = Boolean(publication.publishedSnapshot.metadata?.firstMonthOfferEnabled ?? publication.firstMonthOfferEnabled);
       const firstPeriodPrice = firstPremiumPeriodPrice(price, introEnabled);
+      const wallet = await Wallet.findOne({ user: user._id }).session(session).lean();
+      if (wallet?.monthlySpendingLimit) {
+        const now = new Date();
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const spent = await StarsLedgerEntry.aggregate([{ $match: { accountUser: user._id, direction: "DEBIT", createdAt: { $gte: monthStart }, entryRole: { $nin: ["INCOME_CONVERSION_SOURCE"] } } }, { $group: { _id: null, stars: { $sum: "$starsAmount" } } }]).session(session);
+        const monthlySpent = Number(spent[0]?.stars || 0);
+        if (monthlySpent + firstPeriodPrice > wallet.monthlySpendingLimit) throw new ApiError(422, `This purchase would exceed your monthly Wallet limit by ${monthlySpent + firstPeriodPrice - wallet.monthlySpendingLimit} coins`, "MONTHLY_SPENDING_LIMIT_EXCEEDED");
+      }
       const capacity = publication.worldSeatCapacity ?? PREMIUM_WORLD_DEFAULT_CAPACITY;
       const occupied = await PremiumMembership.countDocuments({ premiumPublication: publication._id, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }).session(session);
       if (occupied >= capacity) {
@@ -166,6 +177,7 @@ export async function joinPremium({ user, publicationId, key }) {
         ],
         { session },
       );
+      await GroupConversation.updateMany({ premiumWorld: publication._id, isWorldCircle: true, deletedAt: null }, { $addToSet: { members: user._id } }, { session });
       return {
         resultReference: membership._id,
         membership: summary(membership),

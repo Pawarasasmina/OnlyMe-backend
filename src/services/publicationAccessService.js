@@ -5,7 +5,7 @@ import { PUBLICATION_VISIBILITIES } from "../constants/publicationConstants.js";
 
 const plain = (value) => typeof value?.toObject === "function" ? value.toObject() : value;
 const safeMedia = (media, includeAssetId = false) => media && ({ ...(includeAssetId && { assetId: media.assetId }), mediaType: media.mediaType, resourceType: media.resourceType, format: media.format, bytes: media.bytes, width: media.width, height: media.height, duration: media.duration, secureUrl: publicationDeliveryUrl(media) });
-const fullChapter = (chapter, includeAssetId = false) => ({ stableChapterId: chapter.stableChapterId, order: chapter.order, title: chapter.title, isPreview: chapter.isPreview, locked: false, blocks: chapter.blocks.map((block) => ({ id: block.id, type: block.type, order: block.order, ...(block.text && { text: block.text }), ...(block.url && { url: block.url, label: block.label }), ...(block.metadata && { metadata: block.metadata }), ...(block.media && { media: safeMedia(block.media, includeAssetId) }) })) });
+const fullChapter = (chapter, includeAssetId = false) => ({ stableChapterId: chapter.stableChapterId, order: chapter.order, title: chapter.title, isPreview: chapter.isPreview, worldBonus: Boolean(chapter.worldBonus), locked: false, blocks: chapter.blocks.map((block) => ({ id: block.id, type: block.type, order: block.order, ...(block.text && { text: block.text }), ...(block.url && { url: block.url, label: block.label }), ...(block.metadata && { metadata: block.metadata }), ...(block.media && { media: safeMedia(block.media, includeAssetId) }) })) });
 const lockedChapter = (chapter, exposeStoryPreviews = false) => ({ stableChapterId: chapter.stableChapterId, order: chapter.order, title: chapter.title, isPreview: false, locked: true, blocks: exposeStoryPreviews ? chapter.blocks.filter((block) => block.metadata?.storyPreview && block.media).map((block) => ({ id: block.id, type: block.type, order: block.order, metadata: block.metadata, media: safeMedia(block.media) })) : [] });
 const normalizedVisibility = (value) => PUBLICATION_VISIBILITIES.includes(value) ? value : "PUBLIC";
 const idString = (value) => String(value?._id || value || "");
@@ -101,6 +101,8 @@ export function serializePublication(publication, viewer, { admin = false, audie
     result.paymentAvailable = access === "PUBLIC_PREVIEW";
   }
   result.chapters = (snapshot?.chapters || []).map((chapter, index) => {
+    const worldBonusLocked = Boolean(chapter.worldBonus) && !["OWNER", "ADMIN"].includes(access) && entitlement !== "ACTIVE_PREMIUM_MEMBER";
+    if (worldBonusLocked) return { ...lockedChapter(chapter), worldBonus: true };
     const firstPaidChapter = access === "PUBLIC_PREVIEW" && ["SEEN", "EXPERIENCE"].includes(item.kind) && index === 0;
     if (access === "PUBLIC_PREVIEW" && !chapter.isPreview && !firstPaidChapter) return lockedChapter(chapter, ["SEEN", "EXPERIENCE"].includes(item.kind));
     const serialized = fullChapter(chapter, canEditMedia);
