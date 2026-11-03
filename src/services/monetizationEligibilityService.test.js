@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ageOn, assertCreatorCanMonetize, monetizationEligibility } from "./monetizationEligibilityService.js";
+import { ageOn, monetizationEligibility } from "./monetizationEligibilityService.js";
 
 const approved = { status: "APPROVED", ageConfirmed: true, dateOfBirth: "1990-10-30", legalFullName: "Maya Senanayake", country: "Sri Lanka", address: "Colombo" };
 
@@ -16,13 +16,3 @@ test("Paid Seens and Worlds require approved adult seller information", () => {
   assert.equal(monetizationEligibility({ ...approved, address: "" }).code, "SELLER_INFORMATION_REQUIRED");
 });
 
-test("seller verification enforcement is disabled by default", async () => {
-  const previous = process.env.REQUIRE_SELLER_VERIFICATION;
-  delete process.env.REQUIRE_SELLER_VERIFICATION;
-  try {
-    await assert.doesNotReject(() => assertCreatorCanMonetize("creator-without-verification"));
-  } finally {
-    if (previous === undefined) delete process.env.REQUIRE_SELLER_VERIFICATION;
-    else process.env.REQUIRE_SELLER_VERIFICATION = previous;
-  }
-});

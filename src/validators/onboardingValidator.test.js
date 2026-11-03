@@ -5,6 +5,7 @@ import {
   validateInstinctPreferences,
   validateInterestIds,
   validateSuggestedPeoplePayload,
+  validateProfileType,
 } from "./onboardingValidator.js";
 
 test("validates onboarding interests against the approved taxonomy", () => {
@@ -13,6 +14,11 @@ test("validates onboarding interests against the approved taxonomy", () => {
     "Travel",
     "Business",
   ]);
+});
+
+test("validates the three onboarding profile types", () => {
+  assert.equal(validateProfileType({ profileType: "Creator" }), "creator");
+  assert.throws(() => validateProfileType({ profileType: "admin" }), /Personal, Creator, or Business/);
 });
 
 test("requires the onboarding interest minimum and maximum", () => {

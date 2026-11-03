@@ -11,6 +11,8 @@ import {
   putInstincts,
   putInterests,
   putPeople,
+  putProfileType,
+  putTicket,
   putWelcome,
 } from "../controllers/onboardingController.js";
 import { protect } from "../middleware/authMiddleware.js";
@@ -23,10 +25,12 @@ router.use(protect, authorize("fan", "creator", "admin"));
 router.get("/", getOnboarding);
 router.put("/welcome", putWelcome);
 router.put("/interests", putInterests);
+router.put("/account-type", putProfileType);
 router.put("/instincts", putInstincts);
 router.get("/suggestions", getSuggestions);
 router.get("/suggested-people", getSuggestions);
 router.put("/people", putPeople);
+router.put("/ticket", putTicket);
 router.post("/follow", putPeople);
 router.put("/checklist", putChecklist);
 router.post("/complete", postComplete);

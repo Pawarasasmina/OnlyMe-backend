@@ -13,6 +13,7 @@ import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyt
 import { env } from "../config/env.js";
 import jwt from "jsonwebtoken";
 import { attributeReferral, resolveReferral } from "../services/referralService.js";
+import PlatformCounter from "../models/PlatformCounter.js";
 
 void mongoose;
 
@@ -34,6 +35,7 @@ function sanitizeUser(user) {
     username: user.username,
     email: user.email,
     role: effectiveRole,
+    profileType: user.profileType || (effectiveRole === "creator" ? "creator" : "personal"),
     accountRole: user.role === "admin" ? "admin" : "fan",
     creatorApprovalStatus: user.creatorApprovalStatus,
     avatar: user.avatar,
@@ -43,6 +45,11 @@ function sanitizeUser(user) {
     lastSeenAt: user.lastSeenAt,
     onboarding: user.onboarding,
     onboardingChecklist: user.onboardingChecklist,
+    dateOfBirth: user.dateOfBirth,
+    preferredLanguage: user.preferredLanguage || "en",
+    memberNumber: user.memberNumber || null,
+    showMemberNumber: user.showMemberNumber !== false,
+    businessContact: user.businessContact || {},
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
@@ -70,18 +77,27 @@ async function recordAuthAnalytics(req, user, eventType) {
 }
 
 export const register = asyncHandler(async (req, res) => {
-  const { name, username, email, password } = validateRegisterPayload(req.body);
+  const { name, username, email, password, dateOfBirth } = validateRegisterPayload(req.body);
 
   if (req.body.referralCode) await resolveReferral(req.body.referralCode);
 
   const existingUser = await User.findOne({ $or: [{ email }, { username }] });
   if (existingUser) throw new ApiError(409, "A user with that email or username already exists");
 
+  const counter = await PlatformCounter.findOneAndUpdate(
+    { key: "platform-members" },
+    { $inc: { value: 1 } },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
   const userData = {
     name,
     username,
     email,
     password,
+    dateOfBirth,
+    preferredLanguage: ["en", "ar", "ru", "uk", "es", "pt", "fr", "de"].includes(req.body.preferredLanguage) ? req.body.preferredLanguage : "en",
+    memberNumber: counter.value,
+    profileType: "personal",
     role: "fan",
     creatorApprovalStatus: null,
   };
@@ -190,5 +206,23 @@ export const getMe = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Authenticated user fetched", {
     user: sanitizeUser(req.user),
   });
+});
+
+export const updateProfileType = asyncHandler(async (req, res) => {
+  if (req.user.role === "admin") throw new ApiError(403, "Administrator account type cannot be changed here");
+  const profileType = String(req.body.profileType || "").trim().toLowerCase();
+  if (!["personal", "creator", "business"].includes(profileType)) throw new ApiError(400, "Choose Personal, Creator, or Business");
+  if (req.body.confirmed !== true) throw new ApiError(400, "Confirm the account type change");
+  req.user.profileType = profileType;
+  if (profileType === "personal") req.user.businessContact = { call: "", directions: "", website: "" };
+  await req.user.save({ validateModifiedOnly: true });
+  if (["creator", "business"].includes(profileType)) {
+    await CreatorProfile.findOneAndUpdate(
+      { user: req.user._id },
+      { $setOnInsert: { user: req.user._id, verificationStatus: "pending" } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  }
+  return sendResponse(res, 200, "Account type updated", { user: sanitizeUser(req.user) });
 });
 

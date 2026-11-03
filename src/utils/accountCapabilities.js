@@ -5,7 +5,10 @@ export const isAdminAccount = (user) => user?.role === "admin";
 export const isConsumerAccount = (user) => ["fan", "creator"].includes(user?.role);
 
 export const hasCreatorAccess = (user) => (
-  isConsumerAccount(user) && user?.creatorApprovalStatus === "approved"
+  isConsumerAccount(user) && (
+    user?.creatorApprovalStatus === "approved"
+    || ["creator", "business"].includes(String(user?.profileType || "").toLowerCase())
+  )
 );
 
 export const hasCreatorApplication = (user) => (

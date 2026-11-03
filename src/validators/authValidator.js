@@ -2,10 +2,10 @@ import ApiError from "../utils/ApiError.js";
 import { validateDisplayName, validateUsername } from "./profileValidator.js";
 
 export function validateRegisterPayload(payload) {
-  const { name, username, email, password } = payload;
+  const { name, username, email, password, dateOfBirth } = payload;
 
-  if (!name || !username || !email || !password) {
-    throw new ApiError(400, "Name, username, email, and password are required");
+  if (!name || !username || !email || !password || !dateOfBirth) {
+    throw new ApiError(400, "Name, username, email, password, and birthday are required");
   }
 
   const normalizedEmail = String(email).trim().toLowerCase();
@@ -18,11 +18,17 @@ export function validateRegisterPayload(payload) {
     throw new ApiError(400, "Password must be at least 8 characters");
   }
 
+  const birthday = new Date(dateOfBirth);
+  if (Number.isNaN(birthday.getTime()) || birthday > new Date()) {
+    throw new ApiError(400, "Enter a valid birthday");
+  }
+
   return {
     name: validateDisplayName(name),
     username: validateUsername(username),
     email: normalizedEmail,
     password,
+    dateOfBirth: birthday,
   };
 }
 

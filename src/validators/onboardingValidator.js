@@ -2,12 +2,13 @@ import mongoose from "mongoose";
 import ApiError from "../utils/ApiError.js";
 import { sanitizeText } from "./profileValidator.js";
 
-export const ONBOARDING_STEPS = ["welcome", "interests", "instincts", "people", "light-your-world", "complete", "completed"];
+export const ONBOARDING_STEPS = ["welcome", "interests", "account-type", "fill-feed", "ticket", "complete", "completed"];
 export const SUPPORTED_ONBOARDING_ROLES = ["fan", "creator"];
 export const MIN_INTERESTS = 3;
 export const MAX_INTERESTS = 8;
 export const MIN_PEOPLE = 3;
 export const MAX_PEOPLE = 10;
+export const PROFILE_TYPES = ["personal", "creator", "business"];
 
 export const ONBOARDING_CATEGORIES = [
   "Fitness",
@@ -101,6 +102,12 @@ export function validateSuggestedPeoplePayload(payload = {}) {
   }
 
   return ids;
+}
+
+export function validateProfileType(payload = {}) {
+  const profileType = sanitizeText(payload.profileType, 20).toLowerCase();
+  if (!PROFILE_TYPES.includes(profileType)) throw new ApiError(400, "Choose Personal, Creator, or Business");
+  return profileType;
 }
 
 export function validateChecklistEvent(payload = {}) {

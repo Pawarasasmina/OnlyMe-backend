@@ -17,9 +17,6 @@ export function monetizationEligibility(verification, now = new Date()) {
 }
 
 export async function assertCreatorCanMonetize(creatorId, now = new Date()) {
-  // Monetization is temporarily open to every creator. Set this flag to "true"
-  // when mandatory seller verification is ready to be enforced again.
-  if (String(process.env.REQUIRE_SELLER_VERIFICATION || "").toLowerCase() !== "true") return true;
   const verification = await CreatorVerification.findOne({ creator: creatorId }).select("status ageConfirmed dateOfBirth legalFullName country address").lean();
   const result = monetizationEligibility(verification, now);
   if (!result.allowed) throw new ApiError(403, result.message, result.code);
