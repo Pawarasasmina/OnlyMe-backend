@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import IdentityVerification from "../models/IdentityVerification.js";
-import { syncIdentity } from "../services/stripeIdentityService.js";
+import { syncIdentity, syncBank } from "../services/stripeIdentityService.js";
 
 export function validStripeSignature(body, header, secret, now = Date.now()) {
   if (!secret || !header) return false;
@@ -21,6 +21,22 @@ export async function stripeIdentityWebhook(req, res, next) {
     if (event.type?.startsWith("identity.verification_session.")) {
       const record = await IdentityVerification.findOne({ sessionId: event.data?.object?.id });
       if (record) await syncIdentity(record);
+    }
+    return res.json({ received: true });
+  } catch (error) { return next(error); }
+}
+
+export async function stripeConnectWebhook(req, res, next) {
+  if (!validStripeSignature(req.body, req.headers["stripe-signature"], process.env.STRIPE_CONNECT_WEBHOOK_SECRET)) return res.status(400).json({ message: "Invalid Stripe signature" });
+  try {
+    const event = JSON.parse(req.body.toString("utf8"));
+    const accountId = event.type === "account.updated" ? event.data?.object?.id : event.account;
+    if (accountId && ["account.updated", "account.external_account.created", "account.external_account.updated", "account.external_account.deleted"].includes(event.type)) {
+      const record = await IdentityVerification.findOne({ connectAccountId: accountId });
+      if (record) {
+        await syncBank(record);
+        req.app.get("io")?.to(`user:${record.user}`).emit("payout-bank:updated", { bankReady: Boolean(record.payoutsEnabled && record.bankLast4) });
+      }
     }
     return res.json({ received: true });
   } catch (error) { return next(error); }

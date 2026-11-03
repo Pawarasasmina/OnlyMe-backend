@@ -14,6 +14,7 @@ import { fingerprint, idempotencyKey } from "../validators/financialValidator.js
 import { FINANCIAL_ERROR_CODES } from "../constants/financialConstants.js";
 import ApiError from "../utils/ApiError.js";
 import mongoose from "mongoose";
+import { requireMonetization } from "./monetizationService.js";
 
 export const DA_WINDOW_MS = 48 * 60 * 60 * 1000;
 export const DA_MESSAGE_LIMIT = 3;
@@ -75,6 +76,7 @@ async function assertOpenPair(fan, creatorId, membershipIncluded = false) {
 }
 
 export async function openDirectAccessWindow({ fan, creatorId, key, source = "PAID", creatorQuestionMessageId = null, fanFollowupMessageId = null, previousWindowId = null }) {
+  await requireMonetization(creatorId, "directAccess");
   key = idempotencyKey(key);
   if (!["PAID", "PREMIUM_INCLUDED", "CREATOR_REOPEN", "FAN_FOLLOWUP"].includes(source)) throw new ApiError(400, "This Direct Access source is not available");
   const { creator, priceStars } = await assertOpenPair(fan, creatorId, source === "PREMIUM_INCLUDED");

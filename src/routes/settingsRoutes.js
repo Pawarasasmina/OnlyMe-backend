@@ -18,8 +18,11 @@ import {
   updateMyGiftSettings,
 } from "../controllers/profileController.js";
 import { protect } from "../middleware/authMiddleware.js";
+import { getMonetization, updateMonetization } from "../controllers/monetizationController.js";
 
 const router = Router();
+router.get("/monetization", protect, getMonetization);
+router.put("/monetization", protect, updateMonetization);
 
 router.get("/privacy", protect, getMyPrivacySettings);
 router.get("/invitations", protect, getMyInvitations);

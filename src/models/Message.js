@@ -79,7 +79,7 @@ const messageSchema = new mongoose.Schema(
       expiresAt: { type: Date, default: null },
     },
     sharedContent: {
-      contentType: { type: String, enum: ["", "feed_post", "seen", "world", "experience", "profile", "story", "invitation"], default: "" },
+      contentType: { type: String, enum: ["", "feed_post", "seen", "world", "experience", "profile", "story", "invitation", "dream"], default: "" },
       contentId: { type: mongoose.Schema.Types.ObjectId, default: null },
       route: { type: String, trim: true, maxlength: 240, default: "" },
       title: { type: String, trim: true, maxlength: 160, default: "" },

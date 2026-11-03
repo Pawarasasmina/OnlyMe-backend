@@ -1,3 +1,4 @@
+import Dream from "../models/Dream.js";
 import { referralCodes } from "../services/referralService.js";
 import mongoose from "mongoose";
 import CreatorProfile from "../models/CreatorProfile.js";
@@ -143,6 +144,15 @@ async function conversationFor(current, other) {
 }
 
 async function prepareConversationForSend(current, other, conversation) {
+  if (!conversation || (conversation.status !== "ACTIVE" && String(conversation.requestRecipient || other._id) === String(other._id))) {
+    const model = isApprovedCreator(other) ? CreatorProfile : FanProfile;
+    const recipientProfile = await model.findOne({ user: other._id }).select("privacySettings").lean();
+    const preferences = recipientProfile?.privacySettings || {};
+    const audience = preferences.messageAudience || (preferences.allowDirectMessages === false ? "no_one" : "everyone");
+    const followed = audience === "following" && await ProfileRelationship.exists({ actor: other._id, target: current._id, type: "FOLLOW" });
+    if (audience === "no_one" || (audience === "following" && !followed)) throw new ApiError(403, "This account is not accepting new messages from you", "MESSAGE_PRIVACY_RESTRICTED");
+  }
+
   const creatorRequest = !isApprovedCreator(current) && isApprovedCreator(other);
   if (creatorRequest && conversation?.status === "ACTIVE" && conversation.acceptedByCreator !== true) {
     const follows = await ProfileRelationship.exists({ actor: current._id, target: other._id, type: "FOLLOW" });
@@ -196,7 +206,7 @@ function contentLabel(contentType = "") {
 function normalizeShareContentInput(sharedContent = {}) {
   const contentType = String(sharedContent.contentType || "").trim();
   const contentId = String(sharedContent.contentId || "").trim();
-  const allowed = new Set(["feed_post", "seen", "world", "experience", "profile", "story", "invitation"]);
+  const allowed = new Set(["feed_post", "seen", "world", "experience", "profile", "story", "invitation", "dream"]);
   if (!allowed.has(contentType)) throw new ApiError(400, "Unsupported shared content type");
   if (!mongoose.isValidObjectId(contentId)) throw new ApiError(400, "Invalid shared content id");
   return { contentType, contentId };
@@ -231,6 +241,14 @@ function shareRecipientMatch({ current: _current, blockedIds = new Set(), ids = 
 
 async function sharedContentSnapshot(input, viewer) {
   const { contentType, contentId } = normalizeShareContentInput(input);
+  if (contentType === "dream") {
+    const dream = await Dream.findOne({ _id: contentId, status: { $in: ["ACTIVE", "COMPLETED"] } }).populate("creator", "name username avatar status").lean();
+    if (!dream || dream.creator?.status !== "active") throw new ApiError(404, "This Dream is no longer available");
+    const owner = dream.creator;
+    const blocked = await UserBlock.exists({ $or: [{ blocker: viewer._id, blocked: owner._id }, { blocker: owner._id, blocked: viewer._id }] });
+    if (blocked) throw new ApiError(403, "This Dream cannot be shared");
+    return { contentType, contentId: dream._id, route: `/profile/${encodeURIComponent(owner.username)}?dream=${dream._id}`, title: `${dream.emoji || ""} ${dream.title}`.trim(), previewText: dream.reason, imageUrl: dream.photo?.url || "", author: { id: owner._id, name: owner.name, username: owner.username, avatarUrl: owner.avatar || "" } };
+  }
   if (contentType === "invitation") {
     if (String(contentId) !== String(viewer._id)) throw new ApiError(403, "Only your own invitation can be sent");
     const owner = await User.findOne({ _id: contentId, status: "active" }).select("name username avatar").lean();

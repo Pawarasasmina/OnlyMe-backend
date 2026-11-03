@@ -83,6 +83,7 @@ export const approveCreatorVerification = asyncHandler(async (req, res) => {
       changesRequestedReasons: [],
     },
   });
+  if (verification.purpose === "IDENTITY") req.app.get("io")?.to(`user:${verification.creator}`).emit("verification:updated", { userId: String(verification.creator), isVerified: true });
   return sendResponse(res, 200, "Creator verification approved", { verification: adminView(verification) });
 });
 
@@ -103,6 +104,7 @@ export const requestCreatorVerificationChanges = asyncHandler(async (req, res) =
       changesRequestedReasons: reasons,
     },
   });
+  if (verification.purpose === "IDENTITY") req.app.get("io")?.to(`user:${verification.creator}`).emit("verification:updated", { userId: String(verification.creator), isVerified: false });
   return sendResponse(res, 200, "Verification changes requested", { verification: adminView(verification) });
 });
 
@@ -121,6 +123,7 @@ export const rejectCreatorVerification = asyncHandler(async (req, res) => {
       changesRequestedReasons: [],
     },
   });
+  if (verification.purpose === "IDENTITY") req.app.get("io")?.to(`user:${verification.creator}`).emit("verification:updated", { userId: String(verification.creator), isVerified: false });
   return sendResponse(res, 200, "Creator verification rejected", { verification: adminView(verification) });
 });
 export const getCreatorVerificationHistory = asyncHandler(async (req, res) => {

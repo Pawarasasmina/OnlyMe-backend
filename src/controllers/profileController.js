@@ -1,3 +1,5 @@
+import Conversation from "../models/Conversation.js";
+import GroupConversation from "../models/GroupConversation.js";
 import mongoose from "mongoose";
 import AdminProfile from "../models/AdminProfile.js";
 import CreatorProfile from "../models/CreatorProfile.js";
@@ -286,8 +288,14 @@ export const updateMyPrivacySettings = asyncHandler(async (req, res) => {
       privacySettings: profile.privacySettings || {},
     });
   }
-  const updates = stripUndefined(validateSettingsPayload(req.user.role, "privacy", req.body));
-  const Model = profileModels[req.user.role];
+  const profileRole = effectiveProfileRole(req.user);
+  const updates = stripUndefined(validateSettingsPayload(profileRole, "privacy", req.body));
+  const Model = profileModels[profileRole];
+  // Patch individual preferences so other privacy choices are never replaced.
+  if (updates.privacySettings) {
+    for (const [key, value] of Object.entries(updates.privacySettings)) updates[`privacySettings.${key}`] = value;
+    delete updates.privacySettings;
+  }
   await Model.updateOne(
     { user: req.user._id },
     { $set: updates, $setOnInsert: { user: req.user._id } },
@@ -328,14 +336,31 @@ export const unblockAccount = asyncHandler(async (req, res) => {
 });
 
 export const listMyMutedAccounts = asyncHandler(async (req, res) => {
-  const preferences = await PublicationPreference.find({ user: req.user._id, type: "MUTED_CREATOR" })
+  const preferences = await PublicationPreference.find({ user: req.user._id, type: { $in: ["MUTED_CREATOR", "HIDDEN_STORY_CREATOR"] } })
     .sort({ createdAt: -1 })
     .populate("creator", "name username role avatar isVerified status")
     .lean();
 
-  return sendResponse(res, 200, "Muted accounts fetched", {
-    items: preferences.filter((preference) => preference.creator).map(serializeMutedAccount),
-  });
+  const [conversations, groups] = await Promise.all([
+    Conversation.find({ mutedBy: req.user._id, $or: [{ participants: req.user._id }, { fan: req.user._id }, { creator: req.user._id }] }).populate("participants fan creator", "name username avatar role isVerified").lean(),
+    GroupConversation.find({ mutedBy: req.user._id, members: req.user._id, deletedAt: null }).select("name avatar updatedAt").lean(),
+  ]);
+  const accounts = new Map();
+  const add = (account, muteType) => {
+    const key = String(account.id);
+    const existing = accounts.get(key);
+    if (existing) existing.muteTypes = [...new Set([...existing.muteTypes, muteType])];
+    else accounts.set(key, { ...account, muteTypes: [muteType] });
+  };
+  for (const preference of preferences) {
+    if (preference.creator) add(serializeMutedAccount(preference), preference.type === "HIDDEN_STORY_CREATOR" ? "stories" : "posts");
+  }
+  for (const conversation of conversations) {
+    const other = [...(conversation.participants || []), conversation.fan, conversation.creator].find(person => person?._id && String(person._id) !== String(req.user._id));
+    if (other) add({ id: other._id, displayName: other.name, username: other.username, profilePhoto: other.avatar, isVerified: other.isVerified }, "messages");
+  }
+  for (const group of groups) add({ id: group._id, displayName: group.name, profilePhoto: group.avatar, kind: "group" }, "group");
+  return sendResponse(res, 200, "Muted accounts fetched", { items: [...accounts.values()] });
 });
 
 export const unmuteAccount = asyncHandler(async (req, res) => {
@@ -343,12 +368,16 @@ export const unmuteAccount = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid account");
   }
 
-  const result = await PublicationPreference.deleteOne({
+  const result = await PublicationPreference.deleteMany({
     creator: req.params.userId,
-    type: "MUTED_CREATOR",
+    type: { $in: ["MUTED_CREATOR", "HIDDEN_STORY_CREATOR"] },
     user: req.user._id,
   });
 
+  await Promise.all([
+    Conversation.updateMany({ mutedBy: req.user._id, $or: [{ participants: { $all: [req.user._id, req.params.userId] } }, { fan: req.user._id, creator: req.params.userId }, { fan: req.params.userId, creator: req.user._id }] }, { $pull: { mutedBy: req.user._id } }),
+    GroupConversation.updateOne({ _id: req.params.userId, members: req.user._id, deletedAt: null }, { $pull: { mutedBy: req.user._id } }),
+  ]);
   return sendResponse(res, 200, result.deletedCount ? "Account unmuted" : "Account was not muted", {
     mutedUserId: req.params.userId,
     unmuted: true,
@@ -471,6 +500,7 @@ export const getMyAccountSettings = asyncHandler(async (req, res) => {
     account: { ...accountDetails(req.user), profileAccountType: profileAccountType(req.user), profileCategory: profileCategory(req.user, profile) },
     preferences: {
       preferredLanguage: profile.preferredLanguage,
+      preferredLanguageExplicit: Boolean(profile.uiLanguageSelectedAt || profile.preferredLanguage && !/^en(?:-US)?$/i.test(profile.preferredLanguage)),
       timezone: profile.timezone,
       phoneNumber: profile.phoneNumber || "",
     },
@@ -487,6 +517,7 @@ export const updateMyAccountSettings = asyncHandler(async (req, res) => {
     });
   }
   const updates = stripUndefined(validateSettingsPayload(req.user.role, "account", req.body));
+  if (updates.preferredLanguage !== undefined) updates.uiLanguageSelectedAt = new Date();
   const Model = profileModels[req.user.role];
   await Model.updateOne(
     { user: req.user._id },
@@ -498,6 +529,7 @@ export const updateMyAccountSettings = asyncHandler(async (req, res) => {
     account: accountDetails(req.user),
     preferences: {
       preferredLanguage: profile.preferredLanguage,
+      preferredLanguageExplicit: Boolean(profile.uiLanguageSelectedAt || profile.preferredLanguage && !/^en(?:-US)?$/i.test(profile.preferredLanguage)),
       timezone: profile.timezone,
       phoneNumber: profile.phoneNumber || "",
     },

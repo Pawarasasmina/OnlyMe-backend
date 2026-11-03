@@ -5,7 +5,7 @@ import VerifiedCreatorSubscription from "../models/VerifiedCreatorSubscription.j
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
-import { expireVerifiedCreator, getVerifiedCreatorPlan, payVerifiedCreator, updateVerifiedCreatorPlan } from "../services/verifiedCreatorService.js";
+import { synchronizeIdentityBadge, expireVerifiedCreator, getVerifiedCreatorPlan, payVerifiedCreator, updateVerifiedCreatorPlan } from "../services/verifiedCreatorService.js";
 
 const clean = (value, limit = 2000) => String(value || "").trim().slice(0, limit);
 const view = (item) => item ? ({ id: item._id, status: item.status, starsPerMonth: item.starsPerMonth, autoRenew: item.autoRenew, statement: item.statement, submittedAt: item.submittedAt, reviewedAt: item.reviewedAt, creatorMessage: item.creatorMessage, currentPeriodStart: item.currentPeriodStart, currentPeriodEnd: item.currentPeriodEnd, lastPaidAt: item.lastPaidAt, paymentStatus: item.paymentStatus, creator: item.creator }) : null;
@@ -56,6 +56,7 @@ async function decide(req, res, status) {
   subscription.status = status; subscription.reviewedAt = now; subscription.reviewedBy = req.user._id; subscription.adminNote = clean(req.body.adminNote); subscription.creatorMessage = clean(req.body.creatorMessage) || (status === "APPROVED" ? "Your Verified Creator application was approved. Complete the monthly renewal to keep your blue tick active." : "Your Verified Creator application was not approved.");
   if (status === "APPROVED") subscription.paymentStatus = "NOT_STARTED";
   await Promise.all([subscription.save(), User.updateOne({ _id: subscription.creator }, { $set: { isVerified: false } }), Notification.create({ user: subscription.creator, type: status === "APPROVED" ? "verified_creator_approved" : "verified_creator_rejected", title: status === "APPROVED" ? "Verified Creator approved — activate with Stars" : "Verified Creator application update", message: subscription.creatorMessage, severity: status === "APPROVED" ? "info" : "warning", priority: 60 })]);
+  await synchronizeIdentityBadge(await User.findById(subscription.creator));
   return sendResponse(res, 200, `Verified Creator application ${status.toLowerCase()}`, { subscription: view(subscription) });
 }
 

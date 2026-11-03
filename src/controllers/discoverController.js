@@ -9,6 +9,7 @@ import OrbitSignal from "../models/OrbitSignal.js";
 import PremiumMembership from "../models/PremiumMembership.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import Publication from "../models/Publication.js";
+import "../models/PublicationSeries.js";
 import SeenEngagement from "../models/SeenEngagement.js";
 import Story from "../models/Story.js";
 import StoryEngagement from "../models/StoryEngagement.js";
@@ -758,6 +759,35 @@ function filterCreators(creators, term) {
   ].some((value) => String(value || "").toLowerCase().includes(query)));
 }
 
+export function selectSidebarSeens(seens = []) {
+  const trendingSeen = [...seens].sort((a, b) => b.viewCount - a.viewCount || new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0))[0] || null;
+  const fresh = seens.filter(seen => seen.id !== trendingSeen?.id).sort((a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0));
+  return { trendingSeen, freshSeens: [...fresh, ...(trendingSeen ? [trendingSeen] : [])].slice(0, 3) };
+}
+
+async function discoverSidebar(viewer, profiles) {
+  const creatorIds = profiles.map(profile => profile.user._id);
+  const audience = await seenVisibilityFilter(viewer, creatorIds);
+  const [following, publications, followerCounts] = await Promise.all([
+    ProfileRelationship.find({ actor: viewer._id, target: { $in: creatorIds }, type: "FOLLOW" }).select("target").lean(),
+    Publication.find({ creator: { $in: creatorIds }, kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true }, ...audience })
+      .select("title category coverMedia introMedia publishedSnapshot publishedAt createdAt creator")
+      .sort({ publishedAt: -1, updatedAt: -1 }).limit(12)
+      .populate({ path: "creator", match: { role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified" }).lean(),
+    countsBy(ProfileRelationship, { target: { $in: creatorIds }, type: "FOLLOW" }, "target"),
+  ]);
+  const visible = publications.filter(publication => publication.creator);
+  const engagement = await countsBy(SeenEngagement, { publication: { $in: visible.map(item => item._id) } }, "publication");
+  const seens = visible.map(publication => serializeDiscoverSeen(publication, engagement));
+  const followingSet = new Set(following.map(item => String(item.target)));
+  const meta = { followerCounts, followingSet, subscriberCounts: new Map(), worldMemberCounts: new Map(), previewByCreator: new Map() };
+  return {
+    suggestedUsers: profiles.filter(profile => !followingSet.has(String(profile.user._id))).slice(0, 4).map(profile => serializeCreator(profile, meta)),
+    activity: serializeDiscoverActivity(profiles),
+    ...selectSidebarSeens(seens),
+  };
+}
+
 export const getDiscover = asyncHandler(async (req, res) => {
   const viewerModel = roleProfileModel(req.user.role, req.user.creatorApprovalStatus);
   const slidesOnly = req.query.view === "slides";
@@ -786,6 +816,11 @@ export const getDiscover = asyncHandler(async (req, res) => {
     .lean();
 
   const visibleProfiles = profiles.filter((profile) => profile.user);
+  // Shared sidebar must not depend on recommendation ranking, Worlds, stories,
+  // subscriptions or recommendation-exposure writes just to display its cards.
+  if (req.query.view === "sidebar") {
+    return sendResponse(res, 200, "Discover sidebar fetched", await discoverSidebar(req.user, visibleProfiles));
+  }
   const creatorIds = visibleProfiles.map((profile) => profile.user._id);
   const seenAudienceFilter = await seenVisibilityFilter(req.user, creatorIds);
   const [followerCounts, subscriberCounts, worldCounts, following, publications, seens, posts, stories, signalTargetIds, dreamByCreator] = await Promise.all([

@@ -11,7 +11,9 @@ import VerifiedCreatorSubscription from "../models/VerifiedCreatorSubscription.j
 import { env } from "../config/env.js";
 import creatorRoutes from "../routes/creatorVerificationRoutes.js";
 import adminRoutes from "../routes/adminVerificationRoutes.js";
-import { reconcileVerifiedCreatorBadges, expireVerifiedCreator } from "./verifiedCreatorService.js";
+import { reconcileVerifiedCreatorBadges, expireVerifiedCreator, synchronizeIdentityBadge } from "./verifiedCreatorService.js";
+import IdentityVerification from "../models/IdentityVerification.js";
+import { serializeUnifiedProfile } from "./unifiedProfileService.js";
 import { identityStatus } from "./stripeIdentityService.js";
 import { assertCompleteApplication } from "../validators/verificationValidator.js";
 let database, server, origin;
@@ -56,6 +58,25 @@ test("manual verification requires documents and an admin; approval persists wit
   assert.equal((await User.findById(applicant._id)).isVerified, true);
   const status = await identityStatus(applicant);
   assert.equal(status.provider, "manual"); assert.equal(status.status, "verified"); assert.equal(status.bankReady, false);
+  // Reproduce the stale flag alongside an older, incomplete Stripe session.
+  await IdentityVerification.create({ user: applicant._id, status: "requires_input" });
+  await User.updateOne({ _id: applicant._id }, { $set: { isVerified: false } });
+  const repaired = await synchronizeIdentityBadge(await User.findById(applicant._id));
+  assert.equal(repaired.isVerified, true);
+  assert.equal((await User.findById(applicant._id)).isVerified, true);
+  assert.equal(serializeUnifiedProfile({ owner: repaired, viewer: repaired, roleProfile: {} }).profile.verified, true);
+  await reconcileVerifiedCreatorBadges();
+  assert.equal((await User.findById(applicant._id)).isVerified, true);
+});
+
+test("incomplete, rejected and revoked identity records cannot grant a badge", async () => {
+  const user = await person("Unverified");
+  await IdentityVerification.create({ user: user._id, status: "requires_input" });
+  assert.equal((await synchronizeIdentityBadge(user)).isVerified, false);
+  await IdentityVerification.updateOne({ user: user._id }, { $set: { status: "verified", sealRevokedAt: new Date() } });
+  assert.equal((await synchronizeIdentityBadge(user)).isVerified, false);
+  await CreatorVerification.collection.insertOne({ creator: user._id, purpose: "IDENTITY", status: "REJECTED", stateSyncPending: false });
+  assert.equal((await synchronizeIdentityBadge(user)).isVerified, false);
 });
 test("rejection and requested changes can be corrected and resubmitted", async () => {
   const applicant = await person("Resubmitter"), admin = await person("SecondReviewer", "admin");

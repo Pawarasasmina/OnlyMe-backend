@@ -11,6 +11,7 @@ import { executeFinancialCommand } from "./financialCommandService.js";
 import { creditWallet, debitWallet, safeWallet } from "./walletLedgerService.js";
 import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
 import { financialModeForAccountType } from "../constants/accountTypeConstants.js";
+import { requireMonetization } from "./monetizationService.js";
 
 export const PAID_CALL_REQUEST_MS = 24 * 60 * 60 * 1000;
 export const PAID_CALL_PLATFORM_RATE_BPS = 2000;
@@ -27,6 +28,7 @@ export function serializePaidCall(call) {
 }
 
 export async function paidCallOffer(fan, creatorId) {
+  await requireMonetization(creatorId, "directAccess");
   if (!["fan", "creator"].includes(fan.role)) throw new ApiError(403, "This account cannot request a paid creator call");
   const [creator, profile, wallet, blocked] = await Promise.all([
     User.findOne({ _id: creatorId, role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved", status: "active" }).select("_id name username avatar role creatorApprovalStatus").lean(),

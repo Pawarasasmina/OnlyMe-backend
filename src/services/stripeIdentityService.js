@@ -4,6 +4,7 @@ import VerifiedCreatorSubscription from "../models/VerifiedCreatorSubscription.j
 import CreatorVerification from "../models/CreatorVerification.js";
 import ApiError from "../utils/ApiError.js";
 import { env } from "../config/env.js";
+import { countryCode } from "../utils/countryCode.js";
 
 export async function stripeRequest(path, params, key) {
   if (!process.env.STRIPE_SECRET_KEY) throw new ApiError(503, "Verification is not configured yet. Please try again later.");
@@ -15,6 +16,19 @@ export async function stripeRequest(path, params, key) {
   const data = await response.json();
   if (!response.ok) throw new ApiError(502, "Stripe could not complete this request. Please try again.");
   return data;
+}
+
+export async function syncBank(record) {
+  if (!record.connectAccountId) return record;
+  const account = await stripeRequest(`accounts/${encodeURIComponent(record.connectAccountId)}`);
+  if (account.metadata?.userId && account.metadata.userId !== String(record.user)) throw new ApiError(403, "Bank setup does not belong to this account");
+  const bank = account.external_accounts?.data?.find(a => a.object === "bank_account" && !["errored", "verification_failed"].includes(a.status));
+  record.payoutsEnabled = Boolean(account.payouts_enabled && !account.deleted);
+  record.bankLast4 = bank?.last4 || "";
+  record.bankRequirements = account.requirements?.currently_due || [];
+  record.bankStatus = record.payoutsEnabled && record.bankLast4 ? "ready" : account.requirements?.disabled_reason ? "restricted" : record.bankRequirements.length ? "requires_input" : "pending";
+  await record.save();
+  return record;
 }
 
 export async function syncIdentity(record) {
@@ -39,15 +53,12 @@ export async function identityStatus(user) {
   const manual = await CreatorVerification.findOne({ creator: user._id, purpose: "IDENTITY" }).select("status reviewedAt stateSyncPending").lean();
   const record = await IdentityVerification.findOne({ user: user._id });
   const manualStatus = manual ? { provider: "manual", available: true, bankAvailable: available, status: manual.status === "APPROVED" && !manual.stateSyncPending ? "verified" : manual.status.toLowerCase(), verifiedAt: manual.reviewedAt } : {};
-  if (!record) return { available, status: "not_started", bankReady: false, automaticPayout: true, ...manualStatus };
+  if (!record) return { available, bankAvailable: available, status: "not_started", bankReady: false, bankStatus: "not_started", automaticPayout: true, ...manualStatus };
   if (!manual && available && record.sessionId && record.status !== "verified") await syncIdentity(record);
   if (available && record.connectAccountId) {
-    const account = await stripeRequest(`accounts/${encodeURIComponent(record.connectAccountId)}`);
-    record.payoutsEnabled = Boolean(account.payouts_enabled);
-    record.bankLast4 = account.external_accounts?.data?.find(a => a.object === "bank_account")?.last4 || "";
-    await record.save();
+    await syncBank(record);
   }
-  return { available, status: record.status, sealRevoked: Boolean(record.sealRevokedAt), errorCode: record.errorCode, verifiedAt: record.verifiedAt, bankReady: Boolean(record.payoutsEnabled && record.bankLast4), bankLast4: record.bankLast4 || "", automaticPayout: record.automaticPayout, ...manualStatus };
+  return { available, bankAvailable: available, status: record.status, sealRevoked: manualStatus.status === "verified" ? false : Boolean(record.sealRevokedAt), errorCode: record.errorCode, verifiedAt: record.verifiedAt, bankReady: Boolean(record.payoutsEnabled && record.bankLast4 && (manualStatus.status === "verified" || record.status === "verified")), bankStatus: record.bankStatus, bankLast4: record.bankLast4 || "", automaticPayout: record.automaticPayout, ...manualStatus };
 }
 
 export async function startIdentity(user) {
@@ -64,16 +75,21 @@ export async function startIdentity(user) {
   return { url: session.url };
 }
 
-export async function startBank(user) {
+export async function startBank(user, returnTo = "settings") {
+  if (!["settings", "monetization"].includes(returnTo)) throw new ApiError(400, "Invalid bank return destination");
   const manuallyVerified = await CreatorVerification.exists({ creator: user._id, purpose: "IDENTITY", status: "APPROVED", stateSyncPending: false });
   let record = await IdentityVerification.findOne({ user: user._id });
-  if (manuallyVerified && !record) record = await IdentityVerification.create({ user: user._id });
+  if (manuallyVerified && !record) record = await IdentityVerification.findOneAndUpdate({ user: user._id }, { $setOnInsert: { user: user._id } }, { upsert: true, new: true });
   if (!manuallyVerified && (!record || (await syncIdentity(record)).status !== "verified")) throw new ApiError(403, "Complete identity verification first");
   if (!record.connectAccountId) {
-    const account = await stripeRequest("accounts", { type: "express", email: user.email, "capabilities[transfers][requested]": "true", "metadata[userId]": String(user._id) }, `connect-${user._id}`);
+    const identity = manuallyVerified ? await CreatorVerification.findOne({ creator: user._id, purpose: "IDENTITY", status: "APPROVED", stateSyncPending: false }).select("country").lean() : null;
+    const country = countryCode(identity?.country || user.monetization?.country);
+    const account = await stripeRequest("accounts", { type: "express", email: user.email, ...(country ? { country, "capabilities[transfers][requested]": "true" } : {}), "metadata[userId]": String(user._id) }, `connect-${user._id}`);
     record.connectAccountId = account.id; await record.save();
   }
-  const link = await stripeRequest("account_links", { account: record.connectAccountId, type: "account_onboarding", return_url: `${env.clientUrl}/settings?verification=bank`, refresh_url: `${env.clientUrl}/settings?verification=bank-refresh` });
+  const path = returnTo === "monetization" ? "/settings/monetization" : "/settings";
+  const base = String(env.clientUrl).replace(/\/+$/, "");
+  const link = await stripeRequest("account_links", { account: record.connectAccountId, type: "account_onboarding", "collection_options[fields]": "eventually_due", return_url: `${base}${path}?verification=bank-return`, refresh_url: `${base}${path}?verification=bank-refresh` });
   return { url: link.url };
 }
 

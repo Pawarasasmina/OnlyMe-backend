@@ -132,6 +132,7 @@ function validateNotificationPreferences(value, allowedKeys) {
 }
 
 const stringPrivacyChoices = {
+  messageAudience: ["everyone", "following", "no_one"],
   savedPlacesVisibility: ["everyone", "followers", "only_me"],
   showMemberBadge: ["everyone", "only_me"],
   orbitVisibility: ["everyone", "followers", "only_me"],
@@ -188,7 +189,14 @@ export function validateSettingsPayload(role, type, payload = {}) {
     : validateTimezone(payload.timezone);
 
   if (type === "privacy") {
-    const privacySettings = validatePrivacySettings(payload.privacySettings || payload, privacyKeysFor(role));
+    const privacySettings = validatePrivacySettings(payload.privacySettings || payload, [...privacyKeysFor(role), "messageAudience"]);
+    const privacyInput = payload.privacySettings || payload;
+    if (privacyInput.messageAudience !== undefined) {
+      if (!["everyone", "following", "no_one"].includes(privacyInput.messageAudience)) throw new ApiError(400, "Choose who can message you");
+      privacySettings.allowDirectMessages = privacyInput.messageAudience !== "no_one";
+    } else if (privacyInput.allowDirectMessages !== undefined) {
+      privacySettings.messageAudience = privacyInput.allowDirectMessages ? "everyone" : "no_one";
+    }
     if (privacySettings && privacySettings.orbitVisibility && privacySettings.allowDiscovery === undefined) {
       privacySettings.allowDiscovery = privacySettings.orbitVisibility !== "only_me";
     }

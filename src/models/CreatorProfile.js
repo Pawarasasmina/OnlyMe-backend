@@ -63,6 +63,7 @@ const creatorProfileSchema = new mongoose.Schema(
       showActivityStatus: { type: Boolean, default: true },
       showLocation: { type: Boolean, default: true },
       allowDiscovery: { type: Boolean, default: true },
+      messageAudience: { type: String, enum: ["everyone", "following", "no_one"], default: undefined },
       allowDirectMessages: { type: Boolean, default: true },
       allowMentions: { type: Boolean, default: true },
       allowTags: { type: Boolean, default: true },
@@ -72,6 +73,7 @@ const creatorProfileSchema = new mongoose.Schema(
       orbitVisibility: { type: String, enum: ["everyone", "followers", "only_me"], default: "everyone" },
     },
     preferredLanguage: { type: String, default: "en" },
+    uiLanguageSelectedAt: { type: Date, default: null },
     timezone: { type: String, default: "UTC" },
     notificationPreferences: {
       email: { type: Boolean, default: true },

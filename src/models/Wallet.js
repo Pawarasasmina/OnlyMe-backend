@@ -12,6 +12,7 @@ const walletSchema = new mongoose.Schema(
     testPurchasedBalance: { type: Number, default: 0, min: 0, validate: { validator: Number.isSafeInteger, message: "Test Wallet purchased balance must be integer Stars" } },
     testEarnedBalance: { type: Number, default: 0, min: 0, validate: { validator: Number.isSafeInteger, message: "Test Wallet earned balance must be integer Stars" } },
     currency: { type: String, default: "STARS" },
+    monthlySpendingLimitUsd: { type: Number, default: 0, min: 0, max: 1000 },
     version: { type: Number, default: 0, min: 0 },
     lastLedgerEntry: { type: mongoose.Schema.Types.ObjectId, ref: "StarsLedgerEntry", default: null },
     ledgerActivatedAt: { type: Date, default: null },

@@ -372,7 +372,7 @@ export const getCreatorStories = asyncHandler(async (req, res) => {
     ...(isOwner ? {} : { $or: audience }),
   }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified role creatorApprovalStatus status").populate({ path: "sourceSeen", populate: [{ path: "creator", select: "name username avatar isVerified" }, { path: "series", select: "name" }] }).lean();
 
-  const availableStories = stories.filter((story) => story.creator?.status === "active");
+  const availableStories = stories.filter((story) => story.creator?.status === "active" || (story.creator?.status === "deactivated" && story.audience === "world" && allowedAudiences.has("world")));
   await resolveStorySources(availableStories, viewerId);
   const engagements = await StoryEngagement.find({ fan: viewerId, story: { $in: availableStories.map((story) => story._id) } }).lean();
   const byStory = new Map(engagements.map((item) => [String(item.story), item]));

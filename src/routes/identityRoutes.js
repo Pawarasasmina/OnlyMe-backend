@@ -6,7 +6,7 @@ import User from "../models/User.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
-import { identityStatus, startIdentity, startBank, updateAutomaticPayout } from "../services/stripeIdentityService.js";
+import { manualPayoutIdentityStatus } from "../services/manualBankService.js";
 const router = Router();
 router.use(protect);
 router.get("/admin", authorize("admin"), asyncHandler(async (req, res) => {
@@ -30,8 +30,6 @@ router.post("/admin/:id/seal", authorize("admin"), asyncHandler(async (req, res)
   await User.updateOne({ _id: record.user }, { $set: { isVerified: active } });
   return sendResponse(res, 200, "Verification seal updated", { active });
 }));
-router.get("/", asyncHandler(async (req, res) => sendResponse(res, 200, "Verification status", await identityStatus(req.user))));
-router.post("/start", asyncHandler(async (req, res) => sendResponse(res, 200, "Verification started", await startIdentity(req.user))));
-router.post("/bank", asyncHandler(async (req, res) => sendResponse(res, 200, "Bank setup", await startBank(req.user))));
-router.put("/automatic-payout", asyncHandler(async (req, res) => sendResponse(res, 200, "Payout setting saved", await updateAutomaticPayout(req.user, req.body.active))));
+router.get("/", asyncHandler(async (req, res) => sendResponse(res, 200, "Verification status", await manualPayoutIdentityStatus(req.user))));
+router.post("/start", asyncHandler(async () => { throw new ApiError(410, "Use the in-app identity application for admin review"); }));
 export default router;

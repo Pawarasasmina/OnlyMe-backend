@@ -6,6 +6,7 @@ import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import routes from "./routes/index.js";
+import manualBankRoutes from "./routes/manualBankRoutes.js";
 import identityRoutes from "./routes/identityRoutes.js";
 import { stripeIdentityWebhook } from "./controllers/stripeIdentityWebhook.js";
 import { env } from "./config/env.js";
@@ -62,6 +63,7 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: env.apiRateLimit, skip: (re
 app.use(["/api/auth/login", "/api/auth/register", "/api/auth/refresh"], rateLimit({ windowMs: 15 * 60 * 1000, limit: env.authRateLimit, standardHeaders: true, legacyHeaders: false, handler: rateLimitResponse, passOnStoreError: true }));
 
 app.use("/api", routes);
+app.use("/api/identity", manualBankRoutes);
 app.use("/api/identity", identityRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);

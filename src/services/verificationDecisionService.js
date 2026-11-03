@@ -55,7 +55,7 @@ async function synchronizeDecision(verification, config, previousStatus, session
   const transitionId = verification.lastTransitionId;
   await User.updateOne(
     { _id: verification.creator },
-    { $set: verification.purpose === "IDENTITY" ? { isVerified: config.approval === "approved" } : { creatorApprovalStatus: config.approval, ...(config.approval === "approved" ? { isVerified: false } : {}) } },
+    { $set: verification.purpose === "IDENTITY" ? { isVerified: config.approval === "approved" } : { creatorApprovalStatus: config.approval } },
     options(session)
   );
   if (verification.purpose === "IDENTITY" && config.approval === "approved") {

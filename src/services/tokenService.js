@@ -5,6 +5,7 @@ export function issueAuthTokens(user) {
     sub: user._id.toString(),
     role: user.role,
     email: user.email,
+    authVersion: user.authVersion || 0,
   };
 
   return {

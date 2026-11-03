@@ -7,6 +7,8 @@ const schema = new mongoose.Schema({
   verifiedAt: Date,
   connectAccountId: String,
   bankLast4: String,
+  bankStatus: { type: String, default: "not_started" },
+  bankRequirements: { type: [String], default: [] },
   payoutsEnabled: { type: Boolean, default: false },
   automaticPayout: { type: Boolean, default: true },
   sealRevokedAt: Date,

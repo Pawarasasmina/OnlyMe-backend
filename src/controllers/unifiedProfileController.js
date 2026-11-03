@@ -1,4 +1,5 @@
 import Content from "../models/Content.js";
+import { synchronizeIdentityBadge } from "../services/verifiedCreatorService.js";
 import { storyAudiencesFor } from "../services/storyAudienceService.js";
 import { resolveStorySources } from "../services/storySourceService.js";
 import CreatorProfile from "../models/CreatorProfile.js";
@@ -38,6 +39,7 @@ import { engagementForWallPost, engagementForWallShare, serializeWallPost } from
 const profileModelFor = (owner) => owner.creatorApprovalStatus === "approved" || owner.role === "creator" ? CreatorProfile : FanProfile;
 
 async function loadProfile(owner, viewer) {
+  await synchronizeIdentityBadge(owner);
   const Model = profileModelFor(owner);
   const publishedFilter = { creator: owner._id, status: { $in: ["PUBLISHED", "published"] } };
   const profileOwner = Boolean(viewer?._id && String(viewer._id) === String(owner._id));

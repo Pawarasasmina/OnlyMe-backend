@@ -28,8 +28,22 @@ export function addMonth(date = new Date()) {
   return next;
 }
 
+export async function synchronizeIdentityBadge(user) {
+  if (!user || user.status && user.status !== "active") return user;
+  const [manual, provider] = await Promise.all([
+    CreatorVerification.exists({ creator: user._id, purpose: "IDENTITY", status: "APPROVED", stateSyncPending: false }),
+    IdentityVerification.exists({ user: user._id, status: "verified", sealRevokedAt: null }),
+  ]);
+  if ((manual || provider) && !user.isVerified) {
+    await User.updateOne({ _id: user._id, status: "active", isVerified: { $ne: true } }, { $set: { isVerified: true } });
+    user.isVerified = true;
+  }
+  return user;
+}
+
 export async function expireVerifiedCreator(userId, now = new Date()) {
   if (await CreatorVerification.exists({ creator: userId, purpose: "IDENTITY", status: "APPROVED", stateSyncPending: false })) return null;
+  if (await IdentityVerification.exists({ user: userId, status: "verified", sealRevokedAt: null })) return null;
   const subscription = await VerifiedCreatorSubscription.findOne({
     creator: userId,
     status: "APPROVED",
