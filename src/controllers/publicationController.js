@@ -786,6 +786,12 @@ export const removeMedia = asyncHandler(async (req, res) => {
 export const listPublishedSeens = asyncHandler(async (req, res) => {
   const paging = page(req);
   const filter = { kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } };
+  const requestedCategory = String(req.query.category || "").trim();
+  if (requestedCategory) {
+    const category = SEEN_CATEGORIES.find((item) => item.toLowerCase() === requestedCategory.toLowerCase());
+    if (!category) throw new ApiError(400, "Unsupported Seen category");
+    filter["publishedSnapshot.metadata.category"] = category;
+  }
   let candidateCreatorIds = [];
   if (req.query.creator) {
     candidateCreatorIds = [req.query.creator];
