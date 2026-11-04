@@ -52,11 +52,12 @@ export async function storeFile(file, options = {}) {
     const result = await cloudinary.uploader.upload(file.path, {
       resource_type: resourceType,
       folder,
+      ...(options.deliveryType ? { type: options.deliveryType } : {}),
     });
 
     return {
       id: result.public_id,
-      url: result.secure_url,
+      url: options.deliveryType === "authenticated" ? cloudinary.url(result.public_id, { secure: true, sign_url: true, type: "authenticated", resource_type: result.resource_type || resourceType }) : result.secure_url,
       resourceType: result.resource_type || resourceType,
     };
   } finally {
@@ -96,10 +97,11 @@ export async function deleteStoredFile(fileUrl) {
   }
 }
 
-export async function deleteAsset(publicId, resourceType = "image") {
+export async function deleteAsset(publicId, resourceType = "image", deliveryType = "upload") {
   ensureCloudinaryIsConfigured();
   return cloudinary.uploader.destroy(publicId, {
     resource_type: resourceType,
+    type: deliveryType,
     invalidate: true,
   });
 }

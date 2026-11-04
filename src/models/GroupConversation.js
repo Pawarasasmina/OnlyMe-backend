@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 
 const groupConversationSchema = new mongoose.Schema({
+  worldPublication: { type: mongoose.Schema.Types.ObjectId, ref: "Publication", default: null },
   name: { type: String, required: true, trim: true, maxlength: 60 },
   avatar: { type: String, default: "" },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
@@ -18,6 +19,7 @@ const groupConversationSchema = new mongoose.Schema({
   deletedAt: { type: Date, default: null },
 }, { timestamps: true });
 
+groupConversationSchema.index({ worldPublication: 1, members: 1 });
 groupConversationSchema.index({ members: 1, updatedAt: -1 });
 groupConversationSchema.index({ premiumWorld: 1, isWorldCircle: 1, deletedAt: 1 });
 

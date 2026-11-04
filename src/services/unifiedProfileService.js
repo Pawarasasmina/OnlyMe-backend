@@ -1,6 +1,7 @@
 import { serializeContent } from "./contentAccessService.js";
 import { serializePublication } from "./publicationAccessService.js";
 import { serializeProfileStatus } from "./statusService.js";
+import { profileAccountType, profileCategory } from "../constants/profileCategoryConstants.js";
 
 const safeHttpUrl = (value) => {
   try {
@@ -38,7 +39,7 @@ function completion(owner, roleProfile) {
   return { completed, total: checks.length, percentage: Math.round((completed / checks.length) * 100) };
 }
 
-export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], entitledExperienceIds = new Set(), entitledSeenIds = new Set(), experienceOwnerCounts = new Map(), experiences = [], followerCount = 0, followingCount = 0, seenByCount = 0, media = [], membershipIncludedExperienceIds = new Set(), owner, ownWallPosts = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, profileStories = [], publishedContentCount = content.length, reposts = [], roleProfile, seenOwnerCounts = new Map(), seens = [], series = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [], viewerSeeSignalSent = false, worldMemberCounts = new Map(), worldMemberPreviews = new Map() }) {
+export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], entitledExperienceIds = new Set(), entitledSeenIds = new Set(), experienceOwnerCounts = new Map(), experiences = [], followerCount = 0, followingCount = 0, seenByCount = 0, media = [], membershipIncludedExperienceIds = new Set(), owner, ownWallPosts = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, profileStories = [], publishedContentCount = content.length, reposts = [], roleProfile, seenOwnerCounts = new Map(), seens = [], series = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [], viewerSeeSignalSent = false, worldMemberCounts = new Map(), worldMemberPreviews = new Map(), worldMonthlyIncomeUsd = new Map() }) {
   const capabilities = profileViewerCapabilities(owner, viewer, roleProfile);
   const creatorEnabled = owner.creatorApprovalStatus === "approved" || ["creator", "business"].includes(owner.profileType);
   const contentViewer = capabilities.isOwner ? viewer : null;
@@ -51,7 +52,10 @@ export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], en
     role: owner.role,
     profileType: owner.profileType || (creatorEnabled ? "creator" : "personal"),
     isCreator: creatorEnabled,
+    profileAccountType: profileAccountType(owner),
+    profileCategory: profileCategory(owner, roleProfile || {}),
     displayName: owner.name,
+    friendInviteRingEarned: Boolean(owner.friendInviteRingEarnedAt),
     username: owner.username,
     avatar: owner.avatar || "",
     cover: roleProfile?.coverPhoto || "",
@@ -68,6 +72,7 @@ export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], en
       },
     } : {}),
     joinedAt: owner.createdAt,
+    city: roleProfile?.city || "",
     verified: Boolean(owner.isVerified),
     activeStatus: serializeProfileStatus(owner.activeStatus),
     activeStoryCount: Number(activeStoryCount) || 0,
@@ -88,6 +93,8 @@ export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], en
 
   if (capabilities.isOwner) {
     profile.email = owner.email || "";
+    profile.memberNumber = owner.memberNumber;
+    profile.showMemberNumber = owner.showMemberNumber !== false;
     profile.creatorApprovalStatus = owner.creatorApprovalStatus;
     profile.creatorApplicationStatus = roleProfile?.verificationStatus || "not_submitted";
   }
@@ -108,7 +115,7 @@ export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], en
     wallPosts: ownWallPosts,
     planets: planets.map((item) => {
       const publication = serializePublication(item, contentViewer, { entitlement: premiumMembershipPublicationId && String(item._id) === String(premiumMembershipPublicationId) ? "ACTIVE_PREMIUM_MEMBER" : null });
-      return publication ? { ...publication, memberCount: worldMemberCounts.get(String(item._id)) || 0, memberPreview: worldMemberPreviews.get(String(item._id)) || [] } : null;
+      return publication ? { ...publication, ...(capabilities.isOwner ? { monthlyIncomeUsd: worldMonthlyIncomeUsd.get(String(item._id)) || 0 } : {}), memberCount: worldMemberCounts.get(String(item._id)) || 0, memberPreview: worldMemberPreviews.get(String(item._id)) || [] } : null;
     }).filter(Boolean).slice(0, 3),
     experiences: experiences.map((item) => {
       const publication = serializePublication(item, contentViewer, {

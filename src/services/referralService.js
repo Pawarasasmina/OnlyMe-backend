@@ -26,19 +26,24 @@ export async function resolveReferral(code) {
   return { code: normalized, inviter: { name: inviter.name, username: inviter.username, avatar: inviter.avatar }, type };
 }
 
-export async function attributeReferral({ code, invitee }) {
-  if (!code) return null;
+export async function attributeReferral({ code, invitee, shareIdentity = true }) {
+  if (!shareIdentity || !code) return null;
   const invitation = await resolveReferral(code);
   const inviter = await User.findOne({ username: invitation.inviter.username }).select("_id").lean();
   if (String(inviter._id) === String(invitee._id)) return null;
   const attributedAt = new Date();
   const expiresAt = new Date(attributedAt);
   expiresAt.setMonth(expiresAt.getMonth() + REFERRAL_CONFIG.months);
-  return Referral.findOneAndUpdate(
+  const referral = await Referral.findOneAndUpdate(
     { invitee: invitee._id },
-    { $setOnInsert: { inviter: inviter._id, invitee: invitee._id, code: invitation.code, type: invitation.type, attributedAt, expiresAt } },
+    { $setOnInsert: { inviter: inviter._id, invitee: invitee._id, code: invitation.code, type: invitation.type, attributedAt, expiresAt, rewardEligible: false } },
     { new: true, upsert: true }
   );
+  if (invitation.type === "friend") {
+    const friendIds = await Referral.distinct("invitee", { inviter: inviter._id, type: "friend" });
+    if (await User.countDocuments({ _id: { $in: friendIds }, status: "active" }) >= 3) await User.updateOne({ _id: inviter._id, friendInviteRingEarnedAt: null }, { $set: { friendInviteRingEarnedAt: new Date() } });
+  }
+  return referral;
 }
 
 export async function buildGrowDashboard(user) {

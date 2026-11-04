@@ -52,6 +52,21 @@ export function documentBackRequired(documentType) {
 }
 
 export function assertCompleteApplication(verification) {
+  if (verification.purpose === "IDENTITY") {
+    if (!String(verification.legalFullName || "").trim()) throw new ApiError(400, "Enter your legal full name");
+    if (!verification.dateOfBirth) throw new ApiError(400, "Enter your date of birth");
+    const dob = new Date(verification.dateOfBirth), now = new Date();
+    const adultDate = new Date(now.getUTCFullYear() - 18, now.getUTCMonth(), now.getUTCDate());
+    if (!Number.isFinite(dob.getTime()) || dob > adultDate) throw new ApiError(400, "Identity verification is available from age 18");
+    if (!verification.country?.trim() || !verification.issuingCountry?.trim()) throw new ApiError(400, "Enter your country and the document issuing country");
+    if (!["national_id", "passport", "driver_license"].includes(verification.documentType)) throw new ApiError(400, "Choose an identity document type");
+    if (!verification.documentFront) throw new ApiError(400, "Upload the front of your identity document");
+    if (documentBackRequired(verification.documentType) && !verification.documentBack) throw new ApiError(400, "Upload the back of your identity document");
+    if (!verification.selfieWithDocument || !verification.selfieWithDocument.mimeType?.startsWith("image/")) throw new ApiError(400, "Upload a photo of yourself holding your identity document");
+    if (verification.expiryDate && new Date(verification.expiryDate) < now) throw new ApiError(400, "Your identity document has expired");
+    if (!verification.ageConfirmed || !verification.informationConfirmed || !verification.policyAccepted) throw new ApiError(400, "Confirm your age, information, and consent to identity review");
+    return;
+  }
   if (!String(verification.category || "").trim()) throw new ApiError(400, "Choose what you create");
   if (!verification.socialPages?.some((item) => String(item.handle || "").trim())) throw new ApiError(400, "Add at least one creator page");
   if (!verification.documentFront) throw new ApiError(400, "Upload an identity document");

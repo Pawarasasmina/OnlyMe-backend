@@ -3,7 +3,7 @@ import { env } from "../config/env.js";
 import User from "../models/User.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { expireVerifiedCreator } from "../services/verifiedCreatorService.js";
+import { expireVerifiedCreator, synchronizeIdentityBadge } from "../services/verifiedCreatorService.js";
 
 export const protect = asyncHandler(async (req, _res, next) => {
   const authHeader = req.headers.authorization;
@@ -27,6 +27,7 @@ export const protect = asyncHandler(async (req, _res, next) => {
     throw new ApiError(401, "User not found");
   }
 
+  if ((decoded.authVersion || 0) !== (user.authVersion || 0)) throw new ApiError(401, "Please log in again");
   if (user.status !== "active") {
     throw new ApiError(403, "This account is suspended");
   }
@@ -34,6 +35,7 @@ export const protect = asyncHandler(async (req, _res, next) => {
     throw new ApiError(403, `Account access is restricted until ${user.loginRestrictedUntil.toISOString()}`);
   }
 
+  await synchronizeIdentityBadge(user);
   if (user.isVerified && user.creatorApprovalStatus === "approved") {
     const expired = await expireVerifiedCreator(user._id);
     if (expired) user.isVerified = false;
@@ -57,6 +59,7 @@ export const optionalProtect = asyncHandler(async (req, _res, next) => {
 
   const user = await User.findById(decoded.sub).select("+accountType");
   if (!user) throw new ApiError(401, "User not found");
+  if ((decoded.authVersion || 0) !== (user.authVersion || 0)) throw new ApiError(401, "Please log in again");
   if (user.status !== "active") throw new ApiError(403, "This account is suspended");
   if (user.loginRestrictedUntil && user.loginRestrictedUntil > new Date()) throw new ApiError(403, `Account access is restricted until ${user.loginRestrictedUntil.toISOString()}`);
   req.user = user;

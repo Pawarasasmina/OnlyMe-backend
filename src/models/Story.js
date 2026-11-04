@@ -1,3 +1,4 @@
+import { recordWorldStory } from "../services/membershipRecapService.js";
 import mongoose from "mongoose";
 
 const storySchema = new mongoose.Schema({
@@ -7,6 +8,7 @@ const storySchema = new mongoose.Schema({
     assetId: { type: String, default: "" },
     url: { type: String, default: "" },
     resourceType: { type: String, enum: ["image", "video", "raw"], default: "image" },
+    deliveryType: { type: String, enum: ["upload", "authenticated"], default: "upload" },
   },
   mediaType: { type: String, enum: ["image", "video"], default: "image" },
   sourceType: { type: String, enum: ["original", "seen"], default: "original", index: true },
@@ -21,7 +23,8 @@ const storySchema = new mongoose.Schema({
       drawing: [],
     }),
   },
-  audience: { type: String, enum: ["everyone", "followers", "close_circle", "only_me"], default: "everyone" },
+  audience: { type: String, enum: ["everyone", "followers", "close_circle", "only_me", "world"], default: "everyone" },
+  publishKey: { type: String, default: undefined },
   allowReactions: { type: Boolean, default: true },
   allowReplies: { type: Boolean, default: true },
   allowSharing: { type: Boolean, default: true },
@@ -30,5 +33,8 @@ const storySchema = new mongoose.Schema({
 
 storySchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 storySchema.index({ creator: 1, createdAt: -1 });
+storySchema.index({ creator: 1, publishKey: 1 }, { unique: true, partialFilterExpression: { publishKey: { $type: "string" } } });
+
+storySchema.post("save", async function (doc) { await recordWorldStory(doc); });
 
 export default mongoose.model("Story", storySchema);

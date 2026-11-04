@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { reactToPhoto, getPhotoReactions } from "../controllers/photoReactionController.js";
 import { getOrbitCreators, getOwnProfileConnections, getOwnProfileViewers, getOwnUnifiedProfile, getProfileConnections, getProfileExperiences, getUnifiedProfileByUsername, reportUnifiedProfile, toggleProfileFollow, toggleProfileSeeSignal, updateOwnProfileStatus } from "../controllers/unifiedProfileController.js";
 import { addOwnProfileMedia, addOwnProfileMediaFromSeen, addOwnProfileMediaFromStory, deleteOwnProfileMedia, getOwnProfileMedia, getProfileMediaByUsername, likeProfileMediaByUsername, reportProfileMediaByUsername } from "../controllers/profileMediaController.js";
 import { optionalProtect, protect } from "../middleware/authMiddleware.js";
@@ -26,6 +27,8 @@ router.post("/:username/report", protect, reportUnifiedProfile);
 router.get("/:username/connections", optionalProtect, getProfileConnections);
 router.get("/:username/media", optionalProtect, getProfileMediaByUsername);
 router.put("/:username/media/:mediaId/like", protect, likeProfileMediaByUsername);
+router.put("/:username/media/:mediaId/reaction", protect, reactToPhoto);
+router.get("/:username/media/:mediaId/reactions", optionalProtect, getPhotoReactions);
 router.post("/:username/media/:mediaId/report", protect, reportProfileMediaByUsername);
 router.get("/:username/gifts", optionalProtect, getPublicReceivedGifts);
 router.get("/:username/experiences", optionalProtect, getProfileExperiences);

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { deleteAccount, getMe, login, logout, refreshSession, register, updateProfileType } from "../controllers/authController.js";
+import { deactivateAccount, getAccountOwnership, deleteAccount, getMe, login, logout, refreshSession, register, updateProfileType } from "../controllers/authController.js";
 import { protect } from "../middleware/authMiddleware.js";
 
 const router = Router();
@@ -11,5 +11,7 @@ router.post("/refresh", refreshSession);
 router.get("/me", protect, getMe);
 router.put("/profile-type", protect, updateProfileType);
 router.delete("/account", protect, deleteAccount);
+router.get("/account/ownership", protect, getAccountOwnership);
+router.post("/account/deactivate", protect, deactivateAccount);
 
 export default router;

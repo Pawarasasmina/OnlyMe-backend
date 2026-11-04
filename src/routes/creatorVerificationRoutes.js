@@ -18,6 +18,7 @@ router.use(protect, authorize("fan", "creator"));
 router.get("/", getMyVerification);
 router.put("/seller-information", completeSellerInformation);
 router.put("/draft", saveVerificationDraft);
+router.put("/identity/draft", (req, _res, next) => { req.verificationPurpose = "IDENTITY"; next(); }, saveVerificationDraft);
 router.post("/upload/:documentType", uploadVerificationDocument.single("document"), uploadVerificationFile);
 router.delete("/upload/:documentType", deleteVerificationFile);
 router.post("/submit", submitVerification);

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { CREATOR_PROFILE_CATEGORIES } from "../constants/profileCategoryConstants.js";
 
 const creatorProfileSchema = new mongoose.Schema(
   {
@@ -8,6 +9,7 @@ const creatorProfileSchema = new mongoose.Schema(
     orbitQuote: { type: String, default: "", maxlength: 240 },
     categories: [{ type: String, trim: true }],
     category: { type: String, default: "" },
+    profileCategory: { type: String, enum: CREATOR_PROFILE_CATEGORIES, default: "Digital creator" },
     discoveryPreferences: {
       showMe: { type: String, enum: ["men", "women", "everyone"], default: "everyone" },
       creatorVibe: { type: String, enum: ["fresh", "established", "mature", "any"], default: "any" },
@@ -61,6 +63,7 @@ const creatorProfileSchema = new mongoose.Schema(
       showActivityStatus: { type: Boolean, default: true },
       showLocation: { type: Boolean, default: true },
       allowDiscovery: { type: Boolean, default: true },
+      messageAudience: { type: String, enum: ["everyone", "following", "no_one"], default: undefined },
       allowDirectMessages: { type: Boolean, default: true },
       allowMentions: { type: Boolean, default: true },
       allowTags: { type: Boolean, default: true },
@@ -70,6 +73,7 @@ const creatorProfileSchema = new mongoose.Schema(
       orbitVisibility: { type: String, enum: ["everyone", "followers", "only_me"], default: "everyone" },
     },
     preferredLanguage: { type: String, default: "en" },
+    uiLanguageSelectedAt: { type: Date, default: null },
     timezone: { type: String, default: "UTC" },
     notificationPreferences: {
       email: { type: Boolean, default: true },

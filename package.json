@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "migrate:member-tickets:dry-run": "node src/scripts/migrateMemberTickets.js",
+    "migrate:member-tickets": "node src/scripts/migrateMemberTickets.js --apply",
     "seed:seen-flow": "node src/scripts/seedSeenFlowSamples.js",
     "seed:creator-demos": "node src/scripts/seedCreatorDemoContent.js",
     "seed:creator-stories": "node src/scripts/seedCreatorStories.js",

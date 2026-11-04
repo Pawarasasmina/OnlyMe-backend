@@ -1,5 +1,7 @@
 import { publicationDeliveryUrl } from "./publicationMediaStorageService.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
+import User from "../models/User.js";
+import PremiumMembership from "../models/PremiumMembership.js";
 import { env } from "../config/env.js";
 import { PUBLICATION_VISIBILITIES } from "../constants/publicationConstants.js";
 
@@ -44,7 +46,8 @@ export async function seenVisibilityFilter(viewer, candidateCreatorIds = [], { i
     if (mutualIds.size) filter.push({ visibility: "FRIENDS", creator: { $in: [...mutualIds] } });
     if (includeOwner) filter.push({ creator: viewerId, visibility: { $ne: "LINK_ONLY" } });
   }
-  return { $or: filter };
+  const hidden = await User.find({ status: { $in: ["deactivated", "pending_deletion", "deleted"] } }).select("_id").lean();
+  return { $or: filter, ...(hidden.length ? { $and: [{ creator: { $nin: hidden.map(user => user._id) } }] } : {}) };
 }
 
 export async function canAccessPublicationAudience(publication, viewer, { shareToken = "" } = {}) {
@@ -52,6 +55,10 @@ export async function canAccessPublicationAudience(publication, viewer, { shareT
   const ownerId = item.creator?._id || item.creator;
   if (viewer?.role === "admin") return true;
   if (viewer?._id && String(viewer._id) === String(ownerId)) return true;
+  const owner = await User.findById(ownerId).select("status").lean();
+  if (owner && ["deactivated", "pending_deletion", "deleted"].includes(owner.status)) {
+    return owner.status === "deactivated" && viewer?._id && item.kind !== "SEEN" ? Boolean(await PremiumMembership.exists({ user: viewer._id, creator: ownerId, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } })) : false;
+  }
   const visibility = normalizedVisibility(item.visibility || item.publishedSnapshot?.metadata?.visibility);
   if (visibility === "PUBLIC") return true;
   if (visibility === "LINK_ONLY") return tokenMatches(item, shareToken);
@@ -69,6 +76,9 @@ export function publicationAccess(publication, viewer, { audienceAllowed = null,
   const item = plain(publication); const ownerId = item.creator?._id || item.creator;
   if (viewer?.role === "admin") return "ADMIN";
   if (viewer?._id && String(viewer._id) === String(ownerId)) return "OWNER";
+  if (["pending_deletion", "deleted"].includes(item.creator?.status)) return "NOT_VISIBLE";
+  if (item.creator?.status === "deactivated" && entitlement !== "ACTIVE_PREMIUM_MEMBER") return "NOT_VISIBLE";
+  if (audienceAllowed === false) return "NOT_VISIBLE";
   if (item.status === "REMOVED" || !item.publishedSnapshot) return "NOT_VISIBLE";
   if (!["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED", "ARCHIVED"].includes(item.status)) return "NOT_VISIBLE";
   if (item.kind === "SEEN") {

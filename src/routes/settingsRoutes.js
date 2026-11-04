@@ -1,6 +1,8 @@
+import { muteAccount } from "../controllers/profileController.js";
 import { Router } from "express";
 import {
   getMyAccountSettings,
+  getMyInvitations,
   listMyBlockedAccounts,
   listMyHiddenSeens,
   listMyMutedAccounts,
@@ -16,16 +18,21 @@ import {
   updateMyGiftSettings,
 } from "../controllers/profileController.js";
 import { protect } from "../middleware/authMiddleware.js";
+import { getMonetization, updateMonetization } from "../controllers/monetizationController.js";
 
 const router = Router();
+router.get("/monetization", protect, getMonetization);
+router.put("/monetization", protect, updateMonetization);
 
 router.get("/privacy", protect, getMyPrivacySettings);
+router.get("/invitations", protect, getMyInvitations);
 router.patch("/privacy", protect, updateMyPrivacySettings);
 router.get("/gifts", protect, getMyGiftSettings);
 router.put("/gifts", protect, updateMyGiftSettings);
 router.get("/blocked-accounts", protect, listMyBlockedAccounts);
 router.delete("/blocked-accounts/:userId", protect, unblockAccount);
 router.get("/muted-accounts", protect, listMyMutedAccounts);
+router.put("/muted-accounts/:userId", protect, muteAccount);
 router.delete("/muted-accounts/:userId", protect, unmuteAccount);
 router.get("/hidden-seens", protect, listMyHiddenSeens);
 router.delete("/hidden-seens/:seenId", protect, showHiddenSeenAgain);

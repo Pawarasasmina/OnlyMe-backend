@@ -1,3 +1,4 @@
+import { requireMonetization } from "../services/monetizationService.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { activeDreamGifts, changeDreamStatus, publicDream, saveDream, sendDreamGift } from "../services/dreamService.js";
@@ -5,7 +6,18 @@ import Dream from "../models/Dream.js";
 import ApiError from "../utils/ApiError.js";
 import { deleteAsset, storeFile } from "../services/storageService.js";
 
-export const getDream = asyncHandler(async (req, res) => { const dream = await publicDream(req.params.username); return sendResponse(res, 200, "Dream fetched", { dream, gifts: await activeDreamGifts(dream?.creator?.id) }); });
+export const getDream = asyncHandler(async (req, res) => {
+  const dream = await publicDream(req.params.username, req.user?._id);
+  let acceptingGifts = Boolean(dream && dream.status === "ACTIVE");
+  if (acceptingGifts) {
+    try { await requireMonetization(dream.creator.id, "dream"); }
+    catch (error) {
+      if (error.code !== "MONETIZATION_NOT_ELIGIBLE") throw error;
+      acceptingGifts = false;
+    }
+  }
+  return sendResponse(res, 200, "Dream fetched", { dream: dream ? { ...dream, acceptingGifts } : null, gifts: dream ? await activeDreamGifts(dream.creator.id) : [] });
+});
 export const upsertMine = asyncHandler(async (req, res) => sendResponse(res, 200, "Dream saved", { dream: await saveDream(req.user._id, req.body) }));
 export const completeMine = asyncHandler(async (req, res) => sendResponse(res, 200, "Dream completed", { dream: await changeDreamStatus(req.user._id, req.params.id, "COMPLETED", req.body.version) }));
 export const removeMine = asyncHandler(async (req, res) => sendResponse(res, 200, "Dream removed", { dream: await changeDreamStatus(req.user._id, req.params.id, "REMOVED", req.body.version) }));

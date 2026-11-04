@@ -871,3 +871,10 @@ export const archiveFeedPost = asyncHandler(async (req, res) => {
   await post.save();
   return sendResponse(res, 200, "Post archived", { postId: String(post._id), archived: true });
 });
+
+export const restoreFeedPost = asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid post ID");
+  const post = await FeedPost.findOneAndUpdate({ _id: req.params.id, author: req.user._id, status: "archived", deletedAt: null }, { $set: { status: "published" }, $unset: { archivedAt: 1 } }, { new: true });
+  if (!post) throw new ApiError(404, "Archived post not found");
+  return sendResponse(res, 200, "Post restored", { postId: String(post._id), restored: true });
+});
