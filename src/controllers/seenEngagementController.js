@@ -449,7 +449,7 @@ export const reportSeen = asyncHandler(async (req, res) => {
 
   if (String(publication.creator) === String(req.user._id)) throw new ApiError(400, "You cannot report your own content");
   const reason = cleanString(req.body.reason || "OTHER", 80).toUpperCase().replaceAll(/[^A-Z0-9]+/g, "_");
-  const allowed = new Set(["SPAM", "FALSE_INFORMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "OTHER"]);
+  const allowed = new Set(["SPAM", "FALSE_INFORMATION", "DEFAMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "IMPERSONATION", "CHILD_SAFETY", "OTHER"]);
   if (!allowed.has(reason)) throw new ApiError(400, "Select a valid report reason");
   const scope = publication.kind === "SEEN" ? "SEEN" : "WORLD";
   if (await MessageReport.exists({ reporter: req.user._id, publication: publication._id, scope })) throw new ApiError(409, "You already reported this content");

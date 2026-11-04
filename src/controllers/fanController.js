@@ -222,7 +222,7 @@ function notificationActivity(notification, giftThanksByKey = new Map()) {
     acknowledged: Boolean(notification.acknowledgedAt || notification.readAt),
     read: Boolean(notification.readAt),
     createdAt: notification.createdAt,
-    actionPath: isWarning ? "/settings/support/safety" : notification.type === "membership_cancelled" ? "/memberships" : null,
+    actionPath: notification.metadata?.appealUrl || (isWarning ? "/settings/support/safety" : notification.type === "membership_cancelled" ? "/memberships" : null),
     dedupeKey: notification.dedupeKey || null,
     canAcknowledge: true,
   });

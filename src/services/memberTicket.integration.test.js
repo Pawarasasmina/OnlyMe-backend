@@ -23,6 +23,8 @@ test("concurrent allocations, user assignment, and synced visibility", { skip: p
     assert.deepEqual([...numbers].sort((a, b) => a - b), Array.from({ length: 20 }, (_, i) => i + 1));
     const user = await User.create({ name: "Ticket Test", username: "tickettest", email: "ticket@example.com", password: "TestPassword123" });
     assert.equal(user.memberNumber, 21);
+    await User.collection.insertOne({ name: "Imported User", username: "importeduser", email: "imported@example.com", password: "unused", memberNumber: 83 });
+    assert.equal(await nextMemberNumber(), 84);
     await User.updateOne({ _id: user._id }, { $set: { memberNumber: 9999 } });
     assert.equal((await User.findById(user._id)).memberNumber, 21);
     await FanProfile.create({ user: user._id, privacySettings: { allowMentions: false } });

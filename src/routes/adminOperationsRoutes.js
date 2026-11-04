@@ -1,0 +1,32 @@
+import { Router } from "express";
+import { protect } from "../middleware/authMiddleware.js";
+import { authorize } from "../middleware/roleMiddleware.js";
+import { requireAdminRole } from "../middleware/adminPermissionMiddleware.js";
+import { actionUnifiedReport, createLegalHold, exportHistory, getAdminUserDetail, getFinancialUser, getModerationPolicy, getOperationsDashboard, getUnifiedReport, holdPayouts, listAppeals, listAuditEvents, listLegalHolds, listUnifiedReports, releaseLegalHold, releasePayouts, reviewAppeal, searchGovernanceTargets, updateModerationPolicy, enforceUser } from "../controllers/adminOperationsController.js";
+
+import { exportContentHistory, exportUserPackage } from "../controllers/adminExportController.js";
+
+const router = Router();
+router.use(protect, authorize("admin"));
+router.get("/operations/dashboard", requireAdminRole("MAIN_ADMIN", "MODERATOR"), getOperationsDashboard);
+router.get("/reports", requireAdminRole("MAIN_ADMIN", "MODERATOR"), listUnifiedReports);
+router.get("/reports/:model/:id", requireAdminRole("MAIN_ADMIN", "MODERATOR"), getUnifiedReport);
+router.post("/reports/:model/:id/action", requireAdminRole("MAIN_ADMIN", "MODERATOR"), actionUnifiedReport);
+router.get("/appeals", requireAdminRole("MAIN_ADMIN", "MODERATOR"), listAppeals);
+router.post("/appeals/:id/review", requireAdminRole("MAIN_ADMIN", "MODERATOR"), reviewAppeal);
+router.get("/moderation-policy", requireAdminRole("MAIN_ADMIN", "MODERATOR"), getModerationPolicy);
+router.put("/moderation-policy", requireAdminRole("MAIN_ADMIN"), updateModerationPolicy);
+router.get("/users/:id/investigation", requireAdminRole("MAIN_ADMIN", "MODERATOR"), getAdminUserDetail);
+router.post("/users/:id/enforce", requireAdminRole("MAIN_ADMIN", "MODERATOR"), enforceUser);
+router.get("/audit-log", requireAdminRole("MAIN_ADMIN"), listAuditEvents);
+router.get("/governance/targets", requireAdminRole("MAIN_ADMIN"), searchGovernanceTargets);
+router.post("/legal-holds", requireAdminRole("MAIN_ADMIN"), createLegalHold);
+router.get("/legal-holds", requireAdminRole("MAIN_ADMIN"), listLegalHolds);
+router.post("/legal-holds/:id/release", requireAdminRole("MAIN_ADMIN"), releaseLegalHold);
+router.get("/exports/history", requireAdminRole("MAIN_ADMIN"), exportHistory);
+router.get("/exports/content", requireAdminRole("MAIN_ADMIN"), exportContentHistory);
+router.get("/exports/user-package", requireAdminRole("MAIN_ADMIN"), exportUserPackage);
+router.get("/finance/users/:id", requireAdminRole("MAIN_ADMIN", "FINANCE"), getFinancialUser);
+router.post("/finance/users/:id/payout-hold", requireAdminRole("MAIN_ADMIN", "FINANCE"), holdPayouts);
+router.post("/finance/users/:id/payout-release", requireAdminRole("MAIN_ADMIN", "FINANCE"), releasePayouts);
+export default router;

@@ -8,9 +8,11 @@ import { uploadContentMedia, uploadVoiceMessage } from "../middleware/uploadMidd
 import { blockSeenCreator, commentOnSeen, getSeenEngagement, hideSeen, listSeenReactors, listWorldWalkers, markWorldWalked, muteSeenCreator, reactToSeen, reactToSeenComment, removeSeenComment, removeSeenCommentReaction, removeSeenReaction, removeSeenShare, reportSeen, shareSeen, toggleSeenSave } from "../controllers/seenEngagementController.js";
 import { getPublicationPoll, votePublicationPoll } from "../controllers/publicationPollController.js";
 import { generate as generateAiSeen, linkPublication as linkAiSeenPublication, start as startAiSeen, status as aiSeenStatus } from "../controllers/aiSeenController.js";
+import { requireNoContentHold, requirePostingAccess } from "../middleware/accountRestrictionMiddleware.js";
+import { reportChapter } from "../controllers/reportingController.js";
 
 const router = Router();
-const creator = [protect, authorize("fan", "creator"), requireApprovedCreatorOrSeenOwner];
+const creator = [protect, authorize("fan", "creator"), requireApprovedCreatorOrSeenOwner, requirePostingAccess];
 
 router.get("/ai-seen/status", protect, authorize("fan", "creator"), aiSeenStatus);
 router.post("/ai-seen/start", protect, authorize("fan", "creator"), startAiSeen);
@@ -56,7 +58,7 @@ router.delete("/mine/:id/world-management/moderators/:userId", ...creator, remov
 router.get("/mine/:id", ...creator, getMine);
 router.post("/drafts", ...creator, createDraft);
 router.put("/mine/:id", ...creator, updateDraft);
-router.delete("/mine/:id", ...creator, removePlanet);
+router.delete("/mine/:id", ...creator, requireNoContentHold, removePlanet);
 router.post("/mine/:id/chapters", ...creator, createChapter);
 router.put("/mine/:id/chapters/:chapterId", ...creator, editChapter);
 router.patch("/mine/:id/chapters/:chapterId/world-bonus", ...creator, setWorldBonusChapter);
@@ -71,7 +73,7 @@ router.post("/mine/:id/resubmit", ...creator, resubmit);
 router.post("/mine/:id/archive", ...creator, archive);
 router.post("/mine/:id/restore", ...creator, restore);
 router.put("/mine/:id/pin", ...creator, pinSeen);
-router.delete("/mine/:id/seen", ...creator, removeSeen);
+router.delete("/mine/:id/seen", ...creator, requireNoContentHold, removeSeen);
 router.get("/mine/:id/insights", ...creator, getSeenInsights);
 router.get("/:id/engagement", optionalProtect, getSeenEngagement);
 router.get("/:id/reactions", optionalProtect, listSeenReactors);
@@ -88,6 +90,7 @@ router.post("/:id/hide", protect, authorize("fan", "creator"), hideSeen);
 router.post("/:id/mute-creator", protect, authorize("fan", "creator"), muteSeenCreator);
 router.put("/:id/block-creator", protect, authorize("fan", "creator"), blockSeenCreator);
 router.post("/:id/report", protect, authorize("fan", "creator"), reportSeen);
+router.post("/:id/chapters/:chapterId/report", protect, authorize("fan", "creator"), reportChapter);
 router.get("/:id", optionalProtect, getPublishedPublication);
 
 export default router;

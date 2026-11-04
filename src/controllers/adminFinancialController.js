@@ -15,6 +15,10 @@ import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { financialModeForAccountType } from "../constants/accountTypeConstants.js";
+import AdminAuditEvent from "../models/AdminAuditEvent.js";
+import { effectiveAdminRole } from "../middleware/adminPermissionMiddleware.js";
+
+const financialAudit = (req, action, targetId, reason, after = null) => AdminAuditEvent.create({ actor: req.user._id, actorRole: effectiveAdminRole(req.user), action, targetType: "FINANCIAL_RECORD", targetId: String(targetId), reason: requiredReason(reason), after });
 
 const objectId = (value) => {
   if (!mongoose.isObjectIdOrHexString(value)) throw new ApiError(400, "A valid financial record identifier is required", "INVALID_FINANCIAL_ID");
@@ -49,6 +53,7 @@ export const creditStars = asyncHandler(async (req, res) => {
     const posted = await creditWallet({ user: target._id, amount, entryType: "CREDIT_ADMIN", entryRole: "ADMIN_CREDIT", referenceType: "ADMIN_CREDIT", referenceId: command._id, command, idempotencyKey: key, counterpartyUser: req.user._id, metadata: { reason, adminUser: String(req.user._id), legacyWalletReset: Boolean(reset), previousBalance: reset?.previous.balance, previousCurrency: reset?.previous.currency } }, session);
     return { resultReference: posted.entry._id, wallet: safeWallet(posted.wallet, command.financialMode), credit: { starsAmount: amount, createdAt: posted.entry.createdAt }, legacyReset: reset ? { previousBalance: reset.previous.balance, previousCurrency: reset.previous.currency } : null };
   });
+  await financialAudit(req, "ADMIN_STARS_CREDITED", target._id, reason, { starsAmount: amount, resultReference: result.resultReference });
   return sendResponse(res, 200, "Stars credited", result);
 });
 
@@ -123,8 +128,9 @@ export const activateFanWallet = asyncHandler(async (req, res) => {
     const activated = await activateWalletLedger({ user: target._id, openingBalance, reason, admin: req.user._id, command, idempotencyKey: key }, session);
     return { resultReference: activated.entry?._id || activated.wallet._id, wallet: safeWallet(activated.wallet), activation: { openingBalance, previousBalance: activated.previous.balance, previousCurrency: activated.previous.currency, activatedAt: activated.wallet.ledgerActivatedAt } };
   });
+  await financialAudit(req, "WALLET_LEDGER_ACTIVATED", target._id, reason, { openingBalance, resultReference: result.resultReference });
   return sendResponse(res, 200, "Wallet ledger activated", result);
 });
 
-export const refundWorldEntitlement = asyncHandler(async (req, res) => sendResponse(res, 200, "World purchase refunded", await refundWorld({ admin: req.user, entitlementId: objectId(req.params.id), key: req.body.idempotencyKey, reason: req.body.reason })));
-export const refundPremiumMembership = asyncHandler(async (req, res) => sendResponse(res, 200, "Premium period refunded", await refundPremium({ admin: req.user, membershipId: objectId(req.params.id), key: req.body.idempotencyKey, reason: req.body.reason })));
+export const refundWorldEntitlement = asyncHandler(async (req, res) => { const result = await refundWorld({ admin: req.user, entitlementId: objectId(req.params.id), key: req.body.idempotencyKey, reason: req.body.reason }); await financialAudit(req, "REFUND_WORLD", req.params.id, req.body.reason, { resultReference: result.resultReference }); return sendResponse(res, 200, "World purchase refunded", result); });
+export const refundPremiumMembership = asyncHandler(async (req, res) => { const result = await refundPremium({ admin: req.user, membershipId: objectId(req.params.id), key: req.body.idempotencyKey, reason: req.body.reason }); await financialAudit(req, "REFUND_PREMIUM", req.params.id, req.body.reason, { resultReference: result.resultReference }); return sendResponse(res, 200, "Premium period refunded", result); });

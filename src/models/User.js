@@ -29,6 +29,7 @@ const userSchema = new mongoose.Schema(
       trim: true,
       lowercase: true,
     },
+    phone: { type: String, trim: true, maxlength: 40, default: "", index: true },
     password: {
       type: String,
       required: true,
@@ -43,6 +44,14 @@ const userSchema = new mongoose.Schema(
       enum: ["fan", "creator", "admin"],
       default: "fan",
     },
+    adminRole: {
+      type: String,
+      enum: ["MAIN_ADMIN", "MODERATOR", "FINANCE"],
+      default: undefined,
+      index: true,
+    },
+    adminCreatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    adminTwoFactorEnabled: { type: Boolean, default: false },
     accountType: {
       type: String,
       enum: ACCOUNT_TYPES,
@@ -62,8 +71,6 @@ const userSchema = new mongoose.Schema(
       enum: ["en", "ar", "ru", "uk", "es", "pt", "fr", "de"],
       default: "en",
     },
-    memberNumber: { type: Number, unique: true, sparse: true, index: true },
-    showMemberNumber: { type: Boolean, default: true },
     businessContact: {
       call: { type: String, trim: true, maxlength: 80, default: "" },
       directions: { type: String, trim: true, maxlength: 500, default: "" },
@@ -86,7 +93,7 @@ const userSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["active", "suspended", "deactivated", "pending_deletion", "deleted"],
+      enum: ["active", "suspended", "banned", "deactivated", "pending_deletion", "deleted"],
       default: "active",
     },
     deletionRequestedAt: { type: Date, default: null },
@@ -106,6 +113,11 @@ const userSchema = new mongoose.Schema(
     loginRestrictedUntil: { type: Date, default: null, index: true },
     loginRestrictionReason: { type: String, trim: true, maxlength: 1000, default: "" },
     loginRestrictedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    postingRestrictedUntil: { type: Date, default: null, index: true },
+    postingRestrictionReason: { type: String, trim: true, maxlength: 2000, default: "" },
+    sellingRestrictedUntil: { type: Date, default: null, index: true },
+    sellingRestrictionReason: { type: String, trim: true, maxlength: 2000, default: "" },
+    profileModerationHiddenAt: { type: Date, default: null, index: true },
     lastSeenAt: { type: Date, default: null },
     pinnedMessageGroup: { type: mongoose.Schema.Types.ObjectId, ref: "GroupConversation", default: null },
     activeStatus: {
@@ -190,6 +202,7 @@ userSchema.methods.passwordChangedAfter = function passwordChangedAfter(jwtIssue
 };
 
 userSchema.index({ role: 1, status: 1, creatorApprovalStatus: 1 });
+userSchema.index({ role: 1, adminRole: 1, status: 1 });
 userSchema.index({ accountType: 1, status: 1 });
 userSchema.index({ profileType: 1, status: 1 });
 userSchema.index({ username: 1, status: 1 });

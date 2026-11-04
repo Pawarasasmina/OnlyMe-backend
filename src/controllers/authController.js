@@ -14,8 +14,10 @@ import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyt
 import { env } from "../config/env.js";
 import jwt from "jsonwebtoken";
 import { attributeReferral, resolveReferral } from "../services/referralService.js";
-import PlatformCounter from "../models/PlatformCounter.js";
+import { nextMemberNumber } from "../services/memberTicketService.js";
 import { accountOwnershipSummary, canRestoreAccount, changeAccountOwnership } from "../services/accountOwnershipService.js";
+import AdminLoginEvent from "../models/AdminLoginEvent.js";
+import { verifyTotp } from "../utils/totp.js";
 
 void mongoose;
 
@@ -41,6 +43,8 @@ function sanitizeUser(user) {
     profileCategory: user.profileCategory,
     email: user.email,
     role: effectiveRole,
+    adminRole: effectiveRole === "admin" ? (user.adminRole || "MAIN_ADMIN") : null,
+    adminTwoFactorEnabled: effectiveRole === "admin" ? Boolean(user.adminTwoFactorEnabled) : null,
     profileType: user.profileType || (effectiveRole === "creator" ? "creator" : "personal"),
     accountRole: user.role === "admin" ? "admin" : "fan",
     creatorApprovalStatus: user.creatorApprovalStatus,
@@ -53,8 +57,6 @@ function sanitizeUser(user) {
     onboardingChecklist: user.onboardingChecklist,
     dateOfBirth: user.dateOfBirth,
     preferredLanguage: user.preferredLanguage || "en",
-    memberNumber: user.memberNumber || null,
-    showMemberNumber: user.showMemberNumber !== false,
     businessContact: user.businessContact || {},
     businessContactButtons: user.businessContactButtons || [],
     businessContactButtonsConfigured: Boolean(user.businessContactButtonsConfigured),
@@ -82,24 +84,6 @@ async function recordAuthAnalytics(req, user, eventType) {
   if (!sessionId) return;
   await recordAnalyticsEvent({ eventType: "SESSION_STARTED", req, sessionId, source: "unknown", userId: user._id });
   await recordAnalyticsEvent({ eventType, req, sessionId, source: "unknown", userId: user._id });
-}
-
-async function nextMemberNumber() {
-  const highest = await User.findOne({ memberNumber: { $type: "number" } })
-    .sort({ memberNumber: -1 })
-    .select("memberNumber")
-    .lean();
-  await PlatformCounter.updateOne(
-    { key: "platform-members" },
-    { $max: { value: Number(highest?.memberNumber || 0) }, $setOnInsert: { key: "platform-members" } },
-    { upsert: true }
-  );
-  const counter = await PlatformCounter.findOneAndUpdate(
-    { key: "platform-members" },
-    { $inc: { value: 1 } },
-    { new: true }
-  );
-  return counter.value;
 }
 
 export const register = asyncHandler(async (req, res) => {
@@ -163,6 +147,11 @@ export const login = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Invalid email or password");
   }
 
+  if (user.role === "admin" && user.adminTwoFactorEnabled) {
+    const profile = await AdminProfile.findOne({ user: user._id }).select("+twoFactorSecret");
+    if (!profile?.twoFactorSecret || !verifyTotp(profile.twoFactorSecret, req.body.twoFactorCode)) throw new ApiError(401, "Enter the current six-digit authenticator code", "ADMIN_2FA_REQUIRED");
+  }
+
   if (canRestoreAccount(user)) {
     const restored = await User.findOneAndUpdate({ _id: user._id, status: user.status, ...(user.status === "pending_deletion" ? { deletionScheduledAt: { $gt: new Date() } } : {}) }, { $set: { status: "active", deactivatedAt: null, deletionRequestedAt: null, deletionScheduledAt: null } }, { new: true });
     if (restored) Object.assign(user, { status: restored.status, deactivatedAt: null, deletionRequestedAt: null, deletionScheduledAt: null });
@@ -180,6 +169,14 @@ export const login = asyncHandler(async (req, res) => {
       { $set: { lastLoginAt: new Date() }, $setOnInsert: { user: user._id } },
       { upsert: true }
     );
+    const ua = String(req.get("User-Agent") || "").toLowerCase();
+    const deviceType = /ipad|tablet/.test(ua) ? "tablet" : /mobile|iphone|android/.test(ua) ? "mobile" : ua ? "desktop" : "unknown";
+    await AdminLoginEvent.create({ user: user._id, outcome: "SUCCESS", ip: String(req.ip || "").slice(0, 100), userAgent: String(req.get("User-Agent") || "").slice(0, 500), deviceType });
+  }
+  if (user.role !== "admin") {
+    const ua = String(req.get("User-Agent") || "").toLowerCase();
+    const deviceType = /ipad|tablet/.test(ua) ? "tablet" : /mobile|iphone|android/.test(ua) ? "mobile" : ua ? "desktop" : "unknown";
+    await AdminLoginEvent.create({ user: user._id, outcome: "SUCCESS", ip: String(req.ip || "").slice(0, 100), userAgent: String(req.get("User-Agent") || "").slice(0, 500), deviceType });
   }
 
   const tokens = issueAuthTokens(user);

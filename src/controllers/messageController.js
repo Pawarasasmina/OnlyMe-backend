@@ -934,7 +934,7 @@ export const forwardMessage = asyncHandler(async (req, res) => {
   return sendResponse(res, 201, "Message forwarded", { results });
 });
 
-const REPORT_REASONS = new Set(["SPAM", "HARASSMENT", "HATE", "SEXUAL_CONTENT", "VIOLENCE", "SCAM", "OTHER"]);
+const REPORT_REASONS = new Set(["SPAM", "HARASSMENT", "HATE", "DEFAMATION", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "SCAM", "COPYRIGHT", "IMPERSONATION", "CHILD_SAFETY", "OTHER"]);
 function reportInput(req) {
   const reason = String(req.body.reason || "").trim().toUpperCase();
   const details = String(req.body.details || "").trim();
@@ -953,6 +953,9 @@ export const reportMessage = asyncHandler(async (req, res) => {
   if (!message) throw new ApiError(404, "Message not found");
   const reportedUser = String(message.sender) === String(req.user._id) ? message.recipient : message.sender;
   const input = reportInput(req);
+    const pair = { $or: [{ sender: message.sender, recipient: message.recipient }, { sender: message.recipient, recipient: message.sender }] };
+    const [before, after] = await Promise.all([Message.find({ ...pair, createdAt: { $lte: message.createdAt } }).sort({ createdAt: -1 }).limit(4).lean(), Message.find({ ...pair, createdAt: { $gt: message.createdAt } }).sort({ createdAt: 1 }).limit(3).lean()]);
+    const context = [...before.reverse(), ...after].map((item) => ({ messageId: String(item._id), senderId: String(item.sender), body: item.body, mediaType: item.mediaType, createdAt: item.createdAt, reported: String(item._id) === String(message._id) }));
   try {
     const report = await MessageReport.create({
       reporter: req.user._id,
@@ -971,6 +974,7 @@ export const reportMessage = asyncHandler(async (req, res) => {
         video: message.video,
         createdAt: message.createdAt,
         deletedAt: message.deletedAt,
+          context,
       },
     });
     return sendResponse(res, 201, "Report received", { reportId: String(report._id), status: report.status });
@@ -985,7 +989,7 @@ export const reportConversation = asyncHandler(async (req, res) => {
   const input = reportInput(req);
   const rows = await Message.find({
     $or: [{ sender: req.user._id, recipient: other._id }, { sender: other._id, recipient: req.user._id }],
-  }).sort({ _id: -1 }).limit(100).lean();
+    }).sort({ _id: -1 }).limit(7).lean();
   if (!rows.length) throw new ApiError(404, "Conversation not found");
   const report = await MessageReport.create({
     reporter: req.user._id,

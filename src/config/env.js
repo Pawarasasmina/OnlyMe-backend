@@ -41,6 +41,7 @@ export const env = {
   maxVoiceNoteDurationSeconds: Math.max(1, Number(process.env.MAX_VOICE_NOTE_DURATION_SECONDS) || 300),
   maxVoiceNoteSizeBytes: Math.max(1, Number(process.env.MAX_VOICE_NOTE_SIZE_MB) || 20) * 1024 * 1024,
   enableAdminStarCredits: process.env.ENABLE_ADMIN_STAR_CREDITS === "true",
+  uploadScanWebhookSecret: process.env.UPLOAD_SCAN_WEBHOOK_SECRET || "",
   stunUrls: (process.env.WEBRTC_STUN_URLS || "stun:stun.l.google.com:19302").split(",").map((value) => value.trim()).filter(Boolean),
   turnUrls: (process.env.WEBRTC_TURN_URLS || "").split(",").map((value) => value.trim()).filter(Boolean),
   turnUsername: process.env.WEBRTC_TURN_USERNAME || "",

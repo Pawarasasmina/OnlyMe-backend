@@ -15,6 +15,7 @@ import { sendResponse } from "../utils/response.js";
 import ApiError from "../utils/ApiError.js";
 import { financialModeForAccountType } from "../constants/accountTypeConstants.js";
 import { monthlyWalletSpending, SPENDING_LIMIT_OPTIONS_USD, validSpendingLimit } from "../services/walletSpendingService.js";
+import PayoutHold from "../models/PayoutHold.js";
 
 const TOPUP_PACKS = {
   "4.99": { usd: 4.99, bonus: 0 },
@@ -135,6 +136,8 @@ export const convertIncomeToCoins = asyncHandler(async (req, res) => {
 });
 
 export const withdrawCreatorIncome = asyncHandler(async (req, res) => {
+  if (req.user.sellingRestrictedUntil && req.user.sellingRestrictedUntil > new Date()) throw new ApiError(403, `Payouts are restricted until ${req.user.sellingRestrictedUntil.toISOString()}`, "PAYOUT_RESTRICTED");
+  if (await PayoutHold.exists({ user: req.user._id, active: true })) throw new ApiError(403, "Payouts are currently on administrative hold", "PAYOUT_ON_HOLD");
   if (req.body.method != null && req.body.method !== "standard") throw new ApiError(400, "This payout method is unavailable", "PAYOUT_METHOD_UNAVAILABLE");
   if (!(await manualPayoutIdentityStatus(req.user)).bankReady) throw new ApiError(409, "Admin identity and bank approval are required before requesting payouts", "BANK_NOT_APPROVED");
   const key = idempotencyKey(req.body.idempotencyKey);
