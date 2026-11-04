@@ -15,7 +15,7 @@ export function profileViewerCapabilities(owner, viewer, roleProfile = null) {
   const isOwner = Boolean(viewer?._id && String(viewer._id) === String(owner._id));
   const consumerOwner = ["fan", "creator"].includes(owner.role);
   const consumerViewer = ["fan", "creator"].includes(viewer?.role);
-  const approved = consumerOwner && owner.creatorApprovalStatus === "approved";
+  const approved = consumerOwner && (owner.creatorApprovalStatus === "approved" || ["creator", "business"].includes(owner.profileType));
   return {
     isOwner,
     canEditProfile: isOwner,
@@ -40,7 +40,7 @@ function completion(owner, roleProfile) {
 
 export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], entitledExperienceIds = new Set(), entitledSeenIds = new Set(), experienceOwnerCounts = new Map(), experiences = [], followerCount = 0, followingCount = 0, seenByCount = 0, media = [], membershipIncludedExperienceIds = new Set(), owner, ownWallPosts = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, profileStories = [], publishedContentCount = content.length, reposts = [], roleProfile, seenOwnerCounts = new Map(), seens = [], series = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [], viewerSeeSignalSent = false, worldMemberCounts = new Map(), worldMemberPreviews = new Map() }) {
   const capabilities = profileViewerCapabilities(owner, viewer, roleProfile);
-  const creatorEnabled = owner.creatorApprovalStatus === "approved";
+  const creatorEnabled = owner.creatorApprovalStatus === "approved" || ["creator", "business"].includes(owner.profileType);
   const contentViewer = capabilities.isOwner ? viewer : null;
   const socialLinks = creatorEnabled
     ? (roleProfile?.socialLinks || []).map((item) => ({ platform: item.platform, url: safeHttpUrl(item.url) })).filter((item) => item.url)
@@ -49,6 +49,7 @@ export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], en
     id: roleProfile?._id,
     ownerUserId: owner._id,
     role: owner.role,
+    profileType: owner.profileType || (creatorEnabled ? "creator" : "personal"),
     isCreator: creatorEnabled,
     displayName: owner.name,
     username: owner.username,
@@ -58,6 +59,14 @@ export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], en
     categories: creatorEnabled ? (roleProfile?.categories?.length ? roleProfile.categories : roleProfile?.category ? [roleProfile.category] : []) : [],
     location: [roleProfile?.city, roleProfile?.country].filter(Boolean).join(", "),
     socialLinks,
+    ...(owner.profileType === "business" ? {
+      businessContact: {
+        enabled: owner.businessContactButtonsConfigured ? (owner.businessContactButtons || []) : ["call", "directions", "website"],
+        call: roleProfile?.phoneNumber || owner.businessContact?.call || "",
+        directions: [roleProfile?.city, roleProfile?.country].filter(Boolean).join(", ") || owner.businessContact?.directions || "",
+        website: socialLinks.find((item) => String(item.platform).toLowerCase() === "website")?.url || safeHttpUrl(owner.businessContact?.website) || "",
+      },
+    } : {}),
     joinedAt: owner.createdAt,
     verified: Boolean(owner.isVerified),
     activeStatus: serializeProfileStatus(owner.activeStatus),

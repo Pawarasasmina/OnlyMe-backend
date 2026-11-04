@@ -107,7 +107,12 @@ export function validateSuggestedPeoplePayload(payload = {}) {
 export function validateProfileType(payload = {}) {
   const profileType = sanitizeText(payload.profileType, 20).toLowerCase();
   if (!PROFILE_TYPES.includes(profileType)) throw new ApiError(400, "Choose Personal, Creator, or Business");
-  return profileType;
+  const category = sanitizeText(payload.category, 40);
+  const contactButtons = [...new Set((Array.isArray(payload.contactButtons) ? payload.contactButtons : [])
+    .map((value) => sanitizeText(value, 20).toLowerCase()))]
+    .filter((value) => ["call", "directions", "website"].includes(value));
+  if (["creator", "business"].includes(profileType) && !category) throw new ApiError(400, "Choose a category");
+  return { category, contactButtons, profileType };
 }
 
 export function validateChecklistEvent(payload = {}) {

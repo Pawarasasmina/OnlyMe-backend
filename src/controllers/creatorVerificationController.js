@@ -6,6 +6,8 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { performVerificationSubmission } from "../services/verificationSubmissionService.js";
 import { sendResponse } from "../utils/response.js";
 import ApiError from "../utils/ApiError.js";
+import User from "../models/User.js";
+import { ageOn } from "../services/monetizationEligibilityService.js";
 import {
   assertDocumentField,
   assertEditableStatus,
@@ -72,6 +74,7 @@ export function serializeCreatorVerification(verification) {
 }
 
 async function getOrCreateVerification(creatorId) {
+  const user = await User.findById(creatorId).select("dateOfBirth").lean();
   const fanProfile = await FanProfile.findOne({ user: creatorId }).lean();
   await CreatorProfile.updateOne(
     { user: creatorId },
@@ -90,12 +93,47 @@ async function getOrCreateVerification(creatorId) {
     } },
     { upsert: true, runValidators: true }
   );
-  return CreatorVerification.findOneAndUpdate(
+  const verification = await CreatorVerification.findOneAndUpdate(
     { creator: creatorId },
-    { $setOnInsert: { creator: creatorId, status: "NOT_STARTED" } },
+    { $setOnInsert: { creator: creatorId, status: "NOT_STARTED", dateOfBirth: user?.dateOfBirth || null } },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
+  if (!verification.dateOfBirth && user?.dateOfBirth) {
+    verification.dateOfBirth = user.dateOfBirth;
+    await verification.save();
+  }
+  return verification;
 }
+
+export const completeSellerInformation = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user._id).select("dateOfBirth profileType").lean();
+  if (!user?.dateOfBirth) throw new ApiError(409, "Add your birthday to your account before selling");
+  if (ageOn(user.dateOfBirth) < 18) throw new ApiError(403, "Money features are available from age 18", "SELLER_MUST_BE_ADULT");
+
+  const legalFullName = String(req.body.legalFullName || "").trim();
+  const country = String(req.body.country || "").trim();
+  const address = String(req.body.address || "").trim();
+  const phoneNumber = String(req.body.phoneNumber || "").trim();
+  if (!legalFullName || !country || !address || !phoneNumber) throw new ApiError(400, "Complete name, country, address and phone");
+  if (legalFullName.length > 150 || country.length > 80 || address.length > 300 || phoneNumber.length > 30) throw new ApiError(400, "Seller information is too long");
+
+  const now = new Date();
+  const verification = await CreatorVerification.findOneAndUpdate(
+    { creator: req.user._id },
+    { $set: {
+      legalFullName, country, address, phoneNumber,
+      dateOfBirth: user.dateOfBirth,
+      ageConfirmed: true,
+      informationConfirmed: true,
+      status: "APPROVED",
+      submittedAt: now,
+      reviewedAt: now,
+      creatorVisibleMessage: "Seller information complete",
+    } },
+    { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
+  );
+  return sendResponse(res, 200, "Seller information saved", { verification: serializeCreatorVerification(verification) });
+});
 
 async function addCreatorHistory(verification, action, previousStatus, newStatus) {
   await VerificationReviewHistory.create({

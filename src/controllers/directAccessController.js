@@ -12,6 +12,8 @@ import { sendResponse } from "../utils/response.js";
 import { hasCreatorAccess, isConsumerAccount } from "../utils/accountCapabilities.js";
 import { activeDirectAccessWindow, createDirectAccessMessageAtomic, creatorTypicalReplyHours, openDirectAccessWindow, processDueDirectAccessWindows, refundDirectAccessWindow, serializeDAWindow } from "../services/directAccessService.js";
 import { financialModeForAccountType } from "../constants/accountTypeConstants.js";
+import { assertCreatorCanMonetize, monetizationEligibility } from "../services/monetizationEligibilityService.js";
+import CreatorVerification from "../models/CreatorVerification.js";
 
 const validId = (value) => {
   if (!mongoose.isValidObjectId(value)) throw new ApiError(400, "Invalid account id");
@@ -22,10 +24,12 @@ export const getDirectAccessOffer = asyncHandler(async (req, res) => {
   const profile = await CreatorProfile.findOne({ user: req.params.creatorId }).select("directAccessEnabled directAccessPriceStars directCallEnabled directCallPriceStars directCallDurationMinutes directCallAutoDeclineAway").lean();
   if (!profile) throw new ApiError(404, "Creator profile not found");
   const active = isConsumerAccount(req.user) ? await activeDirectAccessWindow(req.user._id, req.params.creatorId) : null;
-  const [wallet, membership] = isConsumerAccount(req.user) ? await Promise.all([
+  const [wallet, membership, sellerVerification] = isConsumerAccount(req.user) ? await Promise.all([
     Wallet.findOne({ user: req.user._id }).select("balance testBalance").lean(),
     PremiumMembership.findOne({ user: req.user._id, creator: req.params.creatorId, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }).select("currentPeriodStart currentPeriodEnd directAccessAllowancePeriodStart directAccessAllowanceUsedAt").lean(),
-  ]) : [null, null];
+    CreatorVerification.findOne({ creator: req.params.creatorId }).select("status ageConfirmed dateOfBirth legalFullName country address").lean(),
+  ]) : [null, null, null];
+  const sellerAllowed = monetizationEligibility(sellerVerification).allowed;
   const allowanceAvailable = Boolean(membership && (
     !membership.directAccessAllowanceUsedAt
     || String(membership.directAccessAllowancePeriodStart) !== String(membership.currentPeriodStart)
@@ -33,9 +37,9 @@ export const getDirectAccessOffer = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Direct Access offer fetched", {
     // An active Premium membership includes one Direct Access window for the
     // current period even when the creator is not selling paid windows.
-    enabled: Boolean(profile.directAccessEnabled || allowanceAvailable),
+    enabled: Boolean(sellerAllowed && (profile.directAccessEnabled || allowanceAvailable)),
     priceStars: profile.directAccessPriceStars || 100,
-    callEnabled: Boolean(profile.directCallEnabled),
+    callEnabled: Boolean(sellerAllowed && profile.directCallEnabled),
     callPriceStars: profile.directCallPriceStars || 500,
     callDurationMinutes: profile.directCallDurationMinutes || 5,
     callAutoDeclineAway: Boolean(profile.directCallAutoDeclineAway),
@@ -50,6 +54,7 @@ export const getDirectAccessOffer = asyncHandler(async (req, res) => {
 
 export const updateDirectAccessSettings = asyncHandler(async (req, res) => {
   if (!hasCreatorAccess(req.user)) throw new ApiError(403, "Only approved creators can configure Direct Access");
+  if (req.body.enabled === true || req.body.callEnabled === true) await assertCreatorCanMonetize(req.user._id);
   const priceStars = Number(req.body.priceStars);
   if (!Number.isSafeInteger(priceStars) || priceStars < 10 || priceStars > 10000) throw new ApiError(400, "Direct Access price must be between 10 and 10,000 Stars");
   const callPriceStars = Number(req.body.callPriceStars ?? 500);
@@ -74,6 +79,7 @@ export const updateDirectAccessSettings = asyncHandler(async (req, res) => {
 
 export const openWindow = asyncHandler(async (req, res) => {
   validId(req.params.creatorId);
+  await assertCreatorCanMonetize(req.params.creatorId);
   const result = await openDirectAccessWindow({
     fan: req.user,
     creatorId: req.params.creatorId,

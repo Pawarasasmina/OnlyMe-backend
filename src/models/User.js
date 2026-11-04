@@ -63,6 +63,8 @@ const userSchema = new mongoose.Schema(
       directions: { type: String, trim: true, maxlength: 500, default: "" },
       website: { type: String, trim: true, maxlength: 500, default: "" },
     },
+    businessContactButtons: [{ type: String, enum: ["call", "directions", "website"] }],
+    businessContactButtonsConfigured: { type: Boolean, default: false },
     creatorApprovalStatus: {
       type: String,
       enum: ["pending", "approved", "rejected", "suspended", null],

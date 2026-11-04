@@ -36,7 +36,7 @@ import { normalizeUsername } from "../validators/profileValidator.js";
 import { serializePost } from "./postController.js";
 import { engagementForWallPost, engagementForWallShare, serializeWallPost } from "./wallController.js";
 
-const profileModelFor = (owner) => owner.creatorApprovalStatus === "approved" || owner.role === "creator" ? CreatorProfile : FanProfile;
+const profileModelFor = (owner) => owner.creatorApprovalStatus === "approved" || owner.role === "creator" || ["creator", "business"].includes(owner.profileType) ? CreatorProfile : FanProfile;
 
 async function loadProfile(owner, viewer) {
   const Model = profileModelFor(owner);

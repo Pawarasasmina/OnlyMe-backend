@@ -119,6 +119,8 @@ function serializeUser(user) {
     preferredLanguage: user.preferredLanguage || "en",
     memberNumber: user.memberNumber || null,
     showMemberNumber: user.showMemberNumber !== false,
+    businessContactButtons: user.businessContactButtons || [],
+    businessContactButtonsConfigured: Boolean(user.businessContactButtonsConfigured),
     dateOfBirth: user.dateOfBirth || null,
     onboarding: normalizedOnboarding(user),
     createdAt: user.createdAt,
@@ -241,10 +243,13 @@ export async function saveInterests(user, interests) {
   return getOnboardingState(updated);
 }
 
-export async function saveProfileType(user, profileType) {
+export async function saveProfileType(user, selection) {
   requireConsumerRole(user);
+  const { category, contactButtons = [], profileType } = typeof selection === "string" ? { category: "", contactButtons: [], profileType: selection } : selection;
   const updated = await patchOnboarding(user._id, {
     profileType,
+    businessContactButtons: profileType === "business" ? contactButtons : [],
+    businessContactButtonsConfigured: profileType === "business",
     "onboarding.status": "in_progress",
     "onboarding.version": 2,
     "onboarding.currentStep": "fill-feed",
@@ -254,7 +259,7 @@ export async function saveProfileType(user, profileType) {
   if (["creator", "business"].includes(profileType)) {
     await CreatorProfile.findOneAndUpdate(
       { user: user._id },
-      { $setOnInsert: { user: user._id, verificationStatus: "pending" } },
+      { $set: { category, categories: [category] }, $setOnInsert: { user: user._id, verificationStatus: "pending" } },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
   }
@@ -279,8 +284,9 @@ export async function saveInstincts(user, preferences) {
 
 export async function getSuggestedPeople(user, options = {}) {
   requireConsumerRole(user);
-  const orbit = await buildOrbitForUser(user, { limit: options.limit || 12 });
-  return (orbit.recommendations || []).slice(0, options.limit || 12).map((item) => ({
+  const limit = options.limit || 12;
+  const orbit = await buildOrbitForUser(user, { limit });
+  const personalized = (orbit.recommendations || []).slice(0, limit).map((item) => ({
     id: item.id,
     name: item.name,
     username: item.username,
@@ -294,6 +300,45 @@ export async function getSuggestedPeople(user, options = {}) {
     reason: item.reason,
     profileRoute: item.profileRoute,
   }));
+  if (personalized.length >= limit) return personalized;
+
+  const excluded = new Set([String(user._id), ...personalized.map((item) => String(item.id))]);
+  const followedIds = await ProfileRelationship.distinct("target", { actor: user._id, type: "FOLLOW" });
+  followedIds.forEach((id) => excluded.add(String(id)));
+  const candidates = await User.find({
+    _id: { $nin: [...excluded] },
+    role: { $in: ["fan", "creator"] },
+    status: "active",
+  }).select("name username avatar isVerified role profileType activeStatus lastSeenAt").sort({ avatar: -1, lastSeenAt: -1, createdAt: -1 }).limit(limit - personalized.length).lean();
+  if (!candidates.length) return personalized;
+
+  const ids = candidates.map((candidate) => candidate._id);
+  const [fanProfiles, creatorProfiles] = await Promise.all([
+    FanProfile.find({ user: { $in: ids } }).select("user bio city country interests").lean(),
+    CreatorProfile.find({ user: { $in: ids } }).select("user bio city country categories category").lean(),
+  ]);
+  const fanByUser = new Map(fanProfiles.map((profile) => [String(profile.user), profile]));
+  const creatorByUser = new Map(creatorProfiles.map((profile) => [String(profile.user), profile]));
+  const additional = candidates.map((candidate) => {
+    const professional = ["creator", "business"].includes(candidate.profileType) || candidate.role === "creator";
+    const profile = professional ? creatorByUser.get(String(candidate._id)) || fanByUser.get(String(candidate._id)) : fanByUser.get(String(candidate._id)) || creatorByUser.get(String(candidate._id));
+    const categories = profile?.categories?.length ? profile.categories : profile?.category ? [profile.category] : profile?.interests || [];
+    return {
+      id: candidate._id,
+      name: candidate.name,
+      username: candidate.username,
+      avatar: candidate.avatar || "",
+      cover: "",
+      verified: Boolean(candidate.isVerified),
+      status: candidate.activeStatus?.isActive ? candidate.activeStatus.label : "",
+      location: { city: profile?.city || "", country: profile?.country || "" },
+      categories,
+      bio: profile?.bio || "",
+      reason: categories.length ? `Interested in ${categories.slice(0, 2).join(" and ")}` : "New on @seen",
+      profileRoute: `/profile/${candidate.username}`,
+    };
+  });
+  return [...personalized, ...additional].slice(0, limit);
 }
 
 export async function saveSuggestedPeople(user, targetUserIds) {
