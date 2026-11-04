@@ -26,7 +26,6 @@ import { canAccessPublicationAudience, seenVisibilityFilter } from "../services/
 import { publicationDeliveryUrl } from "../services/publicationMediaStorageService.js";
 import { getWallSawYouToday } from "../services/wallSeenTodayService.js";
 import { serializeProfileStatus } from "../services/statusService.js";
-import { personalizeCandidates } from "../services/recommendationService.js";
 import { readAnalyticsSessionId, recordAnalyticsEvent } from "../services/analyticsEventService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -65,7 +64,30 @@ const DEFAULT_SETTINGS = {
 const MAX_LIMIT = 18;
 const DEFAULT_LIMIT = 8;
 const SESSION_WINDOW = 1000 * 60 * 30;
+const SLIDES_CACHE_TTL = 5 * 60_000;
+const slidesCache = new Map();
 const REPORT_REASONS = new Set(["SPAM", "HARASSMENT", "HATE", "SEXUAL_CONTENT", "VIOLENCE", "SCAM", "OTHER"]);
+
+function slidesCacheKey(req) {
+  return [req.user?._id, req.query.filter || "for_you", req.query.topic || "", req.query.cursor || "0", req.query.limit || DEFAULT_LIMIT].join(":");
+}
+
+function readSlidesCache(req) {
+  if (req.query.view !== "slides" || req.query.refreshToken) return null;
+  const key = slidesCacheKey(req);
+  const cached = slidesCache.get(key);
+  if (!cached || cached.expiresAt <= Date.now()) {
+    slidesCache.delete(key);
+    return null;
+  }
+  return cached.data;
+}
+
+function writeSlidesCache(req, data) {
+  if (req.query.view !== "slides" || req.query.refreshToken) return;
+  if (slidesCache.size >= 200) slidesCache.delete(slidesCache.keys().next().value);
+  slidesCache.set(slidesCacheKey(req), { data, expiresAt: Date.now() + SLIDES_CACHE_TTL });
+}
 
 function roleProfileModel(role, creatorApprovalStatus = null) {
   return role === "creator" || creatorApprovalStatus === "approved" ? CreatorProfile : FanProfile;
@@ -789,6 +811,8 @@ async function discoverSidebar(viewer, profiles) {
 }
 
 export const getDiscover = asyncHandler(async (req, res) => {
+  const cachedSlides = readSlidesCache(req);
+  if (cachedSlides) return sendResponse(res, 200, "Discover fetched", cachedSlides);
   const viewerModel = roleProfileModel(req.user.role, req.user.creatorApprovalStatus);
   const slidesOnly = req.query.view === "slides";
   const [viewerProfile, initialBlockedIds, followingCount] = await Promise.all([
@@ -825,6 +849,11 @@ export const getDiscover = asyncHandler(async (req, res) => {
   }
   const creatorIds = visibleProfiles.map((profile) => profile.user._id);
   const seenAudienceFilter = await seenVisibilityFilter(req.user, creatorIds);
+  // Start the independent relationship/story work immediately. Previously it
+  // began only after the first large query batch and then added several more
+  // sequential Atlas round trips to every Discover load.
+  const connectionsPromise = discoverConnections({ blockedIds, previewByCreator: new Map(), viewerId: req.user._id });
+  const viewerWalksPromise = SeenEngagement.find({ user: req.user._id, type: "WALKED" }).select("publication").lean();
   const [followerCounts, subscriberCounts, worldCounts, following, publications, seens, posts, stories, signalTargetIds, dreamByCreator] = await Promise.all([
     countsBy(ProfileRelationship, { target: { $in: creatorIds }, type: "FOLLOW" }, "target"),
     slidesOnly ? Promise.resolve(new Map()) : countsBy(Subscription, { creator: { $in: creatorIds }, status: { $in: ["active", "ACTIVE", "cancel_at_period_end", "CANCEL_AT_PERIOD_END"] } }, "creator"),
@@ -879,8 +908,8 @@ export const getDiscover = asyncHandler(async (req, res) => {
     entitlementIdsFor(req.user, publications),
     SeenEngagement.find({ user: req.user._id, publication: { $in: publications.map((item) => item._id) }, type: "SAVE" }).select("publication").lean(),
     countsBy(SeenEngagement, { publication: { $in: visibleSeens.map((item) => item._id) } }, "publication"),
-    discoverConnections({ blockedIds, previewByCreator, viewerId: req.user._id }),
-    SeenEngagement.find({ user: req.user._id, type: "WALKED" }).select("publication").lean(),
+    connectionsPromise,
+    viewerWalksPromise,
   ]);
   const savedPublicationIds = new Set(savedOfferRows.map((item) => String(item.publication)));
   const creators = visibleProfiles.map((profile, index) => serializeCreator(profile, { ...meta, reason: reasonFor(profile, index, viewerProfile) }));
@@ -964,9 +993,11 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const filteredSlides = requestedTopic && topicCounts.has(requestedTopic)
     ? baseSlides.filter((slide) => (slide.match?.tags || []).some((tag) => cleanText(tag, 40).toLowerCase() === requestedTopic))
     : baseSlides;
-  const personalizedSlides = filter === "for_you"
-    ? await personalizeCandidates({ exposureLimit: limit, items: filteredSlides, req, surface: "DISCOVER" })
-    : { items: filteredSlides, recommendation: null };
+  // `allSlides` is already personalized above with the viewer profile, interests,
+  // location, follow graph and engagement counts. Running the generic
+  // recommendation pipeline here repeated several remote database reads and an
+  // exposure write, pushing a normal Discover load beyond the client's timeout.
+  const personalizedSlides = { items: filteredSlides, recommendation: null };
   const pageSlides = personalizedSlides.items.slice(filter === "for_you" ? 0 : cursor, filter === "for_you" ? limit : cursor + limit).map(publicSlide);
   const nextCursor = cursor + limit < filteredSlides.length ? String(cursor + limit) : null;
   const cityGroups = new Map();
@@ -985,7 +1016,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const localProfiles = selectedCityGroup?.profiles || [];
   const localProfileIds = new Set(localProfiles.map((profile) => String(profile.user?._id || profile.user)));
   const localStories = stories.filter((story) => localProfileIds.has(String(story.creator?._id || story.creator)));
-  const localTonight = followingCount < 10 && localProfiles.length ? {
+  const localTonight = localProfiles.length ? {
     city: localCity,
     title: `${localCity} tonight`,
     subtitle: `${localStories.length || localProfiles.length} ${localStories.length === 1 ? "story" : "stories"} · last hours`,
@@ -994,7 +1025,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
   } : null;
 
   if (slidesOnly) {
-    return sendResponse(res, 200, "Discover fetched", {
+    const slidesPayload = {
       recommendations: pageSlides,
       pagination: {
         nextCursor,
@@ -1013,7 +1044,9 @@ export const getDiscover = asyncHandler(async (req, res) => {
       following: connections.following,
       sharedWalks,
       settings,
-    });
+    };
+    writeSlidesCache(req, slidesPayload);
+    return sendResponse(res, 200, "Discover fetched", slidesPayload);
   }
 
   const seenToday = await getWallSawYouToday(req.user, { limit: 1 });
