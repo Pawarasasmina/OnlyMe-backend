@@ -11,7 +11,7 @@ import PlatformRevenue from "../models/PlatformRevenue.js";
 import Conversation from "../models/Conversation.js";
 import Notification from "../models/Notification.js";
 import Message from "../models/Message.js";
-import { captureDirectAccessWindow, createDirectAccessMessageAtomic, openDirectAccessWindow, refundDirectAccessWindow } from "./directAccessService.js";
+import { captureDirectAccessWindow, createDirectAccessMessageAtomic, openDirectAccessWindow, processDueDirectAccessWindows, refundDirectAccessWindow } from "./directAccessService.js";
 
 const uri = process.env.TEST_MONGODB_URI;
 let fan;
@@ -71,6 +71,27 @@ test("unanswered expiry refund is idempotent and restores the full fan amount", 
   assert.equal(attempts.filter((item) => item.status === "fulfilled").length, 1);
   assert.equal(await StarsLedgerEntry.countDocuments({ entryType: "DA_REFUND_CREDIT", referenceId: opened.window.id }), 1);
   assert.equal((await Wallet.findOne({ user: fan._id })).balance, 400);
+});
+
+test("48-hour expiry worker automatically refunds an unanswered window in full", { skip: !uri }, async () => {
+  await DAWindow.updateMany({}, { $unset: { activeWindowKey: 1 } });
+  const balanceBefore = (await Wallet.findOne({ user: fan._id })).balance;
+  const opened = await openDirectAccessWindow({ fan, creatorId: creator._id, key: "da-open-worker-refund" });
+  const expiredAt = new Date("2026-01-03T00:00:00.000Z");
+  await DAWindow.updateOne(
+    { _id: opened.window.id },
+    { $set: { expiresAt: new Date("2026-01-02T23:59:59.000Z") } },
+  );
+
+  const result = await processDueDirectAccessWindows(expiredAt);
+  const refunded = await DAWindow.findById(opened.window.id);
+
+  assert.equal(result.refunded, 1);
+  assert.equal(refunded.status, "EXPIRED");
+  assert.equal(refunded.settlementStatus, "REFUNDED");
+  assert.equal(refunded.activeWindowKey, undefined);
+  assert.equal(await StarsLedgerEntry.countDocuments({ entryType: "DA_REFUND_CREDIT", referenceId: opened.window.id }), 1);
+  assert.equal((await Wallet.findOne({ user: fan._id })).balance, balanceBefore);
 });
 
 test("fan message creation and three-message allowance are atomic", { skip: !uri }, async () => {

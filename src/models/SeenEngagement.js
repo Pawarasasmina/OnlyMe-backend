@@ -2,14 +2,14 @@ import mongoose from "mongoose";
 import { ACCOUNT_TYPES, DEFAULT_ACCOUNT_TYPE } from "../constants/accountTypeConstants.js";
 
 export const SEEN_REACTIONS = [
-  "LIKE",
+  "SEE_YOU",
   "LOVE",
   "FIRE",
-  "CLAP",
-  "LAUGH",
-  "SEE_YOU",
-  "WOW",
   "TEARY",
+  "LAUGH",
+  "LIKE",
+  "CLAP",
+  "WOW",
   "ADMIRE",
   "SAD",
   "HUG",

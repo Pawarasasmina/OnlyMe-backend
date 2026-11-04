@@ -60,21 +60,35 @@ export const getWallet = asyncHandler(async (req, res) => {
   const incomeStars = Math.max(0, Number(income[0]?.stars || 0));
   const { pendingIncomeStars, availableIncomeStars } = withdrawalBalances(earnedBalance, recentIncome[0]?.stars);
   const autoTotals = automaticSummary[0] || { count: 0, starsPerMonth: 0 };
-  return sendResponse(res, 200, "Wallet fetched", { wallet: { balance, bonusBalance, purchasedBalance, earnedBalance, version: wallet?.version || 0, currency: "STARS", role: req.user.role, starsPerUsd, lifetimeIncomeStars: incomeStars, pendingIncomeStars, availableIncomeStars, withdrawalHoldHours: 24, withdrawalMinimumUsd: 20, balanceUsd: balance / starsPerUsd, incomeUsd: earnedBalance / starsPerUsd, pendingIncomeUsd: pendingIncomeStars / starsPerUsd, availableIncomeUsd: availableIncomeStars / starsPerUsd, automaticIncome: { activeSubscriptions: Number(autoTotals.count || 0), starsPerMonth: Number(autoTotals.starsPerMonth || 0), usdPerMonth: Number(autoTotals.starsPerMonth || 0) / starsPerUsd, items: automaticMemberships.map((membership) => ({ id: membership._id, subscriber: membership.user ? { name: membership.user.name, username: membership.user.username, avatar: membership.user.avatar || "" } : null, world: { id: membership.premiumPublication?._id, title: membership.premiumPublication?.title || membership.premiumPublication?.publishedSnapshot?.metadata?.title || "Premium World" }, stars: membership.starsPerPeriod, usd: membership.starsPerPeriod / starsPerUsd, nextRenewalAt: membership.currentPeriodEnd })) } } });
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const spentRows = await StarsLedgerEntry.aggregate([{ $match: { accountUser: req.user._id, ...ledgerMode, direction: "DEBIT", createdAt: { $gte: monthStart }, entryRole: { $nin: ["INCOME_CONVERSION_SOURCE"] } } }, { $group: { _id: null, stars: { $sum: "$starsAmount" } } }]);
+  const monthlySpent = Number(spentRows[0]?.stars || 0);
+  return sendResponse(res, 200, "Wallet fetched", { wallet: { balance, bonusBalance, purchasedBalance, earnedBalance, version: wallet?.version || 0, currency: "STARS", role: req.user.role, starsPerUsd, monthlySpendingLimit: wallet?.monthlySpendingLimit ?? null, monthlySpent, monthlyRemaining: wallet?.monthlySpendingLimit ? Math.max(0, wallet.monthlySpendingLimit - monthlySpent) : null, lifetimeIncomeStars: incomeStars, pendingIncomeStars, availableIncomeStars, withdrawalHoldHours: 24, withdrawalMinimumUsd: 20, balanceUsd: balance / starsPerUsd, incomeUsd: earnedBalance / starsPerUsd, pendingIncomeUsd: pendingIncomeStars / starsPerUsd, availableIncomeUsd: availableIncomeStars / starsPerUsd, automaticIncome: { activeSubscriptions: Number(autoTotals.count || 0), starsPerMonth: Number(autoTotals.starsPerMonth || 0), usdPerMonth: Number(autoTotals.starsPerMonth || 0) / starsPerUsd, items: automaticMemberships.map((membership) => ({ id: membership._id, subscriber: membership.user ? { name: membership.user.name, username: membership.user.username, avatar: membership.user.avatar || "" } : null, world: { id: membership.premiumPublication?._id, title: membership.premiumPublication?.title || membership.premiumPublication?.publishedSnapshot?.metadata?.title || "Premium World" }, stars: membership.starsPerPeriod, usd: membership.starsPerPeriod / starsPerUsd, nextRenewalAt: membership.currentPeriodEnd })) } } });
+});
+
+export const updateSpendingLimit = asyncHandler(async (req, res) => {
+  const raw = req.body.monthlySpendingLimit;
+  const monthlySpendingLimit = raw === null || raw === "" ? null : Number(raw);
+  if (monthlySpendingLimit !== null && (!Number.isSafeInteger(monthlySpendingLimit) || monthlySpendingLimit < 1 || monthlySpendingLimit > 1000000)) throw new ApiError(400, "Monthly spending limit must be a whole number between 1 and 1,000,000 coins", "INVALID_SPENDING_LIMIT");
+  const wallet = await Wallet.findOneAndUpdate({ user: req.user._id }, { $set: { monthlySpendingLimit }, $setOnInsert: { currency: "STARS" } }, { new: true, upsert: true });
+  return sendResponse(res, 200, "Monthly spending limit updated", { monthlySpendingLimit: wallet.monthlySpendingLimit });
 });
 
 export const topUpWallet = asyncHandler(async (req, res) => {
   const key = idempotencyKey(req.body.idempotencyKey);
-  const pack = TOPUP_PACKS[String(req.body.packUsd)];
-  if (!pack) throw new ApiError(400, "Choose a valid top-up pack", "INVALID_TOPUP_PACK");
   const starsPerUsd = await getStarExchangeRate();
-  const baseStars = Math.round(pack.usd * starsPerUsd);
-  const totalStars = baseStars + pack.bonus;
+  const exactStars = req.body.exactStars === undefined ? null : positiveStars(req.body.exactStars);
+  const pack = exactStars === null ? TOPUP_PACKS[String(req.body.packUsd)] : null;
+  if (exactStars === null && !pack) throw new ApiError(400, "Choose a valid top-up pack", "INVALID_TOPUP_PACK");
+  const baseStars = exactStars ?? Math.round(pack.usd * starsPerUsd);
+  const bonusStars = pack?.bonus || 0;
+  const usdAmount = pack?.usd ?? Number((baseStars / starsPerUsd).toFixed(2));
+  const totalStars = baseStars + bonusStars;
   const result = await executeFinancialCommand(
-    { user: req.user._id, commandType: "WALLET_TOPUP", idempotencyKey: key, requestFingerprint: fingerprint({ packUsd: pack.usd, baseStars, bonusStars: pack.bonus, starsPerUsd }) },
+    { user: req.user._id, commandType: "WALLET_TOPUP", idempotencyKey: key, requestFingerprint: fingerprint({ packUsd: pack?.usd || null, exactStars, baseStars, bonusStars, starsPerUsd }) },
     async (session, command) => {
-      const posted = await creditWallet({ user: req.user._id, amount: totalStars, bonusAmount: pack.bonus, entryType: "WALLET_TOPUP_CREDIT", entryRole: "USER_TOPUP", referenceType: "WALLET_TOPUP", referenceId: command._id, command, idempotencyKey: key, metadata: { usdAmount: pack.usd, starsPerUsd, baseStars, bonusStars: pack.bonus, temporaryCheckout: true } }, session);
-      return { resultReference: posted.entry._id, wallet: safeWallet(posted.wallet, command.financialMode), topUp: { usd: pack.usd, baseStars, bonusStars: pack.bonus, totalStars } };
+      const posted = await creditWallet({ user: req.user._id, amount: totalStars, bonusAmount: bonusStars, entryType: "WALLET_TOPUP_CREDIT", entryRole: "USER_TOPUP", referenceType: "WALLET_TOPUP", referenceId: command._id, command, idempotencyKey: key, metadata: { usdAmount, starsPerUsd, baseStars, bonusStars, exactTopUp: exactStars !== null, temporaryCheckout: true } }, session);
+      return { resultReference: posted.entry._id, wallet: safeWallet(posted.wallet, command.financialMode), topUp: { usd: usdAmount, baseStars, bonusStars, totalStars } };
     },
   );
   return sendResponse(res, 200, "Wallet topped up", result);

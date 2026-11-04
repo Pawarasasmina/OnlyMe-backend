@@ -10,14 +10,17 @@ import {
   recordChecklistEvent,
   saveInstincts,
   saveInterests,
+  saveProfileType,
   saveSuggestedPeople,
   saveWelcome,
   skipOnboarding,
+  acknowledgeTicket,
 } from "../services/onboardingService.js";
 import {
   validateChecklistEvent,
   validateInstinctPreferences,
   validateInterestIds,
+  validateProfileType,
   validateSuggestedPeoplePayload,
 } from "../validators/onboardingValidator.js";
 
@@ -46,6 +49,14 @@ export const getSuggestions = asyncHandler(async (req, res) => {
 
 export const putPeople = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Onboarding people saved", await saveSuggestedPeople(req.user, validateSuggestedPeoplePayload(req.body)));
+});
+
+export const putProfileType = asyncHandler(async (req, res) => {
+  return sendResponse(res, 200, "Account type saved", await saveProfileType(req.user, validateProfileType(req.body)));
+});
+
+export const putTicket = asyncHandler(async (req, res) => {
+  return sendResponse(res, 200, "Ticket acknowledged", await acknowledgeTicket(req.user));
 });
 
 export const putChecklist = asyncHandler(async (req, res) => {

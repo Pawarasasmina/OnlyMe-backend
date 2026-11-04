@@ -2,12 +2,16 @@ import PremiumMembership from "../models/PremiumMembership.js";
 import Notification from "../models/Notification.js";
 import Publication from "../models/Publication.js";
 import WorldWaitlist from "../models/WorldWaitlist.js";
+import Wallet from "../models/Wallet.js";
+import StarsLedgerEntry from "../models/StarsLedgerEntry.js";
+import GroupConversation from "../models/GroupConversation.js";
 import { executeFinancialCommand } from "./financialCommandService.js";
 import { creditWallet, debitWallet, transferStars, safeWallet } from "./walletLedgerService.js";
 import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
-import { PREMIUM_PRICE_PRESETS, PREMIUM_WORLD_DEFAULT_CAPACITY } from "../constants/publicationConstants.js";
+import { PREMIUM_WORLD_DEFAULT_CAPACITY } from "../constants/publicationConstants.js";
 import ApiError from "../utils/ApiError.js";
 import { FINANCIAL_ERROR_CODES } from "../constants/financialConstants.js";
+import { sendWorldCancellationEmail, sendWorldRenewalReminderEmail } from "./emailService.js";
 
 export const PREMIUM_PERIOD_DAYS = 30;
 export const nextPremiumPeriod = (value) =>
@@ -87,14 +91,22 @@ export async function joinPremium({ user, publicationId, key }) {
       if (existingWaiting) return { resultReference: existingWaiting._id, queued: true, waitingList: await waitingSummary(existingWaiting, session), access: "WAITING_LIST" };
 
       const price = publication.publishedSnapshot.metadata?.pricing?.starsAmount;
-      if (!PREMIUM_PRICE_PRESETS.includes(price))
+      if (!Number.isSafeInteger(price) || price < 1)
         throw new ApiError(
           409,
-          "Premium price is invalid",
+          "Published World price is invalid",
           FINANCIAL_ERROR_CODES.PUBLICATION_NOT_PURCHASABLE,
         );
       const introEnabled = Boolean(publication.publishedSnapshot.metadata?.firstMonthOfferEnabled ?? publication.firstMonthOfferEnabled);
       const firstPeriodPrice = firstPremiumPeriodPrice(price, introEnabled);
+      const wallet = await Wallet.findOne({ user: user._id }).session(session).lean();
+      if (wallet?.monthlySpendingLimit) {
+        const now = new Date();
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const spent = await StarsLedgerEntry.aggregate([{ $match: { accountUser: user._id, direction: "DEBIT", createdAt: { $gte: monthStart }, entryRole: { $nin: ["INCOME_CONVERSION_SOURCE"] } } }, { $group: { _id: null, stars: { $sum: "$starsAmount" } } }]).session(session);
+        const monthlySpent = Number(spent[0]?.stars || 0);
+        if (monthlySpent + firstPeriodPrice > wallet.monthlySpendingLimit) throw new ApiError(422, `This purchase would exceed your monthly Wallet limit by ${monthlySpent + firstPeriodPrice - wallet.monthlySpendingLimit} coins`, "MONTHLY_SPENDING_LIMIT_EXCEEDED");
+      }
       const capacity = publication.worldSeatCapacity ?? PREMIUM_WORLD_DEFAULT_CAPACITY;
       const occupied = await PremiumMembership.countDocuments({ premiumPublication: publication._id, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }).session(session);
       if (occupied >= capacity) {
@@ -165,6 +177,7 @@ export async function joinPremium({ user, publicationId, key }) {
         ],
         { session },
       );
+      await GroupConversation.updateMany({ premiumWorld: publication._id, isWorldCircle: true, deletedAt: null }, { $addToSet: { members: user._id } }, { session });
       return {
         resultReference: membership._id,
         membership: summary(membership),
@@ -305,7 +318,7 @@ export async function getWorldWaitlistStatus(userId, publicationId) {
 
 export async function cancelPremium({ user, membershipId, key }) {
   key = idempotencyKey(key);
-  return executeFinancialCommand(
+  const result = await executeFinancialCommand(
     {
       user: user._id,
       commandType: "CANCEL_PREMIUM",
@@ -329,9 +342,25 @@ export async function cancelPremium({ user, membershipId, key }) {
       membership.canceledAt = new Date();
       membership.membershipVersion += 1;
       await membership.save({ session });
+      const publication = await Publication.findById(membership.premiumPublication).select("title").session(session).lean();
+      await Notification.updateOne(
+        { dedupeKey: `premium-cancel:${String(membership._id)}:${String(membership.membershipVersion)}` },
+        { $setOnInsert: {
+          user: user._id,
+          type: "premium_membership_cancelled",
+          title: "Membership cancellation confirmed",
+          message: `${publication?.title || "Your World"} stays open until ${membership.currentPeriodEnd.toISOString()}. No further renewal will be charged.`,
+          dedupeKey: `premium-cancel:${String(membership._id)}:${String(membership.membershipVersion)}`,
+        } },
+        { upsert: true, session },
+      );
       return { resultReference: membership._id, membership: summary(membership) };
     },
   );
+  const membership = await PremiumMembership.findOne({ _id: membershipId, user: user._id }).select("premiumPublication currentPeriodEnd").lean();
+  const publication = membership ? await Publication.findById(membership.premiumPublication).select("title").lean() : null;
+  const email = membership ? await sendWorldCancellationEmail({ currentPeriodEnd: membership.currentPeriodEnd, idempotencyKey: key, user, worldTitle: publication?.title }).catch(() => ({ delivered: false, reason: "DELIVERY_FAILED" })) : { delivered: false, reason: "MEMBERSHIP_MISSING" };
+  return { ...result, email };
 }
 
 export async function resumePremium({ user, membershipId, key }) {
@@ -488,10 +517,28 @@ export async function renewPremiumMembership(membershipId, now = new Date()) {
 }
 
 let renewalRunActive = false;
-export async function processDuePremiumMemberships(now = new Date()) {
+export const premiumReminderWindow = (now = new Date()) => ({ after: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000), before: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000 + 60 * 1000) });
+
+export async function processPremiumRenewalReminders(now = new Date(), io = null) {
+  const window = premiumReminderWindow(now);
+  const memberships = await PremiumMembership.find({ status: "ACTIVE", cancelAtPeriodEnd: false, currentPeriodEnd: { $gte: window.after, $lt: window.before } }).populate("user", "name email").populate("premiumPublication", "title").limit(200).lean();
+  let sent = 0;
+  for (const membership of memberships) {
+    const dedupeKey = `premium-renewal-reminder:${membership._id}:${new Date(membership.currentPeriodEnd).toISOString()}`;
+    const inserted = await Notification.updateOne({ dedupeKey }, { $setOnInsert: { user: membership.user?._id || membership.user, type: "premium_renewal_reminder", title: `${membership.premiumPublication?.title || "Your World"} renews in 3 days`, message: `${membership.starsPerPeriod} coins will be charged on ${new Date(membership.currentPeriodEnd).toISOString()}. Top up, manage, or cancel anytime.`, dedupeKey } }, { upsert: true });
+    if (!inserted.upsertedCount) continue;
+    sent += 1;
+    io?.to(`user:${String(membership.user?._id || membership.user)}`).emit("activity:updated", { type: "premium_renewal_reminder", membershipId: String(membership._id) });
+    await sendWorldRenewalReminderEmail({ idempotencyKey: dedupeKey, membership, user: membership.user, worldTitle: membership.premiumPublication?.title }).catch(() => null);
+  }
+  return { sent };
+}
+
+export async function processDuePremiumMemberships(now = new Date(), io = null) {
   if (renewalRunActive) return { skipped: true, processed: 0 };
   renewalRunActive = true;
   try {
+    await processPremiumRenewalReminders(now, io);
     await endCanceledMemberships(now);
     const due = await PremiumMembership.find({
       status: "ACTIVE",

@@ -40,7 +40,7 @@ async function startServer() {
       console.log(`OnlyMe API listening on port ${env.port}`);
       // Maintenance must never delay API readiness or cold-start recovery.
       startWorker("Verification file cleanup", retryPendingVerificationFileCleanup);
-      startWorker("Premium renewal", processDuePremiumMemberships);
+      startWorker("Premium renewal", () => processDuePremiumMemberships(new Date(), io));
       startWorker("Direct Access expiry", () => processDueDirectAccessWindows(new Date(), io));
       startWorker("Paid call refund", () => processDuePaidCalls(new Date(), io));
       startWorker("Verified Creator renewal", reconcileVerifiedCreatorBadges);

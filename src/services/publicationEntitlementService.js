@@ -6,8 +6,9 @@ import ExperienceAccessRequest from "../models/ExperienceAccessRequest.js";
 const ACTIVE_MEMBERSHIP_STATUSES = ["ACTIVE", "CANCEL_AT_PERIOD_END"];
 
 export function worldIncludedExperienceIds(world) {
-  const ids = world?.publishedSnapshot?.metadata?.includedExperienceIds || world?.includedExperienceIds || [];
-  return new Set(ids.map(String));
+  const publishedIds = world?.publishedSnapshot?.metadata?.includedExperienceIds || [];
+  const liveIds = world?.includedExperienceIds || [];
+  return new Set([...publishedIds, ...liveIds].map(String));
 }
 
 export async function activeIncludedExperienceIds(userId, creatorId) {
@@ -34,11 +35,11 @@ export async function publicationEntitlement(publication, viewer) {
   const creator = publication.creator?._id || publication.creator;
   if (viewer.role === "admin" || String(viewer._id) === String(creator)) return null;
 
-  if (["WORLD", "EXPERIENCE"].includes(publication.kind)) {
+  if (["WORLD", "EXPERIENCE", "SEEN"].includes(publication.kind)) {
     if (await WorldEntitlement.exists({ user: viewer._id, publication: publication._id, status: "ACTIVE" }) || await ExperienceAccessRequest.exists({ requester: viewer._id, publication: publication._id, status: "APPROVED" })) {
-      return publication.kind === "EXPERIENCE" ? "ENTITLED_EXPERIENCE" : "ENTITLED_WORLD";
+      return publication.kind === "SEEN" ? "ENTITLED_SEEN" : publication.kind === "EXPERIENCE" ? "ENTITLED_EXPERIENCE" : "ENTITLED_WORLD";
     }
-    if (publication.kind === "EXPERIENCE") {
+    if (["EXPERIENCE", "SEEN"].includes(publication.kind)) {
       const includedIds = await activeIncludedExperienceIds(viewer._id, creator);
       if (includedIds.has(String(publication._id))) return "ACTIVE_PREMIUM_MEMBER";
     }

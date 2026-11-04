@@ -25,11 +25,14 @@ const defaultPreferences = {
 export function initialOnboardingState() {
   return {
     status: "not_started",
-    version: 1,
+    version: 2,
     currentStep: "welcome",
     startedAt: null,
     welcomeCompleted: false,
     interestsCompleted: false,
+    accountTypeCompleted: false,
+    fillFeedCompleted: false,
+    ticketViewed: false,
     instinctsCompleted: false,
     peopleCompleted: false,
     checklistAcknowledged: false,
@@ -43,9 +46,9 @@ function recoverCurrentStep(state) {
   if (state.status === "completed" || state.status === "skipped") return "completed";
   if (!state.welcomeCompleted) return "welcome";
   if (!state.interestsCompleted) return "interests";
-  if (!state.instinctsCompleted) return "instincts";
-  if (!state.peopleCompleted) return "people";
-  if (!state.checklistAcknowledged) return "light-your-world";
+  if (!state.accountTypeCompleted) return "account-type";
+  if (!state.fillFeedCompleted) return "fill-feed";
+  if (!state.ticketViewed) return "ticket";
   return "complete";
 }
 
@@ -55,11 +58,14 @@ function normalizedOnboarding(user) {
     const currentStep = recoverCurrentStep(state);
     return {
       status: state.status,
-      version: state.version || 1,
+      version: Math.max(2, state.version || 1),
       currentStep,
       startedAt: state.startedAt || null,
       welcomeCompleted: Boolean(state.welcomeCompleted),
       interestsCompleted: Boolean(state.interestsCompleted),
+      accountTypeCompleted: Boolean(state.accountTypeCompleted),
+      fillFeedCompleted: Boolean(state.fillFeedCompleted),
+      ticketViewed: Boolean(state.ticketViewed),
       instinctsCompleted: Boolean(state.instinctsCompleted),
       peopleCompleted: Boolean(state.peopleCompleted),
       checklistAcknowledged: Boolean(state.checklistAcknowledged),
@@ -105,10 +111,17 @@ function serializeUser(user) {
     username: user.username,
     email: user.email,
     role: user.role,
+    profileType: user.profileType || (user.creatorApprovalStatus === "approved" ? "creator" : "personal"),
     creatorApprovalStatus: user.creatorApprovalStatus,
     avatar: user.avatar,
     isVerified: user.isVerified,
     status: user.status,
+    preferredLanguage: user.preferredLanguage || "en",
+    memberNumber: user.memberNumber || null,
+    showMemberNumber: user.showMemberNumber !== false,
+    businessContactButtons: user.businessContactButtons || [],
+    businessContactButtonsConfigured: Boolean(user.businessContactButtonsConfigured),
+    dateOfBirth: user.dateOfBirth || null,
     onboarding: normalizedOnboarding(user),
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
@@ -200,7 +213,7 @@ export async function saveWelcome(user) {
   requireConsumerRole(user);
   const updated = await patchOnboarding(user._id, {
     "onboarding.status": "in_progress",
-    "onboarding.version": 1,
+    "onboarding.version": 2,
     "onboarding.currentStep": "interests",
     ...startFields(user),
     "onboarding.welcomeCompleted": true,
@@ -222,11 +235,34 @@ export async function saveInterests(user, interests) {
   const updated = await patchOnboarding(user._id, {
     "onboarding.status": "in_progress",
     "onboarding.version": 1,
-    "onboarding.currentStep": "instincts",
+    "onboarding.currentStep": "account-type",
     ...startFields(user),
     "onboarding.welcomeCompleted": true,
     "onboarding.interestsCompleted": true,
   });
+  return getOnboardingState(updated);
+}
+
+export async function saveProfileType(user, selection) {
+  requireConsumerRole(user);
+  const { category, contactButtons = [], profileType } = typeof selection === "string" ? { category: "", contactButtons: [], profileType: selection } : selection;
+  const updated = await patchOnboarding(user._id, {
+    profileType,
+    businessContactButtons: profileType === "business" ? contactButtons : [],
+    businessContactButtonsConfigured: profileType === "business",
+    "onboarding.status": "in_progress",
+    "onboarding.version": 2,
+    "onboarding.currentStep": "fill-feed",
+    "onboarding.accountTypeCompleted": true,
+    ...startFields(user),
+  });
+  if (["creator", "business"].includes(profileType)) {
+    await CreatorProfile.findOneAndUpdate(
+      { user: user._id },
+      { $set: { category, categories: [category] }, $setOnInsert: { user: user._id, verificationStatus: "pending" } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  }
   return getOnboardingState(updated);
 }
 
@@ -248,8 +284,9 @@ export async function saveInstincts(user, preferences) {
 
 export async function getSuggestedPeople(user, options = {}) {
   requireConsumerRole(user);
-  const orbit = await buildOrbitForUser(user, { limit: options.limit || 12 });
-  return (orbit.recommendations || []).slice(0, options.limit || 12).map((item) => ({
+  const limit = options.limit || 12;
+  const orbit = await buildOrbitForUser(user, { limit });
+  const personalized = (orbit.recommendations || []).slice(0, limit).map((item) => ({
     id: item.id,
     name: item.name,
     username: item.username,
@@ -263,6 +300,45 @@ export async function getSuggestedPeople(user, options = {}) {
     reason: item.reason,
     profileRoute: item.profileRoute,
   }));
+  if (personalized.length >= limit) return personalized;
+
+  const excluded = new Set([String(user._id), ...personalized.map((item) => String(item.id))]);
+  const followedIds = await ProfileRelationship.distinct("target", { actor: user._id, type: "FOLLOW" });
+  followedIds.forEach((id) => excluded.add(String(id)));
+  const candidates = await User.find({
+    _id: { $nin: [...excluded] },
+    role: { $in: ["fan", "creator"] },
+    status: "active",
+  }).select("name username avatar isVerified role profileType activeStatus lastSeenAt").sort({ avatar: -1, lastSeenAt: -1, createdAt: -1 }).limit(limit - personalized.length).lean();
+  if (!candidates.length) return personalized;
+
+  const ids = candidates.map((candidate) => candidate._id);
+  const [fanProfiles, creatorProfiles] = await Promise.all([
+    FanProfile.find({ user: { $in: ids } }).select("user bio city country interests").lean(),
+    CreatorProfile.find({ user: { $in: ids } }).select("user bio city country categories category").lean(),
+  ]);
+  const fanByUser = new Map(fanProfiles.map((profile) => [String(profile.user), profile]));
+  const creatorByUser = new Map(creatorProfiles.map((profile) => [String(profile.user), profile]));
+  const additional = candidates.map((candidate) => {
+    const professional = ["creator", "business"].includes(candidate.profileType) || candidate.role === "creator";
+    const profile = professional ? creatorByUser.get(String(candidate._id)) || fanByUser.get(String(candidate._id)) : fanByUser.get(String(candidate._id)) || creatorByUser.get(String(candidate._id));
+    const categories = profile?.categories?.length ? profile.categories : profile?.category ? [profile.category] : profile?.interests || [];
+    return {
+      id: candidate._id,
+      name: candidate.name,
+      username: candidate.username,
+      avatar: candidate.avatar || "",
+      cover: "",
+      verified: Boolean(candidate.isVerified),
+      status: candidate.activeStatus?.isActive ? candidate.activeStatus.label : "",
+      location: { city: profile?.city || "", country: profile?.country || "" },
+      categories,
+      bio: profile?.bio || "",
+      reason: categories.length ? `Interested in ${categories.slice(0, 2).join(" and ")}` : "New on @seen",
+      profileRoute: `/profile/${candidate.username}`,
+    };
+  });
+  return [...personalized, ...additional].slice(0, limit);
 }
 
 export async function saveSuggestedPeople(user, targetUserIds) {
@@ -274,14 +350,29 @@ export async function saveSuggestedPeople(user, targetUserIds) {
     results.push(await createFollowRelationship({ actor: user, targetUserId }));
   }
 
+  const ticketEligible = Number(user.memberNumber || 0) > 0 && Number(user.memberNumber) <= 100000;
   const updated = await patchOnboarding(user._id, {
     "onboarding.status": "in_progress",
-    "onboarding.version": 1,
-    "onboarding.currentStep": "light-your-world",
+    "onboarding.version": 2,
+    "onboarding.currentStep": ticketEligible ? "ticket" : "complete",
     ...startFields(user),
     "onboarding.peopleCompleted": true,
+    "onboarding.fillFeedCompleted": true,
+    "onboarding.ticketViewed": !ticketEligible,
   });
   return { ...(await getOnboardingState(updated)), selectedPeople: results };
+}
+
+export async function acknowledgeTicket(user) {
+  requireConsumerRole(user);
+  const updated = await patchOnboarding(user._id, {
+    "onboarding.status": "in_progress",
+    "onboarding.version": 2,
+    "onboarding.currentStep": "complete",
+    "onboarding.ticketViewed": true,
+    ...startFields(user),
+  });
+  return getOnboardingState(updated);
 }
 
 export async function acknowledgeChecklist(user) {
@@ -321,22 +412,24 @@ export async function skipOnboarding(user) {
 export async function completeOnboarding(user) {
   requireConsumerRole(user);
   const state = normalizedOnboarding(user);
-  if (!state.interestsCompleted || !state.instinctsCompleted) {
-    throw new ApiError(409, "Finish interests and instinct tuning before completing onboarding");
+  if (!state.interestsCompleted || !state.accountTypeCompleted || !state.fillFeedCompleted) {
+    throw new ApiError(409, "Finish interests, account type, and Fill your feed before completing onboarding");
   }
-  if (!state.checklistAcknowledged) {
-    throw new ApiError(409, "Review Light your world before entering Atseen");
+  if (!state.ticketViewed) {
+    throw new ApiError(409, "Continue from your @seen ticket before entering the feed");
   }
 
   const now = new Date();
   const updated = await patchOnboarding(user._id, {
     "onboarding.status": "completed",
-    "onboarding.version": 1,
+    "onboarding.version": 2,
     "onboarding.currentStep": "completed",
     "onboarding.startedAt": state.startedAt || now,
     "onboarding.welcomeCompleted": true,
     "onboarding.peopleCompleted": true,
-    "onboarding.checklistAcknowledged": true,
+    "onboarding.accountTypeCompleted": true,
+    "onboarding.fillFeedCompleted": true,
+    "onboarding.ticketViewed": true,
     "onboarding.completedAt": state.completedAt || now,
   });
   return getOnboardingState(updated);

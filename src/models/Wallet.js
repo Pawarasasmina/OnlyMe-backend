@@ -16,6 +16,7 @@ const walletSchema = new mongoose.Schema(
     lastLedgerEntry: { type: mongoose.Schema.Types.ObjectId, ref: "StarsLedgerEntry", default: null },
     ledgerActivatedAt: { type: Date, default: null },
     reconciliationStatus: { type: String, enum: ["NOT_ACTIVATED","MATCHED","DRIFT","BLOCKED"], default: "NOT_ACTIVATED" },
+    monthlySpendingLimit: { type: Number, default: null, min: 1, validate: { validator: (value) => value === null || Number.isSafeInteger(value), message: "Monthly spending limit must be an integer" } },
   },
   { timestamps: true }
 );

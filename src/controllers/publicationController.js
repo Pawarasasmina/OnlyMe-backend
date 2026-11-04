@@ -20,6 +20,8 @@ import WorldWaitlist from "../models/WorldWaitlist.js";
 import ExperienceAccessRequest from "../models/ExperienceAccessRequest.js";
 import { attachEntityMetadata } from "../services/contentEntityService.js";
 import { canAccessPublicationAudience, seenVisibilityFilter, serializePublication } from "../services/publicationAccessService.js";
+import GroupConversation from "../models/GroupConversation.js";
+import GroupMessage from "../models/GroupMessage.js";
 import { addChapter, archivePublication, cancelPublishedRevision, createPublicationDraft, deletePlanet, deleteSeenPublication, ownerPublication, removeChapter, reorderChapters, restorePublication, resubmitPublication, startPublishedRevision, submitPublication, toggleSeenPinned, updateChapter, updatePublicationDraft } from "../services/publicationService.js";
 import { deletePublicationFile, uploadPublicationFile, verifyPublicationAsset } from "../services/publicationMediaStorageService.js";
 import { publicationEntitlement } from "../services/publicationEntitlementService.js";
@@ -171,15 +173,23 @@ async function serializeMemberWorld(publication, user) {
   const membership = isOwner ? null : await PremiumMembership.findOne(memberWorldAccessFilter(publicationId, user._id)).select("status currentPeriodStart currentPeriodEnd memberNumber starsPerPeriod cancelAtPeriodEnd").lean();
   if (!isOwner && !membership) throw new ApiError(403, "Join this World to step inside");
   const activeFilter = activeMembershipFilter(publicationId);
-  const [memberCount, totalMemberships, engagement, includedExperiences] = await Promise.all([
+  const [memberCount, totalMemberships, engagement, includedExperiences, freeSeensWithBonuses] = await Promise.all([
     PremiumMembership.countDocuments(activeFilter),
     PremiumMembership.countDocuments({ premiumPublication: publicationId }),
     memberWorldEngagement(publicationId, user._id),
-    publication.includedExperienceIds?.length ? Publication.find({ _id: { $in: publication.includedExperienceIds }, creator: publication.creator, kind: "EXPERIENCE", status: { $ne: "REMOVED" } }).lean() : [],
+    publication.includedExperienceIds?.length ? Publication.find({ _id: { $in: publication.includedExperienceIds }, creator: publication.creator, kind: "SEEN", "pricing.mode": "ONE_TIME", status: { $ne: "REMOVED" } }).lean() : [],
+    Publication.find({ creator: publication.creator, kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, "publishedSnapshot.metadata.pricing.mode": "FREE", "publishedSnapshot.chapters.worldBonus": true }).select("title coverMedia publishedSnapshot").lean(),
   ]);
   const serialized = serializePublication(publication, user, { audienceAllowed: true, entitlement: "ACTIVE_PREMIUM_MEMBER" });
   if (!serialized) throw new ApiError(404, "World not found");
-  serialized.includedExperiences = includedExperiences.map((item) => ({ id: String(item._id), title: item.title, summary: item.summary, category: item.category, coverMedia: item.coverMedia || null, chapterCount: item.publishedSnapshot?.chapters?.length || item.submittedSnapshot?.chapters?.length || 0, pricing: item.pricing, included: true }));
+  serialized.includedExperiences = includedExperiences.map((item) => {
+    const experienceChapters = item.publishedSnapshot?.chapters || item.submittedSnapshot?.chapters || [];
+    return { id: String(item._id), title: item.publishedSnapshot?.metadata?.title || item.title, summary: item.publishedSnapshot?.metadata?.summary || item.summary, category: item.publishedSnapshot?.metadata?.category || item.category, coverMedia: item.publishedSnapshot?.metadata?.coverMedia || item.coverMedia || null, chapterCount: experienceChapters.length, chapters: experienceChapters.map((chapter, index) => ({ id: String(chapter.id || chapter._id || chapter.stableChapterId || index), stableChapterId: chapter.stableChapterId || null, title: chapter.title || `Chapter ${index + 1}`, summary: chapter.summary || "" })), pricing: item.publishedSnapshot?.metadata?.pricing || item.pricing, included: true };
+  });
+  serialized.bonusChapters = freeSeensWithBonuses.flatMap((item) => {
+    const metadata = item.publishedSnapshot?.metadata || item;
+    return (item.publishedSnapshot?.chapters || []).map((chapter, chapterIndex) => ({ chapter, chapterIndex })).filter(({ chapter }) => chapter.worldBonus).map(({ chapter, chapterIndex }) => ({ id: `${item._id}:${chapter.stableChapterId}`, seenId: String(item._id), seenTitle: metadata.title || item.title, coverMedia: metadata.coverMedia || item.coverMedia || null, chapterId: chapter.stableChapterId, chapterIndex, title: chapter.title || `Bonus chapter ${chapterIndex + 1}` }));
+  });
   serialized.viewer = { isOwner, isMember: Boolean(isOwner || membership), membershipStatus: membership?.status || (isOwner ? "OWNER" : null), memberNumber: membership?.memberNumber || null, currentPeriodEnd: membership?.currentPeriodEnd || null };
   serialized.members = { count: memberCount };
   return {
@@ -203,7 +213,7 @@ async function serializeWorldManagement(publication, user) {
     SeenEngagement.aggregate([{ $match: { publication: publicationId, createdAt: { $gte: sincePreviousWeek } } }, { $group: { _id: { type: "$type", day: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } } }, count: { $sum: 1 } } }]),
     StarsLedgerEntry.aggregate([{ $match: { accountUser: publication.creator, publication: publicationId, direction: "CREDIT", entryType: { $in: ["PREMIUM_CREATOR_EARNING", "WORLD_CREATOR_EARNING"] }, createdAt: { $gte: monthAgo() } } }, { $group: { _id: "$entryType", stars: { $sum: "$starsAmount" } } }]),
     AnalyticsEvent.aggregate([{ $match: { entityId: String(publicationId), entityType: { $in: ["world", "publication", "seen"] }, createdAt: { $gte: sincePreviousWeek } } }, { $group: { _id: { eventType: "$eventType", day: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } } }, count: { $sum: 1 }, users: { $addToSet: "$userId" } } }]),
-    publication.includedExperienceIds?.length ? Publication.find({ _id: { $in: publication.includedExperienceIds }, creator: publication.creator, kind: "EXPERIENCE", status: { $ne: "REMOVED" } }).lean() : [],
+    publication.includedExperienceIds?.length ? Publication.find({ _id: { $in: publication.includedExperienceIds }, creator: publication.creator, kind: "SEEN", "pricing.mode": "ONE_TIME", status: { $ne: "REMOVED" } }).lean() : [],
     publication.worldModerators?.length ? User.find({ _id: { $in: publication.worldModerators.map((item) => item.user) } }).select("name username avatar isVerified").lean() : [],
     WorldWaitlist.countDocuments({ publication: publicationId, status: "WAITING" }),
     WorldEntitlement.countDocuments({ publication: publicationId, status: "ACTIVE" }),
@@ -320,6 +330,11 @@ export const updateWorldManagement = asyncHandler(async (req, res) => {
     updates.description = String(req.body.description || "").trim().slice(0, PUBLICATION_LIMITS.description);
     updates.summary = updates.description.slice(0, PUBLICATION_LIMITS.summary);
   }
+  if (Object.hasOwn(req.body, "ownerWelcomeNote")) {
+    const ownerWelcomeNote = String(req.body.ownerWelcomeNote || "").trim();
+    if (ownerWelcomeNote.length > 500) throw new ApiError(400, "Welcome message cannot exceed 500 characters");
+    updates.ownerWelcomeNote = ownerWelcomeNote;
+  }
   if (Object.hasOwn(req.body, "planetFaceEmoji") || Object.hasOwn(req.body, "planetEmoji")) {
     const emoji = String(req.body.planetFaceEmoji ?? req.body.planetEmoji ?? "").trim();
     if (!emoji || emoji.length > 16) throw new ApiError(400, "Choose one planet face emoji");
@@ -360,7 +375,7 @@ export const updateWorldManagement = asyncHandler(async (req, res) => {
   publication.statusVersion += 1;
   const snapshotUpdates = { ...updates };
   if (planetFaceEmoji) snapshotUpdates.planet = { ...(publication.planet?.toObject?.() || publication.planet || {}), faceEmoji: planetFaceEmoji, emoji: publication.planet?.emoji || "🪐" };
-  if (updates.title || updates.description || updates.pricing || planetFaceEmoji || Object.hasOwn(updates, "commentsEnabled") || Object.hasOwn(updates, "firstMonthOfferEnabled") || Object.hasOwn(updates, "directAccessIncluded") || Object.hasOwn(updates, "directAccessIncludedReplies") || Object.hasOwn(updates, "allowDownload") || Object.hasOwn(updates, "includedInWorld") || Object.hasOwn(updates, "taggedPeople")) updateSnapshotMetadata(publication, snapshotUpdates);
+  if (updates.title || updates.description || Object.hasOwn(updates, "ownerWelcomeNote") || updates.pricing || planetFaceEmoji || Object.hasOwn(updates, "commentsEnabled") || Object.hasOwn(updates, "firstMonthOfferEnabled") || Object.hasOwn(updates, "directAccessIncluded") || Object.hasOwn(updates, "directAccessIncludedReplies") || Object.hasOwn(updates, "allowDownload") || Object.hasOwn(updates, "includedInWorld") || Object.hasOwn(updates, "taggedPeople")) updateSnapshotMetadata(publication, snapshotUpdates);
   await publication.save();
   if (Object.hasOwn(updates, "includedInWorld")) await syncExperienceWithPremiumWorld(req.user._id, publication._id, updates.includedInWorld, premiumWorld);
   await attachEntityMetadata(publication, req.user);
@@ -393,6 +408,36 @@ export const removeWorldCover = asyncHandler(async (req, res) => {
   if (media) await deletePublicationFile(media).catch(() => {});
   await attachEntityMetadata(publication, req.user);
   return sendResponse(res, 200, "World cover removed", await serializeWorldManagement(publication, req.user));
+});
+export const uploadWorldWelcomeVoice = asyncHandler(async (req, res) => {
+  if (!req.file) throw new ApiError(400, "Voice recording is required");
+  if (!String(req.file.mimetype || "").startsWith("audio/")) throw new ApiError(400, "Choose an audio recording");
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  const uploaded = await uploadPublicationFile({ file: req.file, creatorId: req.user._id, publicationId: publication._id, chapterId: "root", blockId: "welcome-voice", mediaType: "VOICE" });
+  if (Number(uploaded.duration || 0) > 120.1) {
+    await deletePublicationFile(uploaded).catch(() => {});
+    throw new ApiError(400, "Voice hello must be 2 minutes or shorter");
+  }
+  const trusted = await verifyPublicationAsset({ assetId: uploaded.assetId, creatorId: req.user._id, publicationId: publication._id, chapterId: "root", blockId: "welcome-voice", mediaType: "VOICE" });
+  const previous = publication.worldWelcomeVoiceMedia?.toObject?.() || publication.worldWelcomeVoiceMedia;
+  publication.worldWelcomeVoiceMedia = trusted;
+  publication.statusVersion += 1;
+  updateSnapshotMetadata(publication, { worldWelcomeVoiceMedia: trusted });
+  await publication.save();
+  if (previous?.assetId && previous.assetId !== trusted.assetId) await deletePublicationFile(previous).catch(() => {});
+  await attachEntityMetadata(publication, req.user);
+  return sendResponse(res, 201, "Welcome voice added", await serializeWorldManagement(publication, req.user));
+});
+export const removeWorldWelcomeVoice = asyncHandler(async (req, res) => {
+  const publication = await ownerWorld(req.user._id, req.params.id);
+  const previous = publication.worldWelcomeVoiceMedia?.toObject?.() || publication.worldWelcomeVoiceMedia;
+  publication.worldWelcomeVoiceMedia = undefined;
+  publication.statusVersion += 1;
+  updateSnapshotMetadata(publication, { worldWelcomeVoiceMedia: null });
+  await publication.save();
+  if (previous?.assetId) await deletePublicationFile(previous).catch(() => {});
+  await attachEntityMetadata(publication, req.user);
+  return sendResponse(res, 200, "Welcome voice removed", await serializeWorldManagement(publication, req.user));
 });
 export const uploadWorldStoryPreview = asyncHandler(async (req, res) => {
   if (!req.file) throw new ApiError(400, "Story image is required");
@@ -468,9 +513,9 @@ export const removeWorldStoryPreview = asyncHandler(async (req, res) => {
 export const includeWorldExperience = asyncHandler(async (req, res) => {
   const publication = await ownerWorld(req.user._id, req.params.id);
   ensurePublicationId(req.params.experienceId);
-  const experience = await Publication.findOne({ _id: req.params.experienceId, creator: req.user._id, kind: "EXPERIENCE", status: { $ne: "REMOVED" } }).select("+submittedSnapshot");
-  if (!experience) throw new ApiError(404, "Experience not found");
-  if (publication.includedExperienceIds.map(String).includes(String(experience._id))) throw new ApiError(409, "Experience is already included");
+  const experience = await Publication.findOne({ _id: req.params.experienceId, creator: req.user._id, kind: "SEEN", "pricing.mode": "ONE_TIME", status: { $ne: "REMOVED" } }).select("+submittedSnapshot");
+  if (!experience) throw new ApiError(404, "Paid Seen not found");
+  if (publication.includedExperienceIds.map(String).includes(String(experience._id))) throw new ApiError(409, "Paid Seen is already included");
   publication.includedExperienceIds.push(experience._id);
   publication.statusVersion += 1;
   updateSnapshotMetadata(publication, { includedExperienceIds: publication.includedExperienceIds });
@@ -479,7 +524,7 @@ export const includeWorldExperience = asyncHandler(async (req, res) => {
   experience.statusVersion += 1;
   updateSnapshotMetadata(experience, { includedInWorld: true });
   await experience.save();
-  return sendResponse(res, 200, "Experience included", await serializeWorldManagement(publication, req.user));
+  return sendResponse(res, 200, "Paid Seen included", await serializeWorldManagement(publication, req.user));
 });
 export const removeWorldExperience = asyncHandler(async (req, res) => {
   const publication = await ownerWorld(req.user._id, req.params.id);
@@ -488,14 +533,14 @@ export const removeWorldExperience = asyncHandler(async (req, res) => {
   publication.statusVersion += 1;
   updateSnapshotMetadata(publication, { includedExperienceIds: publication.includedExperienceIds });
   await publication.save();
-  const experience = await Publication.findOne({ _id: req.params.experienceId, creator: req.user._id, kind: "EXPERIENCE" }).select("+submittedSnapshot");
+  const experience = await Publication.findOne({ _id: req.params.experienceId, creator: req.user._id, kind: "SEEN", "pricing.mode": "ONE_TIME" }).select("+submittedSnapshot");
   if (experience) {
     experience.includedInWorld = false;
     experience.statusVersion += 1;
     updateSnapshotMetadata(experience, { includedInWorld: false });
     await experience.save();
   }
-  return sendResponse(res, 200, "Experience removed", await serializeWorldManagement(publication, req.user));
+  return sendResponse(res, 200, "Paid Seen removed", await serializeWorldManagement(publication, req.user));
 });
 export const openWorldWave = asyncHandler(async (req, res) => {
   const publication = await ownerWorld(req.user._id, req.params.id);
@@ -607,6 +652,23 @@ export const addSeenToSeries = asyncHandler(async (req, res) => { const series =
 export const removeSeenFromSeries = asyncHandler(async (req, res) => { const series = await ownerSeries(req.user._id, req.params.seriesId); const seen = await ownerSeen(req.user._id, req.params.seenId); if (String(seen.series || "") !== String(series._id)) throw new ApiError(404, "Seen is not in this Series"); seen.series = null; await seen.save(); return sendResponse(res, 200, "Seen removed from Series", { publication: serializePublication(seen, req.user) }); });
 export const createChapter = asyncHandler(async (req, res) => sendResponse(res, 201, "Chapter added", { chapter: await addChapter(req.user._id, req.params.id, req.body) }));
 export const editChapter = asyncHandler(async (req, res) => sendResponse(res, 200, "Chapter updated", { chapter: await updateChapter(req.user._id, req.params.id, req.params.chapterId, req.body) }));
+export const setWorldBonusChapter = asyncHandler(async (req, res) => {
+  const statusVersion = Number(req.body.statusVersion);
+  if (!Number.isSafeInteger(statusVersion)) throw new ApiError(400, "statusVersion is required");
+  const publication = await Publication.findOne({ _id: req.params.id, creator: req.user._id, kind: "SEEN", "pricing.mode": "FREE", status: { $in: ["DRAFT", "PUBLISHED", "CHANGES_REQUESTED"] } });
+  if (!publication) throw new ApiError(404, "Editable free Seen not found");
+  if (publication.statusVersion !== statusVersion) throw new ApiError(409, "Publication changed while updating the bonus chapter");
+  const chapter = await Chapter.findOne({ publication: publication._id, stableChapterId: req.params.chapterId });
+  if (!chapter) throw new ApiError(404, "Chapter not found");
+  const worldBonus = req.body.worldBonus === true;
+  if (Boolean(chapter.worldBonus) === worldBonus) return sendResponse(res, 200, worldBonus ? "World bonus enabled" : "World bonus removed", { chapter });
+  const updated = await Publication.findOneAndUpdate({ _id: publication._id, creator: req.user._id, statusVersion }, { $inc: { statusVersion: 1, draftVersion: 1 } }, { new: true });
+  if (!updated) throw new ApiError(409, "Publication changed while updating the bonus chapter");
+  chapter.worldBonus = worldBonus;
+  chapter.draftVersion += 1;
+  await chapter.save();
+  return sendResponse(res, 200, worldBonus ? "World bonus enabled" : "World bonus removed", { chapter, statusVersion: updated.statusVersion });
+});
 export const deleteChapter = asyncHandler(async (req, res) => {
   const publication = await Publication.findOne({ _id: req.params.id, creator: req.user._id }).select("kind").lean();
   if (publication?.kind === "EXPERIENCE" && await WorldEntitlement.exists({ publication: publication._id, status: "ACTIVE" }))
@@ -706,7 +768,7 @@ export const getSeenInsights = asyncHandler(async (req, res) => {
     },
   });
 });
-export const uploadMedia = asyncHandler(async (req, res) => { if (!req.file) throw new ApiError(400, "Media file is required"); const publication = await Publication.findOne({ _id: req.params.id, creator: req.user._id, status: { $in: ["DRAFT", "CHANGES_REQUESTED"] } }); if (!publication) throw new ApiError(404, "Editable publication not found"); const purpose = String(req.body.purpose || "BLOCK").toUpperCase(); const mediaType = purpose === "COVER" ? (String(req.file.mimetype || "").startsWith("video/") ? "VIDEO" : "IMAGE") : req.body.mediaType; const chapterId = purpose === "BLOCK" ? req.body.chapterId : "root"; const blockId = purpose === "BLOCK" ? req.body.blockId : purpose.toLowerCase(); if (!chapterId || !blockId) throw new ApiError(400, "chapterId and blockId are required for block media"); const uploaded = await uploadPublicationFile({ file: req.file, creatorId: req.user._id, publicationId: publication._id, chapterId, blockId, mediaType }); const duration = Number(uploaded.duration); const rejectUploaded = async (message) => { await deletePublicationFile(uploaded).catch(() => {}); throw new ApiError(400, message); }; if (purpose === "BLOCK" && publication.kind === "EXPERIENCE" && mediaType === "VIDEO" && duration > 30.1) await rejectUploaded("Experience preview videos must be 30 seconds or shorter"); if (purpose === "COVER" && mediaType === "VIDEO" && publication.kind === "SEEN" && duration > 30) await rejectUploaded("Seen videos must be 30 seconds or shorter"); if (purpose === "COVER" && mediaType === "VIDEO" && publication.kind !== "SEEN" && (duration < 15 || duration > 30)) await rejectUploaded("Planet preview video must be 15 to 30 seconds"); if (!["COVER", "INTRO"].includes(purpose)) return sendResponse(res, 201, "Publication media uploaded", uploaded); const statusVersion = Number(req.body.statusVersion); if (!Number.isSafeInteger(statusVersion)) throw new ApiError(400, "statusVersion is required"); const trusted = await verifyPublicationAsset({ assetId: uploaded.assetId, creatorId: req.user._id, publicationId: publication._id, chapterId, blockId, mediaType }); const field = purpose === "COVER" ? "coverMedia" : "introMedia"; const updated = await Publication.findOneAndUpdate({ _id: publication._id, creator: req.user._id, status: { $in: ["DRAFT", "CHANGES_REQUESTED"] } }, { $set: { [field]: trusted }, $inc: { statusVersion: 1, draftVersion: 1 } }, { new: true }); if (!updated) { await deletePublicationFile(uploaded).catch(() => {}); throw new ApiError(409, "Publication is no longer editable"); } return sendResponse(res, 201, `${purpose.toLowerCase()} media attached`, { assetId: uploaded.assetId, publication: { id: updated._id, statusVersion: updated.statusVersion, draftVersion: updated.draftVersion, [field]: trusted } }); });
+export const uploadMedia = asyncHandler(async (req, res) => { if (!req.file) throw new ApiError(400, "Media file is required"); const publication = await Publication.findOne({ _id: req.params.id, creator: req.user._id, status: { $in: ["DRAFT", "CHANGES_REQUESTED"] } }); if (!publication) throw new ApiError(404, "Editable publication not found"); const purpose = String(req.body.purpose || "BLOCK").toUpperCase(); const mediaType = purpose === "COVER" ? (String(req.file.mimetype || "").startsWith("video/") ? "VIDEO" : "IMAGE") : req.body.mediaType; const chapterId = purpose === "BLOCK" ? req.body.chapterId : "root"; const blockId = purpose === "BLOCK" ? req.body.blockId : purpose.toLowerCase(); if (!chapterId || !blockId) throw new ApiError(400, "chapterId and blockId are required for block media"); const uploaded = await uploadPublicationFile({ file: req.file, creatorId: req.user._id, publicationId: publication._id, chapterId, blockId, mediaType }); const duration = Number(uploaded.duration); const rejectUploaded = async (message) => { await deletePublicationFile(uploaded).catch(() => {}); throw new ApiError(400, message); }; if (purpose === "BLOCK" && publication.kind === "SEEN" && mediaType === "VIDEO") { const limit = publication.pricing?.mode === "ONE_TIME" ? 120 : 60; if (duration > limit + 0.1) await rejectUploaded(`${publication.pricing?.mode === "ONE_TIME" ? "Paid" : "Free"} Seen chapter videos must be ${limit} seconds or shorter`); } if (purpose === "BLOCK" && publication.kind === "EXPERIENCE" && mediaType === "VIDEO" && duration > 30.1) await rejectUploaded("Experience preview videos must be 30 seconds or shorter"); if (purpose === "COVER" && mediaType === "VIDEO" && publication.kind === "SEEN" && (duration < 5 || duration > 15.1)) await rejectUploaded("Seen cover videos must be 5 to 15 seconds"); if (purpose === "COVER" && mediaType === "VIDEO" && publication.kind !== "SEEN" && (duration < 15 || duration > 30)) await rejectUploaded("Planet preview video must be 15 to 30 seconds"); if (!["COVER", "INTRO"].includes(purpose)) return sendResponse(res, 201, "Publication media uploaded", uploaded); const statusVersion = Number(req.body.statusVersion); if (!Number.isSafeInteger(statusVersion)) throw new ApiError(400, "statusVersion is required"); const trusted = await verifyPublicationAsset({ assetId: uploaded.assetId, creatorId: req.user._id, publicationId: publication._id, chapterId, blockId, mediaType }); const field = purpose === "COVER" ? "coverMedia" : "introMedia"; const updated = await Publication.findOneAndUpdate({ _id: publication._id, creator: req.user._id, status: { $in: ["DRAFT", "CHANGES_REQUESTED"] } }, { $set: { [field]: trusted }, $inc: { statusVersion: 1, draftVersion: 1 } }, { new: true }); if (!updated) { await deletePublicationFile(uploaded).catch(() => {}); throw new ApiError(409, "Publication is no longer editable"); } return sendResponse(res, 201, `${purpose.toLowerCase()} media attached`, { assetId: uploaded.assetId, publication: { id: updated._id, statusVersion: updated.statusVersion, draftVersion: updated.draftVersion, [field]: trusted } }); });
 export const removeMedia = asyncHandler(async (req, res) => {
   const purpose = String(req.params.purpose || "").toUpperCase();
   if (!["COVER", "INTRO"].includes(purpose)) throw new ApiError(400, "Unsupported publication media purpose");
@@ -724,6 +786,12 @@ export const removeMedia = asyncHandler(async (req, res) => {
 export const listPublishedSeens = asyncHandler(async (req, res) => {
   const paging = page(req);
   const filter = { kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } };
+  const requestedCategory = String(req.query.category || "").trim();
+  if (requestedCategory) {
+    const category = SEEN_CATEGORIES.find((item) => item.toLowerCase() === requestedCategory.toLowerCase());
+    if (!category) throw new ApiError(400, "Unsupported Seen category");
+    filter["publishedSnapshot.metadata.category"] = category;
+  }
   let candidateCreatorIds = [];
   if (req.query.creator) {
     candidateCreatorIds = [req.query.creator];
@@ -735,6 +803,9 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
   } else if (req.query.tab === "friends") {
     filter.creator = { $in: [] };
   }
+  // Feed/discovery placement must reflect the version readers actually receive,
+  // not an unpublished creator revision that may currently be in progress.
+  if (!req.query.creator) filter["publishedSnapshot.metadata.pricing.mode"] = "FREE";
   Object.assign(filter, await seenVisibilityFilter(req.user || null, candidateCreatorIds));
   if (req.user?._id) {
     const [blocks, preferences] = await Promise.all([
@@ -832,7 +903,28 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
     };
   }).filter(Boolean);
   const personalized = recommendationConfig ? await personalizeCandidates({ items: itemsWithEngagement, req, surface: "SEEN" }) : { items: itemsWithEngagement, recommendation: null };
-  return sendResponse(res, 200, "Published Seens fetched", { items: personalized.items.slice(0, paging.limit), recommendation: personalized.recommendation, pagination: { ...paging, hasMore: !recommendationConfig && items.length === paging.limit } });
+  let renderedItems = personalized.items.slice(0, paging.limit);
+  if (!req.query.creator && renderedItems.length) {
+    const paidRows = await Publication.find({
+      creator: { $in: creatorIds },
+      kind: "SEEN",
+      status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] },
+      "publishedSnapshot.metadata.pricing.mode": "ONE_TIME",
+      $or: [{ "publishedSnapshot.metadata.visibility": "PUBLIC" }, { "publishedSnapshot.metadata.visibility": { $exists: false } }],
+      publishedSnapshot: { $exists: true },
+    }).select("creator publishedSnapshot.metadata.title publishedSnapshot.metadata.pricing publishedAt").sort({ publishedAt: -1 }).lean();
+    const paidByCreator = new Map();
+    paidRows.forEach((item) => { const key = String(item.creator); if (!paidByCreator.has(key)) paidByCreator.set(key, item); });
+    const promotedCreators = new Set();
+    renderedItems = renderedItems.map((item) => {
+      const creatorId = String(item.creator?.id || item.creator?._id || "");
+      const paid = paidByCreator.get(creatorId);
+      if (!paid || promotedCreators.has(creatorId)) return item;
+      promotedCreators.add(creatorId);
+      return { ...item, moreFrom: { id: String(paid._id), title: paid.publishedSnapshot?.metadata?.title || "Paid Seen", priceStars: paid.publishedSnapshot?.metadata?.pricing?.starsAmount || 0 } };
+    });
+  }
+  return sendResponse(res, 200, "Published Seens fetched", { items: renderedItems, recommendation: personalized.recommendation, pagination: { ...paging, hasMore: !recommendationConfig && items.length === paging.limit } });
 });
 export const getPublishedPublication = asyncHandler(async (req, res) => {
   const publication = await Publication.findById(req.params.id).select("+shareToken").populate("creator", "name username avatar isVerified").populate("series", "name").lean();
@@ -841,16 +933,22 @@ export const getPublishedPublication = asyncHandler(async (req, res) => {
   const audienceAllowed = publication ? await canAccessPublicationAudience(publication, req.user || null, { shareToken: req.query.access || req.query.token }) : false;
   const serialized = publication && serializePublication(publication, req.user || null, { audienceAllowed, entitlement });
   if (!serialized) throw new ApiError(404, "Publication not found");
-
+  if (publication.kind === "SEEN" && publication.pricing?.mode === "ONE_TIME") {
+    serialized.ownerCount = await WorldEntitlement.countDocuments({ publication: publication._id, status: "ACTIVE" });
+  }
   if (publication.kind === "PREMIUM_WORLD") {
     const activeFilter = { premiumPublication: publication._id, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } };
     const viewerMembershipQuery = req.user?._id ? PremiumMembership.findOne({ ...activeFilter, user: req.user._id }).select("status currentPeriodEnd memberNumber starsPerPeriod firstPeriodStars").lean() : null;
-    const [memberCount, previewMembers, viewerMembership, totalMemberships] = await Promise.all([
+    const [memberCount, previewMembers, viewerMembership, totalMemberships, circles, includedExperiences] = await Promise.all([
       PremiumMembership.countDocuments(activeFilter),
       PremiumMembership.find(activeFilter).sort({ createdAt: 1 }).limit(4).populate("user", "name username avatar").lean(),
       viewerMembershipQuery,
       PremiumMembership.countDocuments({ premiumPublication: publication._id }),
+      GroupConversation.find({ premiumWorld: publication._id, isWorldCircle: true, deletedAt: null }).select("name description members").populate("members", "name username avatar").sort({ createdAt: 1 }).lean(),
+      publication.includedExperienceIds?.length ? Publication.find({ _id: { $in: publication.includedExperienceIds }, creator: publication.creator?._id || publication.creator, kind: "SEEN", "pricing.mode": "ONE_TIME", status: { $ne: "REMOVED" } }).select("title summary coverMedia pricing publishedSnapshot.metadata.title publishedSnapshot.metadata.summary publishedSnapshot.metadata.coverMedia publishedSnapshot.metadata.pricing").lean() : [],
     ]);
+    const recentCircleMessages = circles.length ? await GroupMessage.aggregate([{ $match: { group: { $in: circles.map((circle) => circle._id) }, createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) }, deletedAt: null } }, { $group: { _id: "$group", senders: { $addToSet: "$sender" } } }]) : [];
+    const talkingByCircle = new Map(recentCircleMessages.map((row) => [String(row._id), row.senders.length]));
     const regularPrice = Number(publication.publishedSnapshot?.metadata?.pricing?.starsAmount || publication.pricing?.starsAmount || 0);
     const introEnabled = Boolean(publication.publishedSnapshot?.metadata?.firstMonthOfferEnabled ?? publication.firstMonthOfferEnabled);
     const ownerId = publication.creator?._id || publication.creator;
@@ -880,6 +978,8 @@ export const getPublishedPublication = asyncHandler(async (req, res) => {
         username: item.user?.username || "",
       })),
     };
+    serialized.privateCircles = circles.map((circle) => ({ id: String(circle._id), name: circle.name, description: circle.description || "", memberCount: circle.members.length, talkingNow: talkingByCircle.get(String(circle._id)) || 0, memberPreview: circle.members.slice(0, 3).map((member) => ({ id: String(member._id), name: member.name, username: member.username, avatar: member.avatar || "" })) }));
+    serialized.includedExperiences = includedExperiences.map((item) => ({ id: String(item._id), title: item.publishedSnapshot?.metadata?.title || item.title, summary: item.publishedSnapshot?.metadata?.summary || item.summary, coverMedia: item.publishedSnapshot?.metadata?.coverMedia || item.coverMedia || null, pricing: item.publishedSnapshot?.metadata?.pricing || item.pricing }));
   }
 
   if (publication.kind === "SEEN") {

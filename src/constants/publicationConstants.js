@@ -7,8 +7,8 @@ export const EDITABLE_PUBLICATION_STATUSES = ["DRAFT", "CHANGES_REQUESTED"];
 export const PUBLICATION_ACTIONS = ["DRAFT_CREATED", "DRAFT_UPDATED", "REVISION_STARTED", "REVISION_CANCELED", "CHAPTER_ADDED", "CHAPTER_UPDATED", "CHAPTER_REMOVED", "CHAPTERS_REORDERED", "SUBMITTED", "RESUBMITTED", "APPROVED", "CHANGES_REQUESTED", "REJECTED", "ARCHIVED", "REMOVED", "LEGACY_LINKED"];
 export const BLOCK_TYPES = ["TEXT", "IMAGE", "VIDEO", "AUDIO", "VOICE", "LINK", "KEY_POINT", "HIGHLIGHT", "LIST", "POLL"];
 export const TEXT_BLOCK_TYPES = ["TEXT", "KEY_POINT", "HIGHLIGHT"];
-export const PREMIUM_PRICE_PRESETS = [90, 190, 290, 390, 500, 1000];
-export const PREMIUM_PRICE_TOP_TIER = 1000;
+export const PREMIUM_PRICE_PRESETS = [190, 490, 990];
+export const PREMIUM_PRICE_TOP_TIER = 990;
 export const PREMIUM_PRICE_CHANGE_COOLDOWN_DAYS = 30;
 export const PREMIUM_PRICE_TOP_TIER_MIN_RESIDENTS = 100;
 export const PREMIUM_PRICE_TOP_TIER_RENEWAL_MONTHS = 3;
@@ -21,7 +21,7 @@ export const MAX_MODERATORS_PER_EXPERIENCE = 2;
 export const PLANET_MARKER_COLORS = ["ICE_BLUE", "AMBER", "CORAL", "MINT", "LILAC", "WHITE"];
 export const PUBLICATION_LIMITS = { title: 120, summary: 300, description: 2000, category: 40, tags: 15, tag: 40, chapterTitle: 120, chapterText: 2000, blockLabel: 120, seriesName: 24 };
 export const KIND_RULES = {
-  SEEN: { minChapters: 1, maxChapters: 5, pricingMode: "FREE", previewMin: 1, previewMax: 5, placement: "SEEN" },
+  SEEN: { minChapters: 1, maxChapters: 10, pricingMode: ["FREE", "ONE_TIME"], previewMin: 1, previewMax: 10, placement: "SEEN" },
   WORLD: { minChapters: 1, maxChapters: 7, pricingMode: "FREE", previewMin: 1, previewMax: 7, placement: "PROFILE_ORBIT" },
   // World content is assembled from preview stories and included Experiences.
   // Chapters remain an internal storage detail for legacy records/story media.

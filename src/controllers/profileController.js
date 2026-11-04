@@ -26,7 +26,7 @@ const profileModels = {
   creator: CreatorProfile,
   fan: FanProfile,
 };
-const effectiveProfileRole = (user) => user?.role === "admin" ? "admin" : user?.creatorApprovalStatus === "approved" ? "creator" : "fan";
+const effectiveProfileRole = (user) => user?.role === "admin" ? "admin" : user?.creatorApprovalStatus === "approved" || ["creator", "business"].includes(user?.profileType) ? "creator" : "fan";
 
 function stripUndefined(value) {
   return Object.entries(value).reduce((result, [key, entry]) => {
@@ -72,6 +72,8 @@ function accountDetails(user) {
     username: user.username,
     email: user.email,
     role: user.role,
+    profileType: user.profileType || "personal",
+    businessContactButtons: user.businessContactButtons || [],
     profilePhoto: user.avatar,
     isVerified: user.isVerified,
     status: user.status,
@@ -101,7 +103,8 @@ function serializeOwnProfile(user, profile) {
     account: accountDetails(user),
     profile: {
       id: profile._id,
-      role: user.role,
+      role: effectiveProfileRole(user),
+      profileType: user.profileType || "personal",
       displayName: user.name,
       username: user.username,
       profilePhoto: user.avatar,

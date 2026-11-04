@@ -6,6 +6,9 @@ const groupConversationSchema = new mongoose.Schema({
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   members: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], required: true },
   admins: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], required: true },
+  premiumWorld: { type: mongoose.Schema.Types.ObjectId, ref: "Publication", default: null, index: true },
+  isWorldCircle: { type: Boolean, default: false, index: true },
+  description: { type: String, trim: true, maxlength: 180, default: "" },
   permissions: {
     editGroupInfo: { type: String, enum: ["ADMINS", "ALL_MEMBERS"], default: "ADMINS" },
     addMembers: { type: String, enum: ["ADMINS", "ALL_MEMBERS"], default: "ADMINS" },
@@ -16,5 +19,6 @@ const groupConversationSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 groupConversationSchema.index({ members: 1, updatedAt: -1 });
+groupConversationSchema.index({ premiumWorld: 1, isWorldCircle: 1, deletedAt: 1 });
 
 export default mongoose.model("GroupConversation", groupConversationSchema);

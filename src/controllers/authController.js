@@ -13,6 +13,7 @@ import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyt
 import { env } from "../config/env.js";
 import jwt from "jsonwebtoken";
 import { attributeReferral, resolveReferral } from "../services/referralService.js";
+import PlatformCounter from "../models/PlatformCounter.js";
 
 void mongoose;
 
@@ -34,6 +35,7 @@ function sanitizeUser(user) {
     username: user.username,
     email: user.email,
     role: effectiveRole,
+    profileType: user.profileType || (effectiveRole === "creator" ? "creator" : "personal"),
     accountRole: user.role === "admin" ? "admin" : "fan",
     creatorApprovalStatus: user.creatorApprovalStatus,
     avatar: user.avatar,
@@ -43,6 +45,13 @@ function sanitizeUser(user) {
     lastSeenAt: user.lastSeenAt,
     onboarding: user.onboarding,
     onboardingChecklist: user.onboardingChecklist,
+    dateOfBirth: user.dateOfBirth,
+    preferredLanguage: user.preferredLanguage || "en",
+    memberNumber: user.memberNumber || null,
+    showMemberNumber: user.showMemberNumber !== false,
+    businessContact: user.businessContact || {},
+    businessContactButtons: user.businessContactButtons || [],
+    businessContactButtonsConfigured: Boolean(user.businessContactButtonsConfigured),
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
@@ -69,8 +78,26 @@ async function recordAuthAnalytics(req, user, eventType) {
   await recordAnalyticsEvent({ eventType, req, sessionId, source: "unknown", userId: user._id });
 }
 
+async function nextMemberNumber() {
+  const highest = await User.findOne({ memberNumber: { $type: "number" } })
+    .sort({ memberNumber: -1 })
+    .select("memberNumber")
+    .lean();
+  await PlatformCounter.updateOne(
+    { key: "platform-members" },
+    { $max: { value: Number(highest?.memberNumber || 0) }, $setOnInsert: { key: "platform-members" } },
+    { upsert: true }
+  );
+  const counter = await PlatformCounter.findOneAndUpdate(
+    { key: "platform-members" },
+    { $inc: { value: 1 } },
+    { new: true }
+  );
+  return counter.value;
+}
+
 export const register = asyncHandler(async (req, res) => {
-  const { name, username, email, password } = validateRegisterPayload(req.body);
+  const { name, username, email, password, dateOfBirth } = validateRegisterPayload(req.body);
 
   if (req.body.referralCode) await resolveReferral(req.body.referralCode);
 
@@ -82,11 +109,28 @@ export const register = asyncHandler(async (req, res) => {
     username,
     email,
     password,
+    dateOfBirth,
+    preferredLanguage: ["en", "ar", "ru", "uk", "es", "pt", "fr", "de"].includes(req.body.preferredLanguage) ? req.body.preferredLanguage : "en",
+    profileType: "personal",
     role: "fan",
     creatorApprovalStatus: null,
   };
 
-  const user = await User.create(userData);
+  let user;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      user = await User.create({ ...userData, memberNumber: await nextMemberNumber() });
+      break;
+    } catch (error) {
+      const duplicateMemberNumber = error?.code === 11000 && (error?.keyPattern?.memberNumber || error?.keyValue?.memberNumber);
+      if (duplicateMemberNumber && attempt < 2) continue;
+      if (error?.code === 11000 && (error?.keyPattern?.email || error?.keyPattern?.username || error?.keyValue?.email || error?.keyValue?.username)) {
+        throw new ApiError(409, "A user with that email or username already exists");
+      }
+      throw error;
+    }
+  }
+  if (!user) throw new ApiError(503, "Could not reserve a member number. Please try again.");
   await createRoleProfile(user);
   await attributeReferral({ code: req.body.referralCode, invitee: user });
 
@@ -190,5 +234,33 @@ export const getMe = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Authenticated user fetched", {
     user: sanitizeUser(req.user),
   });
+});
+
+export const updateProfileType = asyncHandler(async (req, res) => {
+  if (req.user.role === "admin") throw new ApiError(403, "Administrator account type cannot be changed here");
+  const profileType = String(req.body.profileType || "").trim().toLowerCase();
+  if (!["personal", "creator", "business"].includes(profileType)) throw new ApiError(400, "Choose Personal, Creator, or Business");
+  if (req.body.confirmed !== true) throw new ApiError(400, "Confirm the account type change");
+  const category = String(req.body.category || "").trim().slice(0, 40);
+  const contactButtons = [...new Set((Array.isArray(req.body.contactButtons) ? req.body.contactButtons : []).map((item) => String(item || "").trim().toLowerCase()))]
+    .filter((item) => ["call", "directions", "website"].includes(item));
+  req.user.profileType = profileType;
+  if (profileType === "personal") req.user.businessContact = { call: "", directions: "", website: "" };
+  if (profileType !== "business") req.user.businessContactButtons = [];
+  if (profileType !== "business") req.user.businessContactButtonsConfigured = false;
+  if (profileType === "business") {
+    req.user.businessContactButtons = contactButtons;
+    req.user.businessContactButtonsConfigured = true;
+  }
+  await req.user.save({ validateModifiedOnly: true });
+  if (["creator", "business"].includes(profileType)) {
+    const profileUpdate = category ? { $set: { category, categories: [category] } } : {};
+    await CreatorProfile.findOneAndUpdate(
+      { user: req.user._id },
+      { ...profileUpdate, $setOnInsert: { user: req.user._id, verificationStatus: "pending" } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  }
+  return sendResponse(res, 200, "Account type updated", { user: sanitizeUser(req.user) });
 });
 

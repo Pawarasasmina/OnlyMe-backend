@@ -28,6 +28,7 @@ import { listSupportedTranslationLanguages } from "../services/translationServic
 import { messageVoiceUrl, uploadMessageVoice } from "../services/messageVoiceStorageService.js";
 import { getVoiceLanguageName, normalizeVoiceLanguageCode, resolveSupportedVoiceLanguage } from "../constants/voiceTranslationLanguages.js";
 import { personalizeCandidates } from "../services/recommendationService.js";
+import { syncRepost } from "../services/repostService.js";
 
 function pageOptions(req) {
   const page = Math.floor(Number(req.query.page));
@@ -751,6 +752,7 @@ export const togglePostSave = asyncHandler(async (req, res) => {
 export const togglePostShare = asyncHandler(async (req, res) => {
   const post = await findPublishedPost(req.params.id);
   const userId = String(req.user._id);
+  if (String(post.author?._id || post.author) === userId) throw new ApiError(409, "You cannot repost your own content");
   const existing = post.shares.find((item) => String(item.user) === userId);
 
   if (existing) {
@@ -761,6 +763,7 @@ export const togglePostShare = asyncHandler(async (req, res) => {
 
   post.shareCount = post.shares.filter((item) => item.actorAccountType !== "TEST").length;
   await post.save();
+  await syncRepost({ enabled: !existing, kind: "note", originalAuthor: post.author?._id || post.author, targetId: post._id, targetModel: "FeedPost", user: req.user._id });
   if (!existing) await trackPostEvent(req, "SHARE", post._id);
   await populatePostForResponse(post);
   await attachSavedCommentState(post, req.user?._id);

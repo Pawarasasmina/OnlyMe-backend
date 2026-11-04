@@ -32,6 +32,7 @@ import onboardingRoutes from "./onboardingRoutes.js";
 import searchRoutes from "./searchRoutes.js";
 import discoverRoutes from "./discoverRoutes.js";
 import dreamRoutes from "./dreamRoutes.js";
+import repostRoutes from "./repostRoutes.js";
 import verifiedCreatorRoutes from "./verifiedCreatorRoutes.js";
 import adminVerifiedCreatorRoutes from "./adminVerifiedCreatorRoutes.js";
 import { sendResponse } from "../utils/response.js";
@@ -75,6 +76,7 @@ router.use("/onboarding", onboardingRoutes);
 router.use("/search", searchRoutes);
 router.use("/discover", discoverRoutes);
 router.use("/dreams", dreamRoutes);
+router.use("/reposts", repostRoutes);
 
 export default router;
 

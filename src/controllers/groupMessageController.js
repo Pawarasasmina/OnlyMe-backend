@@ -7,6 +7,8 @@ import MessageReport from "../models/MessageReport.js";
 import Message from "../models/Message.js";
 import Conversation from "../models/Conversation.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
+import Publication from "../models/Publication.js";
+import PremiumMembership from "../models/PremiumMembership.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -33,6 +35,10 @@ const getGroup = async (groupId, userId) => {
   validId(groupId);
   const group = await GroupConversation.findOne({ _id: groupId, members: userId, deletedAt: null });
   if (!group) throw new ApiError(404, "Group not found");
+  if (group.isWorldCircle && String(group.createdBy) !== String(userId)) {
+    const membership = await PremiumMembership.exists({ user: userId, premiumPublication: group.premiumWorld, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } });
+    if (!membership) throw new ApiError(403, "An active World membership is required for this Circle", "WORLD_MEMBERSHIP_REQUIRED");
+  }
   return group;
 };
 
@@ -47,14 +53,22 @@ export const listGroups = asyncHandler(async (req, res) => {
 
 export const createGroup = asyncHandler(async (req, res) => {
   const name = String(req.body.name || "").trim();
-  const memberIds = [...new Set((req.body.memberIds || []).map(String).filter((id) => mongoose.isValidObjectId(id) && id !== String(req.user._id)))];
+  const premiumWorldId = mongoose.isValidObjectId(req.body.premiumWorldId) ? String(req.body.premiumWorldId) : "";
+  let memberIds = [...new Set((req.body.memberIds || []).map(String).filter((id) => mongoose.isValidObjectId(id) && id !== String(req.user._id)))];
   if (!name || name.length > 60) throw new ApiError(400, "A group name is required");
-  if (memberIds.length < 1 || memberIds.length > 99) throw new ApiError(400, "Choose between 1 and 99 other members");
+  let world = null;
+  if (premiumWorldId) {
+    world = await Publication.findOne({ _id: premiumWorldId, kind: "PREMIUM_WORLD", creator: req.user._id });
+    if (!world) throw new ApiError(403, "Only the World creator can create a private Circle");
+    const memberships = await PremiumMembership.find({ premiumPublication: world._id, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }).select("user").lean();
+    memberIds = [...new Set([...memberIds, ...memberships.map((item) => String(item.user))])].slice(0, 999);
+  }
+  if ((!premiumWorldId && memberIds.length < 1) || memberIds.length > 999) throw new ApiError(400, "Choose at least one member");
   const users = await User.find({ _id: { $in: memberIds }, status: "active" }).select("_id").lean();
   if (users.length !== memberIds.length) throw new ApiError(400, "One or more members are unavailable");
   const blocked = await UserBlock.exists({ $or: [{ blocker: req.user._id, blocked: { $in: memberIds } }, { blocker: { $in: memberIds }, blocked: req.user._id }] });
   if (blocked) throw new ApiError(403, "A blocked account cannot be added to this group");
-  const group = await GroupConversation.create({ name, avatar: String(req.body.avatarUrl || ""), createdBy: req.user._id, members: [req.user._id, ...memberIds], admins: [req.user._id] });
+  const group = await GroupConversation.create({ name, avatar: String(req.body.avatarUrl || ""), description: String(req.body.description || "").trim(), premiumWorld: world?._id || null, isWorldCircle: Boolean(world), createdBy: req.user._id, members: [req.user._id, ...memberIds], admins: [req.user._id] });
   await group.populate("members", "name username avatar role isVerified");
   req.app.get("io")?.to(memberIds.map((id) => `user:${id}`)).emit("group:created", serializeGroup(group, req.user._id));
   return sendResponse(res, 201, "Group created", { group: serializeGroup(group, req.user._id) });

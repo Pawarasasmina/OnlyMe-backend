@@ -5,13 +5,14 @@ import { PUBLICATION_VISIBILITIES } from "../constants/publicationConstants.js";
 
 const plain = (value) => typeof value?.toObject === "function" ? value.toObject() : value;
 const safeMedia = (media, includeAssetId = false) => media && ({ ...(includeAssetId && { assetId: media.assetId }), mediaType: media.mediaType, resourceType: media.resourceType, format: media.format, bytes: media.bytes, width: media.width, height: media.height, duration: media.duration, secureUrl: publicationDeliveryUrl(media) });
-const fullChapter = (chapter, includeAssetId = false) => ({ stableChapterId: chapter.stableChapterId, order: chapter.order, title: chapter.title, isPreview: chapter.isPreview, locked: false, blocks: chapter.blocks.map((block) => ({ id: block.id, type: block.type, order: block.order, ...(block.text && { text: block.text }), ...(block.url && { url: block.url, label: block.label }), ...(block.metadata && { metadata: block.metadata }), ...(block.media && { media: safeMedia(block.media, includeAssetId) }) })) });
+const fullChapter = (chapter, includeAssetId = false) => ({ stableChapterId: chapter.stableChapterId, order: chapter.order, title: chapter.title, isPreview: chapter.isPreview, worldBonus: Boolean(chapter.worldBonus), locked: false, blocks: chapter.blocks.map((block) => ({ id: block.id, type: block.type, order: block.order, ...(block.text && { text: block.text }), ...(block.url && { url: block.url, label: block.label }), ...(block.metadata && { metadata: block.metadata }), ...(block.media && { media: safeMedia(block.media, includeAssetId) }) })) });
 const lockedChapter = (chapter, exposeStoryPreviews = false) => ({ stableChapterId: chapter.stableChapterId, order: chapter.order, title: chapter.title, isPreview: false, locked: true, blocks: exposeStoryPreviews ? chapter.blocks.filter((block) => block.metadata?.storyPreview && block.media).map((block) => ({ id: block.id, type: block.type, order: block.order, metadata: block.metadata, media: safeMedia(block.media) })) : [] });
 const normalizedVisibility = (value) => PUBLICATION_VISIBILITIES.includes(value) ? value : "PUBLIC";
 const idString = (value) => String(value?._id || value || "");
 const tokenMatches = (publication, token) => Boolean(token && publication.shareToken && String(token) === String(publication.shareToken));
 const legacyPublicVisibility = [{ visibility: "PUBLIC" }, { visibility: { $exists: false } }, { visibility: null }, { visibility: "" }];
 const clientBaseUrl = () => String(env.clientUrl || "").replace(/\/+$/u, "");
+const isOneTimePaid = (item) => item?.pricing?.mode === "ONE_TIME" || item?.publishedSnapshot?.metadata?.pricing?.mode === "ONE_TIME";
 
 export async function areMutualFriends(viewerId, creatorId) {
   if (!viewerId || !creatorId || String(viewerId) === String(creatorId)) return false;
@@ -72,7 +73,10 @@ export function publicationAccess(publication, viewer, { audienceAllowed = null,
   if (!["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED", "ARCHIVED"].includes(item.status)) return "NOT_VISIBLE";
   if (item.kind === "SEEN") {
     const allowed = audienceAllowed ?? normalizedVisibility(item.visibility || item.publishedSnapshot?.metadata?.visibility) === "PUBLIC";
-    return allowed ? "PUBLIC_FULL" : "NOT_VISIBLE";
+    if (!allowed) return "NOT_VISIBLE";
+    const paid = isOneTimePaid(item);
+    if (!paid) return "PUBLIC_FULL";
+    return ["ENTITLED_SEEN", "ACTIVE_PREMIUM_MEMBER"].includes(entitlement) ? entitlement : "PUBLIC_PREVIEW";
   }
   if (item.kind === "WORLD") return "PUBLIC_FULL";
   if (item.kind === "PREMIUM_WORLD" && entitlement === "ACTIVE_PREMIUM_MEMBER") return "ACTIVE_PREMIUM_MEMBER";
@@ -89,16 +93,24 @@ export function serializePublication(publication, viewer, { admin = false, audie
   const refs = access === "OWNER" || access === "ADMIN" ? item.entityRefs || metadata.entityRefs || [] : metadata.entityRefs || item.entityRefs || [];
   const visibility = normalizedVisibility(item.visibility || metadata.visibility);
   const canEditMedia = access === "OWNER" || access === "ADMIN";
-  const result = { id: item._id, creator: item.creator?._id ? { id: item.creator._id, name: item.creator.name, username: item.creator.username, avatar: item.creator.avatar, verified: Boolean(item.creator.isVerified) } : { id: item.creator }, creatorId: String(item.creator?._id || item.creator || ""), kind: item.kind, title: metadata.title, summary: metadata.summary, description: metadata.description, category: metadata.category, series: seriesPayload(item, metadata), seriesId: seriesPayload(item, metadata)?.id || null, visibility, audience: visibility, tags: metadata.tags || [], taggedPeople: (metadata.taggedPeople || item.taggedPeople || []).map(String), attachedEntities: item.attachedEntities || metadata.attachedEntities || [], entityRefs: refs.map((ref) => ({ entityId: String(ref.entityId), entityType: ref.entityType })), coverMedia: safeMedia(metadata.coverMedia, canEditMedia), introMedia: safeMedia(metadata.introMedia, canEditMedia), replyToSeen: metadata.replyToSeen || item.replyToSeen || null, status: item.status, isPinned: Boolean(item.isPinned), pricing: metadata.pricing, planet: metadata.planet, includedInWorld: Boolean(metadata.includedInWorld), includedExperienceIds: (metadata.includedExperienceIds || item.includedExperienceIds || []).map(String), worldSeatCapacity: metadata.worldSeatCapacity ?? item.worldSeatCapacity ?? null, worldFoundingCapacity: metadata.worldFoundingCapacity ?? item.worldFoundingCapacity ?? null, worldWaveSize: metadata.worldWaveSize ?? item.worldWaveSize ?? null, commentsEnabled: (metadata.commentsEnabled ?? item.commentsEnabled) !== false, firstMonthOfferEnabled: Boolean(metadata.firstMonthOfferEnabled ?? item.firstMonthOfferEnabled), memberPriceLocked: (metadata.memberPriceLocked ?? item.memberPriceLocked) !== false, directAccessIncluded: (metadata.directAccessIncluded ?? item.directAccessIncluded) !== false, directAccessIncludedReplies: Number(metadata.directAccessIncludedReplies ?? item.directAccessIncludedReplies ?? 1), experiencePath: metadata.experiencePath || "", experienceLocation: metadata.experienceLocation || "", allowDownload: Boolean(metadata.allowDownload), publishedAt: item.publishedAt, access, paymentAvailable: item.kind === "EXPERIENCE" && metadata.pricing?.mode === "ONE_TIME" && access === "PUBLIC_PREVIEW" };
+  const result = { id: item._id, creator: item.creator?._id ? { id: item.creator._id, name: item.creator.name, username: item.creator.username, avatar: item.creator.avatar, verified: Boolean(item.creator.isVerified) } : { id: item.creator }, creatorId: String(item.creator?._id || item.creator || ""), kind: item.kind, title: metadata.title, summary: metadata.summary, description: metadata.description, category: metadata.category, series: seriesPayload(item, metadata), seriesId: seriesPayload(item, metadata)?.id || null, visibility, audience: visibility, tags: metadata.tags || [], taggedPeople: (metadata.taggedPeople || item.taggedPeople || []).map(String), attachedEntities: item.attachedEntities || metadata.attachedEntities || [], entityRefs: refs.map((ref) => ({ entityId: String(ref.entityId), entityType: ref.entityType })), coverMedia: safeMedia(metadata.coverMedia, canEditMedia), introMedia: safeMedia(metadata.introMedia, canEditMedia), replyToSeen: metadata.replyToSeen || item.replyToSeen || null, status: item.status, isPinned: Boolean(item.isPinned), pricing: metadata.pricing, planet: metadata.planet, includedInWorld: Boolean(metadata.includedInWorld), includedExperienceIds: (metadata.includedExperienceIds || item.includedExperienceIds || []).map(String), worldSeatCapacity: metadata.worldSeatCapacity ?? item.worldSeatCapacity ?? null, worldFoundingCapacity: metadata.worldFoundingCapacity ?? item.worldFoundingCapacity ?? null, worldWaveSize: metadata.worldWaveSize ?? item.worldWaveSize ?? null, commentsEnabled: (metadata.commentsEnabled ?? item.commentsEnabled) !== false, firstMonthOfferEnabled: Boolean(metadata.firstMonthOfferEnabled ?? item.firstMonthOfferEnabled), memberPriceLocked: (metadata.memberPriceLocked ?? item.memberPriceLocked) !== false, directAccessIncluded: (metadata.directAccessIncluded ?? item.directAccessIncluded) !== false, directAccessIncludedReplies: Number(metadata.directAccessIncludedReplies ?? item.directAccessIncludedReplies ?? 1), experiencePath: metadata.experiencePath || "", experienceLocation: metadata.experienceLocation || "", allowDownload: Boolean(metadata.allowDownload), ownerWelcomeNote: metadata.ownerWelcomeNote || "", captionsEnabled: (metadata.captionsEnabled ?? item.captionsEnabled) !== false, publishedAt: item.publishedAt, access, paymentAvailable: ["SEEN", "EXPERIENCE"].includes(item.kind) && metadata.pricing?.mode === "ONE_TIME" && access === "PUBLIC_PREVIEW" };
+  result.worldWelcomeVoiceMedia = safeMedia(metadata.worldWelcomeVoiceMedia ?? item.worldWelcomeVoiceMedia, canEditMedia);
+  result.worldWelcomeVoiceMedia = safeMedia(metadata.worldWelcomeVoiceMedia ?? item.worldWelcomeVoiceMedia, canEditMedia);
+  if (isOneTimePaid(item)) {
+    result.pricing = item.pricing?.mode === "ONE_TIME" ? item.pricing : metadata.pricing;
+    result.paymentAvailable = access === "PUBLIC_PREVIEW";
+  }
   result.chapters = (snapshot?.chapters || []).map((chapter, index) => {
-    const firstExperienceChapter = access === "PUBLIC_PREVIEW" && item.kind === "EXPERIENCE" && index === 0;
-    if (access === "PUBLIC_PREVIEW" && !chapter.isPreview && !firstExperienceChapter) return lockedChapter(chapter, item.kind === "EXPERIENCE");
+    const worldBonusLocked = Boolean(chapter.worldBonus) && !["OWNER", "ADMIN"].includes(access) && entitlement !== "ACTIVE_PREMIUM_MEMBER";
+    if (worldBonusLocked) return { ...lockedChapter(chapter), worldBonus: true };
+    const firstPaidChapter = access === "PUBLIC_PREVIEW" && ["SEEN", "EXPERIENCE"].includes(item.kind) && index === 0;
+    if (access === "PUBLIC_PREVIEW" && !chapter.isPreview && !firstPaidChapter) return lockedChapter(chapter, ["SEEN", "EXPERIENCE"].includes(item.kind));
     const serialized = fullChapter(chapter, canEditMedia);
-    return firstExperienceChapter ? { ...serialized, isPreview: true } : serialized;
+    return firstPaidChapter ? { ...serialized, isPreview: true } : serialized;
   });
   result.locked = result.chapters.some((chapter) => chapter.locked);
   if ((access === "OWNER" || access === "ADMIN") && visibility === "LINK_ONLY" && item.shareToken) result.shareUrl = `${clientBaseUrl()}/seen/${item._id}?access=${encodeURIComponent(item.shareToken)}`;
-  if (access === "OWNER" || access === "ADMIN") Object.assign(result, { draftVersion: item.draftVersion, submittedVersion: item.submittedVersion, publishedVersion: item.publishedVersion, statusVersion: item.statusVersion, creatorVisibleFeedback: item.creatorVisibleFeedback, submittedAt: item.submittedAt, reviewedAt: item.reviewedAt });
+  if (access === "OWNER" || access === "ADMIN") Object.assign(result, { aiAssistance: item.aiAssistance || { sessionId: "", generated: false }, draftVersion: item.draftVersion, submittedVersion: item.submittedVersion, publishedVersion: item.publishedVersion, statusVersion: item.statusVersion, creatorVisibleFeedback: item.creatorVisibleFeedback, submittedAt: item.submittedAt, reviewedAt: item.reviewedAt });
   if (admin && access === "ADMIN") result.internalModerationNote = item.internalModerationNote || "";
   return result;
 }

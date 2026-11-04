@@ -44,6 +44,27 @@ const userSchema = new mongoose.Schema(
       index: true,
       select: false,
     },
+    profileType: {
+      type: String,
+      enum: ["personal", "creator", "business"],
+      default: "personal",
+      index: true,
+    },
+    dateOfBirth: { type: Date, default: null },
+    preferredLanguage: {
+      type: String,
+      enum: ["en", "ar", "ru", "uk", "es", "pt", "fr", "de"],
+      default: "en",
+    },
+    memberNumber: { type: Number, unique: true, sparse: true, index: true },
+    showMemberNumber: { type: Boolean, default: true },
+    businessContact: {
+      call: { type: String, trim: true, maxlength: 80, default: "" },
+      directions: { type: String, trim: true, maxlength: 500, default: "" },
+      website: { type: String, trim: true, maxlength: 500, default: "" },
+    },
+    businessContactButtons: [{ type: String, enum: ["call", "directions", "website"] }],
+    businessContactButtonsConfigured: { type: Boolean, default: false },
     creatorApprovalStatus: {
       type: String,
       enum: ["pending", "approved", "rejected", "suspended", null],
@@ -82,16 +103,19 @@ const userSchema = new mongoose.Schema(
       isActive: { type: Boolean, default: false },
     },
     onboarding: {
-      version: { type: Number, default: 1 },
+      version: { type: Number, default: 2 },
       status: { type: String, enum: ["not_started", "in_progress", "completed", "skipped"], default: "not_started" },
       currentStep: {
         type: String,
-        enum: ["welcome", "interests", "instincts", "people", "light-your-world", "complete", "completed"],
+        enum: ["welcome", "interests", "account-type", "fill-feed", "ticket", "complete", "completed", "instincts", "people", "light-your-world"],
         default: "welcome",
       },
       startedAt: { type: Date, default: null },
       welcomeCompleted: { type: Boolean, default: false },
       interestsCompleted: { type: Boolean, default: false },
+      accountTypeCompleted: { type: Boolean, default: false },
+      fillFeedCompleted: { type: Boolean, default: false },
+      ticketViewed: { type: Boolean, default: false },
       instinctsCompleted: { type: Boolean, default: false },
       peopleCompleted: { type: Boolean, default: false },
       checklistAcknowledged: { type: Boolean, default: false },
@@ -145,6 +169,7 @@ userSchema.methods.passwordChangedAfter = function passwordChangedAfter(jwtIssue
 
 userSchema.index({ role: 1, status: 1, creatorApprovalStatus: 1 });
 userSchema.index({ accountType: 1, status: 1 });
+userSchema.index({ profileType: 1, status: 1 });
 userSchema.index({ username: 1, status: 1 });
 userSchema.index({ name: 1, status: 1 });
 userSchema.index({ "activeStatus.isActive": 1, "activeStatus.expiresAt": 1, status: 1 });

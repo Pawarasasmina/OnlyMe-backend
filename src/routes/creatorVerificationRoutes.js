@@ -1,6 +1,7 @@
 ﻿import { Router } from "express";
 import {
   deleteVerificationFile,
+  completeSellerInformation,
   getMyVerification,
   resubmitVerification,
   saveVerificationDraft,
@@ -15,6 +16,7 @@ import { uploadVerificationDocument } from "../middleware/verificationUploadMidd
 const router = Router();
 router.use(protect, authorize("fan", "creator"));
 router.get("/", getMyVerification);
+router.put("/seller-information", completeSellerInformation);
 router.put("/draft", saveVerificationDraft);
 router.post("/upload/:documentType", uploadVerificationDocument.single("document"), uploadVerificationFile);
 router.delete("/upload/:documentType", deleteVerificationFile);

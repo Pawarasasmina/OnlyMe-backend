@@ -5,6 +5,7 @@ import {
   validateInstinctPreferences,
   validateInterestIds,
   validateSuggestedPeoplePayload,
+  validateProfileType,
 } from "./onboardingValidator.js";
 
 test("validates onboarding interests against the approved taxonomy", () => {
@@ -13,6 +14,13 @@ test("validates onboarding interests against the approved taxonomy", () => {
     "Travel",
     "Business",
   ]);
+});
+
+test("validates the three onboarding profile types", () => {
+  assert.deepEqual(validateProfileType({ profileType: "Creator", category: "Coach" }), { category: "Coach", contactButtons: [], profileType: "creator" });
+  assert.deepEqual(validateProfileType({ profileType: "Business", category: "Shop", contactButtons: ["Call", "website", "call", "booking"] }), { category: "Shop", contactButtons: ["call", "website"], profileType: "business" });
+  assert.throws(() => validateProfileType({ profileType: "Creator" }), /Choose a category/);
+  assert.throws(() => validateProfileType({ profileType: "admin" }), /Personal, Creator, or Business/);
 });
 
 test("requires the onboarding interest minimum and maximum", () => {
