@@ -17,7 +17,7 @@ export async function activeDreamGifts(recipientId) {
 const clean = (value, max) => String(value || "").trim().slice(0, max);
 const serialize = (dream, supporters = [], cameTrueCount = 0) => dream ? ({ id: dream._id, emoji: dream.emoji, title: dream.title, reason: dream.reason, photo: dream.photo?.url ? { url: dream.photo.url } : null, goalStars: dream.goalStars, receivedStars: dream.receivedStars, supporterCount: dream.supporterCount, cameTrueCount, status: dream.status, completedAt: dream.completedAt, version: dream.version, creator: dream.creator?._id ? { id: dream.creator._id, name: dream.creator.name, username: dream.creator.username, avatar: dream.creator.avatar } : undefined, supporters }) : null;
 
-export async function publicDream(username) {
+export async function publicDream(username, viewerId) {
   const creator = await User.findOne({ username: String(username).toLowerCase(), role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved", status: "active" }).select("name username avatar").lean();
   if (!creator) throw new ApiError(404, "Creator not found");
   const [dream, cameTrueCount] = await Promise.all([
@@ -27,7 +27,14 @@ export async function publicDream(username) {
   if (!dream) return null;
   const gifts = await DreamGift.find({ dream: dream._id, privateSupport: false }).sort({ createdAt: -1 }).limit(8).populate("supporter", "name username avatar").lean();
   const supporters = gifts.filter((gift) => gift.supporter).map((gift) => ({ name: gift.supporter.name, username: gift.supporter.username, avatar: gift.supporter.avatar, giftName: gift.giftName }));
-  return serialize(dream, supporters, cameTrueCount);
+  const [quietSupporters, namedSupporters] = await Promise.all([
+    DreamGift.distinct("supporter", { dream: dream._id, privateSupport: true }),
+    DreamGift.distinct("supporter", { dream: dream._id, privateSupport: false }),
+  ]);
+  const namedIds = new Set(namedSupporters.map(String));
+  const supporterIds = new Set([...namedSupporters, ...quietSupporters].map(String));
+  const uniqueSupporters = supporters.filter((person, index, all) => all.findIndex(other => other.username === person.username) === index);
+  return { ...serialize(dream, uniqueSupporters, cameTrueCount), supporterCount: supporterIds.size, viewerHasSupported: Boolean(viewerId && supporterIds.has(String(viewerId))), quietSupporterCount: quietSupporters.filter(id => !namedIds.has(String(id))).length };
 }
 
 export async function saveDream(creatorId, payload) {

@@ -10,6 +10,13 @@ import ProfileRelationship from "../models/ProfileRelationship.js";
 import Conversation from "../models/Conversation.js";
 import Message from "../models/Message.js";
 import Notification from "../models/Notification.js";
+import PremiumMembership from "../models/PremiumMembership.js";
+import WorldEntitlement from "../models/WorldEntitlement.js";
+import { storyAudiencesFor } from "../services/storyAudienceService.js";
+import { resolveStorySources } from "../services/storySourceService.js";
+import { notifyStory } from "../services/storyNotificationService.js";
+import { upsertStoryReactionMessage } from "../services/storyReactionMessageService.js";
+import { isStoryReaction } from "../constants/storyReactions.js";
 import OrbitSignal from "../models/OrbitSignal.js";
 import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
@@ -33,16 +40,9 @@ const activeStory = async (id) => {
 
 const followedStory = async (id, fanId) => {
   const story = await activeStory(id);
-  if (String(story.creator) === String(fanId)) return story;
-  const blocked = await UserBlock.exists({ $or: [{ blocker: fanId, blocked: story.creator }, { blocker: story.creator, blocked: fanId }] });
-  if (blocked || story.audience === "only_me") throw new ApiError(403, "This story is unavailable");
-  if (story.audience === "everyone" || !story.audience) return story;
-  const follows = await ProfileRelationship.exists({ actor: fanId, target: story.creator, type: "FOLLOW" });
-  if (!follows) throw new ApiError(403, "Follow this creator to view their story");
-  if (story.audience === "close_circle") {
-    const followsBack = await ProfileRelationship.exists({ actor: story.creator, target: fanId, type: "FOLLOW" });
-    if (!followsBack) throw new ApiError(403, "This story is available to the creator's close circle");
-  }
+  const allowed = await storyAudiencesFor(story.creator, fanId);
+  if (!allowed.has(story.audience || "everyone")) throw new ApiError(403, "This story is unavailable to your account");
+  await resolveStorySources([story], fanId);
   return story;
 };
 
@@ -66,7 +66,7 @@ const readMediaType = (file, value) => {
 const readDuration = (value, mediaType) => {
   const fallback = mediaType === "video" ? 15 : 5;
   const duration = Number(value) || fallback;
-  return Math.max(1, Math.min(60, duration));
+  return Math.max(1, Math.min(mediaType === "video" ? 15 : 60, duration));
 };
 
 const defaultEditorMetadata = () => ({
@@ -142,6 +142,7 @@ const serialize = (story, viewer, engagement, insights = null) => {
     viewerReaction: engagement?.reaction || null,
     isInProfileMedia: Boolean(story.isInProfileMedia),
     sourceType: story.sourceType || "original",
+    ...(story.sourceUnavailable ? { sourceUnavailable: true } : {}),
     ...(sourceSeenId ? { sourceSeenId } : {}),
     ...(sourceSeen ? { sourceSeen } : {}),
     ...(story.sourceType === "seen" && !sourceSeen ? { sourceUnavailable: true } : {}),
@@ -204,11 +205,7 @@ const serializeHighlightStory = (story, creator, viewerId) => {
 };
 
 async function highlightAudience(creatorId, viewerId) {
-  if (String(creatorId) === String(viewerId)) return new Set(["everyone", "followers", "close_circle", "only_me"]);
-  const follows = await ProfileRelationship.exists({ actor: viewerId, target: creatorId, type: "FOLLOW" });
-  if (!follows) return new Set(["everyone"]);
-  const followsBack = await ProfileRelationship.exists({ actor: creatorId, target: viewerId, type: "FOLLOW" });
-  return new Set(followsBack ? ["everyone", "followers", "close_circle"] : ["everyone", "followers"]);
+  return storyAudiencesFor(creatorId, viewerId);
 }
 
 function cleanString(value, maxLength) {
@@ -265,6 +262,7 @@ export const getCreatorHighlights = asyncHandler(async (req, res) => {
   if (blocked) throw new ApiError(403, "These highlights are unavailable");
   const allowed = await highlightAudience(creatorId, viewerId);
   const highlights = await StoryHighlight.find({ creator: creatorId }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified role creatorApprovalStatus status").lean();
+  await resolveStorySources(highlights.flatMap((highlight) => highlight.stories), viewerId);
   const items = highlights.flatMap((highlight) => {
     if (!highlight.creator || highlight.creator.status !== "active") return [];
     const stories = highlight.stories.filter((story) => allowed.has(story.audience || "everyone")).map((story) => serializeHighlightStory(story, highlight.creator, viewerId));
@@ -337,7 +335,8 @@ export const getStory = asyncHandler(async (req, res) => {
   }
   await story.populate("creator", "name username avatar isVerified");
   await story.populate({ path: "sourceSeen", populate: [{ path: "creator", select: "name username avatar isVerified" }, { path: "series", select: "name" }] });
-  return sendResponse(res, 200, "Story fetched", { story: serialize(story, req.user._id) });
+  const engagement = await StoryEngagement.findOne({ story: story._id, fan: req.user._id }).lean();
+  return sendResponse(res, 200, "Story fetched", { story: serialize(story, req.user._id, engagement) });
 });
 
 export const getCreatorStories = asyncHandler(async (req, res) => {
@@ -355,6 +354,8 @@ export const getCreatorStories = asyncHandler(async (req, res) => {
   if (blocked) throw new ApiError(403, "These stories are unavailable");
 
   const audience = [{ audience: "everyone" }, { audience: { $exists: false } }];
+  const allowedAudiences = await storyAudiencesFor(creatorId, viewerId);
+  if (allowedAudiences.has("world")) audience.push({ audience: "world" });
   if (isOwner) audience.push({ creator: viewerId });
   else {
     const follows = await ProfileRelationship.exists({ actor: viewerId, target: creatorId, type: "FOLLOW" });
@@ -371,7 +372,8 @@ export const getCreatorStories = asyncHandler(async (req, res) => {
     ...(isOwner ? {} : { $or: audience }),
   }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified role creatorApprovalStatus status").populate({ path: "sourceSeen", populate: [{ path: "creator", select: "name username avatar isVerified" }, { path: "series", select: "name" }] }).lean();
 
-  const availableStories = stories.filter((story) => story.creator?.status === "active");
+  const availableStories = stories.filter((story) => story.creator?.status === "active" || (story.creator?.status === "deactivated" && story.audience === "world" && allowedAudiences.has("world")));
+  await resolveStorySources(availableStories, viewerId);
   const engagements = await StoryEngagement.find({ fan: viewerId, story: { $in: availableStories.map((story) => story._id) } }).lean();
   const byStory = new Map(engagements.map((item) => [String(item.story), item]));
 
@@ -424,20 +426,93 @@ export const createStory = asyncHandler(async (req, res) => {
   const duration = readDuration(req.body.duration, mediaType);
   const editorMetadata = parseStoryEditorMetadata(req.body.editorMetadata);
   const options = parseStoryOptions(req.body);
-  const stored = await storeFile(req.file, { folder: `onlyme/stories/${req.user._id}`, resourceType: mediaType === "video" ? "video" : "image" });
-  const story = await Story.create({
+  const publishKey = cleanString(req.body.publishKey, 100);
+  const replay = publishKey ? await Story.findOne({ creator: req.user._id, publishKey }) : null;
+  if (replay) {
+    await notifyMentions(req, replay);
+    await replay.populate("creator", "name username avatar isVerified");
+    return sendResponse(res, 200, "Story already published", { story: serialize(replay, req.user._id) });
+  }
+  await validateMentions(req, editorMetadata, options.audience);
+  if (req.body.sourceStoryId) {
+    const source = await followedStory(req.body.sourceStoryId, req.user._id);
+    if (source.audience !== "everyone" || source.allowSharing === false || source.editorMetadata?.sourceStoryId
+      || !source.editorMetadata?.mentions?.some((item) => String(item.userId) === String(req.user._id))) {
+      throw new ApiError(403, "This story cannot be reshared");
+    }
+    await source.populate("creator", "name username avatar");
+    editorMetadata.sourceStoryId = String(source._id);
+    editorMetadata.sharedCard = {
+      destinationRoute: `/stories/${source._id}`, kind: "story", imageUrl: source.image.url,
+      ...(source.mediaType === "video" ? { mediaType: "video" } : {}),
+      title: source.creator.name, subtitle: `@${source.creator.username} · Original story`,
+      x: editorMetadata.sharedCard?.x ?? 50, y: editorMetadata.sharedCard?.y ?? 50,
+      scale: editorMetadata.sharedCard?.scale ?? 1,
+    };
+  } else if (editorMetadata.sharedCard?.destinationRoute?.startsWith("/stories/")) {
+    throw new ApiError(400, "An original story is required");
+  }
+  const deliveryType = options.audience === "everyone" ? "upload" : "authenticated";
+  const stored = await storeFile(req.file, { folder: `onlyme/stories/${req.user._id}`, resourceType: mediaType === "video" ? "video" : "image", deliveryType });
+  let story;
+  try { story = await Story.create({
     creator: req.user._id,
+    ...(publishKey ? { publishKey } : {}),
     caption,
-    image: { assetId: stored.id, url: stored.url, resourceType: stored.resourceType },
+    image: { assetId: stored.id, url: stored.url, resourceType: stored.resourceType, deliveryType },
     mediaType,
     duration,
     editorMetadata,
     ...options,
     expiresAt: storyExpiresAt(req.user.accountType),
-  });
+  }); } catch (error) {
+    if (stored.id) await deleteAsset(stored.id, stored.resourceType, deliveryType).catch(() => {});
+    if (error.code !== 11000 || !publishKey) throw error;
+    story = await Story.findOne({ creator: req.user._id, publishKey });
+    if (!story) throw error;
+  }
   await archiveStory(story);
+  await notifyMentions(req, story);
   await story.populate("creator", "name username avatar isVerified");
   return sendResponse(res, 201, isPermanentTestStory(req.user.accountType) ? "Test story is live without expiry" : "Story is live for 24 hours", { story: serialize(story, req.user._id) });
+});
+
+async function notifyMentions(req, story) {
+  for (const mention of story.editorMetadata?.mentions || []) {
+    const allowed = await storyAudiencesFor(story.creator?._id || story.creator, mention.userId);
+    if (!allowed.has(story.audience || "everyone")) continue;
+    await notifyStory({ req, story, recipient: mention.userId, type: "story_mention", title: `${req.user.name || "Someone"} mentioned you in a story`, dedupeKey: `story-mention:${story._id}:${mention.userId}` });
+    await notifyStory({ req, story, recipient: req.user._id, type: "story_mention_sent", mentionedUser: mention.userId, title: `You mentioned ${mention.name || mention.username || "someone"} in your story`, dedupeKey: `story-mention-sent:${story._id}:${mention.userId}` });
+  }
+}
+
+async function validateMentions(req, metadata, audience) {
+  const mentions = metadata.mentions || [];
+  if (!mentions.length) return;
+  const users = await User.find({ _id: { $in: mentions.map((item) => item.userId) }, status: "active" }).select("name username").lean();
+  const valid = [];
+  for (const mention of mentions) {
+    const person = users.find((item) => String(item._id) === mention.userId);
+    if (!person || String(person._id) === String(req.user._id)) continue;
+    const allowed = await storyAudiencesFor(req.user._id, person._id);
+    if (allowed.has(audience)) valid.push({ ...mention, username: person.username, name: person.name });
+  }
+  metadata.mentions = valid;
+}
+
+export const searchStoryPeople = asyncHandler(async (req, res) => {
+  const q = cleanString(req.query.q, 80).replace(/^@/, "");
+  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const [follows, blocks] = await Promise.all([
+    ProfileRelationship.find({ actor: req.user._id, type: "FOLLOW" }).select("target").lean(),
+    UserBlock.find({ $or: [{ blocker: req.user._id }, { blocked: req.user._id }] }).select("blocker blocked").lean(),
+  ]);
+  const excluded = [req.user._id, ...blocks.flatMap((item) => [item.blocker, item.blocked])];
+  const following = follows.map((item) => item.target);
+  const match = { _id: { $nin: excluded }, status: "active", role: { $in: ["fan", "creator"] }, ...(q ? { $or: [{ name: new RegExp(escaped, "i") }, { username: new RegExp(escaped, "i") }] } : {}) };
+  const preferred = await User.find({ ...match, _id: { $nin: excluded, $in: following } }).select("name username avatar").sort({ name: 1 }).limit(30).lean();
+  const rest = preferred.length < 30 ? await User.find({ ...match, _id: { $nin: [...excluded, ...following] } }).select("name username avatar").sort({ name: 1 }).limit(30 - preferred.length).lean() : [];
+  return sendResponse(res, 200, "People fetched", { people: [...preferred, ...rest].map(serializeUser) });
 });
 
 function sourceSeenSharedCard(publication) {
@@ -481,6 +556,10 @@ export const shareSeenAsStory = asyncHandler(async (req, res) => {
   const baseSharedCard = sourceSeenSharedCard(publication);
   const requestedEditorMetadata = parseStoryEditorMetadata(req.body.editorMetadata);
   const editorMetadata = parseStoryEditorMetadata({
+    flattened: requestedEditorMetadata.flattened === true,
+    mediaFraming: requestedEditorMetadata.mediaFraming,
+    transform: requestedEditorMetadata.transform,
+    mentions: requestedEditorMetadata.mentions,
     sharedCard: {
       ...baseSharedCard,
       ...(requestedEditorMetadata.sharedCard || {}),
@@ -496,14 +575,16 @@ export const shareSeenAsStory = asyncHandler(async (req, res) => {
     drawing: requestedEditorMetadata.drawing || [],
   });
   const options = parseStoryOptions(req.body);
+  await validateMentions(req, editorMetadata, options.audience);
+  const deliveryType = options.audience === "everyone" ? "upload" : "authenticated";
   const uploaded = req.file
-    ? await storeFile(req.file, { folder: `onlyme/stories/${req.user._id}`, resourceType: readMediaType(req.file, req.body.mediaType) === "video" ? "video" : "image" })
+    ? await storeFile(req.file, { folder: `onlyme/stories/${req.user._id}`, resourceType: readMediaType(req.file, req.body.mediaType) === "video" ? "video" : "image", deliveryType })
     : null;
   const story = await Story.create({
     creator: req.user._id,
     caption: "",
     image: uploaded
-      ? { assetId: uploaded.id, url: uploaded.url, resourceType: uploaded.resourceType }
+      ? { assetId: uploaded.id, url: uploaded.url, resourceType: uploaded.resourceType, deliveryType }
       : { assetId: `source-seen:${publication._id}`, url: baseSharedCard.imageUrl, resourceType: "image" },
     mediaType: uploaded?.resourceType === "video" ? "video" : "image",
     duration: readDuration(req.body.duration, uploaded?.resourceType === "video" ? "video" : "image"),
@@ -516,6 +597,7 @@ export const shareSeenAsStory = asyncHandler(async (req, res) => {
   await archiveStory(story);
   await story.populate("creator", "name username avatar isVerified");
   await story.populate({ path: "sourceSeen", populate: [{ path: "creator", select: "name username avatar isVerified" }, { path: "series", select: "name" }] });
+  await notifyMentions(req, story);
   return sendResponse(res, 201, isPermanentTestStory(req.user.accountType) ? "Shared to your permanent test story" : "Shared to your story for 24 hours", { story: serialize(story, req.user._id) });
 });
 
@@ -534,6 +616,8 @@ export const listStories = asyncHandler(async (req, res) => {
   const followedSet = new Set(followedIds.map(String));
   const followsBackIds = new Set(followsBack.map((item) => String(item.actor)));
   const closeCircleIds = followedIds.filter((id) => followsBackIds.has(String(id)));
+  const memberships = await PremiumMembership.find({ user: req.user._id, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: now } }).select("creator").lean();
+  const unlockedWorlds = await WorldEntitlement.find({ user: req.user._id, status: "ACTIVE" }).select("creator publication").populate({ path: "publication", match: { kind: "WORLD" }, select: "_id" }).lean();
   const creatorFilter = {
     creator: { $nin: [...blockedIds] },
     $or: [
@@ -542,10 +626,12 @@ export const listStories = asyncHandler(async (req, res) => {
       { audience: { $exists: false } },
       { audience: "followers", creator: { $in: followedIds } },
       { audience: "close_circle", creator: { $in: closeCircleIds } },
+      { audience: "world", creator: { $in: [...memberships, ...unlockedWorlds.filter((item) => item.publication)].map((item) => item.creator) } },
     ],
   };
   const rawStories = await Story.find({ expiresAt: { $gt: now }, ...creatorFilter }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified role creatorApprovalStatus status activeStatus lastSeenAt").populate({ path: "sourceSeen", populate: [{ path: "creator", select: "name username avatar isVerified" }, { path: "series", select: "name" }] }).lean();
   const stories = rawStories.filter((story) => story.creator && story.creator.status === "active");
+  await resolveStorySources(stories, req.user._id);
   const storyIds = stories.map((item) => item._id);
   const engagements = await StoryEngagement.find({ fan: req.user._id, story: { $in: storyIds } }).lean();
   const byStory = new Map(engagements.map((item) => [String(item.story), item]));
@@ -696,13 +782,19 @@ export const reactStory = asyncHandler(async (req, res) => {
   const story = await followedStory(req.params.id, req.user._id);
   if (story.allowReactions === false) throw new ApiError(403, "Reactions are disabled for this story");
   const reaction = String(req.body.reaction || "").trim();
-  if (reaction.length > 12) throw new ApiError(400, "A valid reaction is required");
+  if (reaction && !isStoryReaction(reaction)) throw new ApiError(400, "A valid reaction is required");
   if (!reaction) {
     const engagement = await StoryEngagement.findOneAndUpdate(
       { story: story._id, fan: req.user._id },
       { $set: { viewedAt: new Date(), actorAccountType: req.user.accountType }, $unset: { reaction: 1 } },
       { upsert: true, new: true },
     );
+    if (String(story.creator) !== String(req.user._id)) {
+      const message = await upsertStoryReactionMessage({ story, senderId: req.user._id, reaction: null });
+      await Notification.deleteOne({ dedupeKey: `story-reaction:${story._id}:${req.user._id}` });
+      for (const userId of [story.creator, req.user._id]) req.app.get("io")?.to(`user:${userId}`).emit("message:updated", { participantId: String(userId) === String(story.creator) ? String(req.user._id) : String(story.creator), messageId: message?._id });
+      req.app.get("io")?.to(`user:${story.creator}`).emit("activity:updated");
+    }
     return sendResponse(res, 200, "Reaction removed", { reaction: null, reactedAt: engagement.updatedAt });
   }
   const engagement = await StoryEngagement.findOneAndUpdate(
@@ -711,25 +803,10 @@ export const reactStory = asyncHandler(async (req, res) => {
     { upsert: true, new: true },
   );
   if (String(story.creator) !== String(req.user._id)) {
-    const conversation = await Conversation.findOneAndUpdate({ fan: req.user._id, creator: story.creator }, { $set: { status: "ACTIVE", declinedAt: null }, $setOnInsert: { fan: req.user._id, creator: story.creator, acceptedAt: new Date(), acceptedByCreator: false } }, { new: true, upsert: true });
-    const storyReply = { story: story._id, imageUrl: story.image.url, caption: story.caption, expiresAt: story.expiresAt, questionPrompt: "" };
-    const created = await Message.create({ sender: req.user._id, recipient: story.creator, body: `Reacted ${reaction} to your story`, mediaType: "text", ppm: false, storyReply });
-    await Notification.findOneAndUpdate(
-      { dedupeKey: `story-reaction:${story._id}:${req.user._id}` },
-      {
-        $set: {
-          user: story.creator,
-          type: "story_reaction",
-          title: `${req.user.name || "Someone"} reacted ${reaction} to your story`,
-          message: story.caption || "",
-          readAt: null,
-          acknowledgedAt: null,
-        },
-        $setOnInsert: { dedupeKey: `story-reaction:${story._id}:${req.user._id}` },
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
-    );
-    req.app.get("io")?.to(`user:${story.creator}`).emit("message:new", { message: { id: String(created._id), senderId: String(created.sender), recipientId: String(created.recipient), body: created.body, mediaType: "text", readAt: null, createdAt: created.createdAt, storyReply: { storyId: String(story._id), imageUrl: story.image.url, caption: story.caption, expiresAt: story.expiresAt, questionPrompt: "" } }, participant: { id: String(req.user._id), displayName: req.user.name, username: req.user.username, avatarUrl: req.user.avatar || null, role: req.user.role, isVerified: Boolean(req.user.isVerified), lastSeenAt: req.user.lastSeenAt || null }, conversationStatus: conversation.status });
+    await Conversation.findOneAndUpdate({ fan: req.user._id, creator: story.creator }, { $setOnInsert: { status: "ACTIVE", fan: req.user._id, creator: story.creator, acceptedAt: new Date(), acceptedByCreator: false } }, { new: true, upsert: true });
+    const created = await upsertStoryReactionMessage({ story, senderId: req.user._id, reaction });
+    await notifyStory({ req, story, recipient: story.creator, type: "story_reaction", title: `${req.user.name || "Someone"} reacted ${reaction} to your story`, dedupeKey: `story-reaction:${story._id}:${req.user._id}`, reaction });
+    for (const userId of [story.creator, req.user._id]) req.app.get("io")?.to(`user:${userId}`).emit("message:updated", { participantId: String(userId) === String(story.creator) ? String(req.user._id) : String(story.creator), messageId: String(created._id) });
     req.app.get("io")?.to(`user:${story.creator}`).emit("activity:updated", { type: "story_reaction", storyId: String(story._id) });
   }
   return sendResponse(res, 200, "Reaction sent", { reaction: engagement.reaction, reactedAt: engagement.updatedAt });
@@ -762,6 +839,7 @@ export const replyStory = asyncHandler(async (req, res) => {
   const created = await Message.create({ sender: req.user._id, recipient: story.creator, body, mediaType: "text", ppm: false, storyReply });
   const serializedReply = { storyId: String(story._id), imageUrl: story.image.url, caption: story.caption, expiresAt: story.expiresAt, questionPrompt };
   const message = { id: String(created._id), senderId: String(created.sender), recipientId: String(created.recipient), body: created.body, mediaType: "text", readAt: null, createdAt: created.createdAt, storyReply: serializedReply };
+  await notifyStory({ req, story, recipient: story.creator, type: "story_reply", title: `${req.user.name || "Someone"} ${questionPrompt ? "answered your story question" : "replied to your story"}`, dedupeKey: `story-reply:${created._id}`, messageId: created._id });
   req.app.get("io")?.to(`user:${story.creator}`).emit("message:new", { message, participant: { id: String(req.user._id), displayName: req.user.name, username: req.user.username, avatarUrl: req.user.avatar || null, role: req.user.role, isVerified: Boolean(req.user.isVerified), lastSeenAt: req.user.lastSeenAt || null }, conversationStatus: conversation.status });
   return sendResponse(res, 201, "Story reply sent", { message });
 });
@@ -872,7 +950,7 @@ export const deleteStory = asyncHandler(async (req, res) => {
   if (!story) throw new ApiError(404, "Story not found");
   await Promise.all([StoryEngagement.deleteMany({ story: story._id }), story.deleteOne()]);
   if (story.image.assetId && !String(story.image.assetId).startsWith("source-") && !await profileMediaReferencesAsset(story.image.assetId)) {
-    await deleteAsset(story.image.assetId, story.image.resourceType || story.mediaType || "image").catch(() => {});
+    await deleteAsset(story.image.assetId, story.image.resourceType || story.mediaType || "image", story.image.deliveryType || "upload").catch(() => {});
   }
   return sendResponse(res, 200, "Story deleted");
 });

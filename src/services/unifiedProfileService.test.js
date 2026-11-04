@@ -5,6 +5,19 @@ import { profileViewerCapabilities, serializeUnifiedProfile } from "./unifiedPro
 const owner = { _id: "owner-id", role: "creator", name: "Creator", username: "creator", avatar: "", isVerified: false, creatorApprovalStatus: "approved", createdAt: new Date() };
 const roleProfile = { _id: "profile-id", bio: "Bio", profileVisibility: "public", verificationStatus: "pending", socialLinks: [] };
 
+test("World monthly income is shown only to its owner", () => {
+  const snapshot = { metadata: { title: "Morning Discipline", summary: "", category: "", tags: [], pricing: { mode: "MONTHLY", starsAmount: 490 }, planet: {} }, chapters: [], version: 1, frozenAt: new Date() };
+  const world = { _id: "world-id", creator: owner._id, kind: "PREMIUM_WORLD", status: "PUBLISHED", publishedSnapshot: snapshot };
+  const input = { owner, roleProfile, planets: [world], worldMemberCounts: new Map([["world-id", 12]]), worldMonthlyIncomeUsd: new Map([["world-id", 588]]) };
+  const own = serializeUnifiedProfile({ ...input, viewer: owner });
+  assert.equal(own.planets[0].monthlyIncomeUsd, 588);
+  assert.equal(own.planets[0].memberCount, 12);
+  const visitor = serializeUnifiedProfile({ ...input, viewer: { _id: "visitor", role: "fan" } });
+  assert.equal(Object.hasOwn(visitor.planets[0], "monthlyIncomeUsd"), false);
+  const empty = serializeUnifiedProfile({ ...input, viewer: owner, worldMonthlyIncomeUsd: new Map() });
+  assert.equal(empty.planets[0].monthlyIncomeUsd, 0);
+});
+
 test("owner detection requires matching user IDs rather than usernames", () => {
   assert.equal(profileViewerCapabilities(owner, { _id: "other-id", username: "creator" }).isOwner, false);
   assert.equal(profileViewerCapabilities(owner, { _id: "owner-id" }).isOwner, true);
@@ -128,8 +141,8 @@ test("profile contract exposes reposted Seen metadata", () => {
 });
 
 test("creator profile exposes relationship counts and viewer state", () => {
-  const result = serializeUnifiedProfile({ owner, roleProfile: { ...roleProfile, directAccessEnabled: true, directAccessPriceStars: 200 }, viewer: { _id: "fan-id", role: "fan" }, followerCount: 12, followingCount: 4, viewerRelationships: [{ type: "FOLLOW" }, { type: "SEE_SIGNAL" }] });
-  assert.deepEqual(result.publicMetrics, { publishedContentCount: 0, followerCount: 12, followingCount: 4, supporterCount: 0 });
+  const result = serializeUnifiedProfile({ owner, roleProfile: { ...roleProfile, directAccessEnabled: true, directAccessPriceStars: 200 }, viewer: { _id: "fan-id", role: "fan" }, followerCount: 12, followingCount: 4, seenByCount: 6, viewerSeeSignalSent: true, viewerRelationships: [{ type: "FOLLOW" }, { type: "SEE_SIGNAL" }] });
+  assert.deepEqual(result.publicMetrics, { publishedContentCount: 0, followerCount: 12, followingCount: 4, seenByCount: 6, supporterCount: 0 });
   assert.deepEqual(result.viewerRelationship, { following: true, seeSignalSent: true });
   assert.equal(result.viewerCapabilities.canFollow, true);
   assert.deepEqual(result.profile.directAccess, { enabled: true, priceStars: 200, durationHours: 48, messageLimit: 3, callEnabled: false, callPriceStars: 500, callDurationMinutes: 5 });

@@ -7,6 +7,7 @@ import Subscription from "../models/Subscription.js";
 import ApiError from "../utils/ApiError.js";
 import { buildCreatorDashboard } from "../services/creatorDashboardService.js";
 import { buildGrowDashboard, resolveReferral } from "../services/referralService.js";
+import { invitationLanding, joinInvitation } from "../services/invitationLandingService.js";
 
 async function buildCreatorView(user) {
   const [profile, posts, members] = await Promise.all([
@@ -66,3 +67,6 @@ export const getGrowDashboard = asyncHandler(async (req, res) => {
 export const getReferralInvitation = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Invitation fetched", await resolveReferral(req.params.code));
 });
+
+export const getInvitationLanding = asyncHandler(async (req, res) => sendResponse(res, 200, "Invitation fetched", await invitationLanding(req.params.code, req.user)));
+export const acceptInvitation = asyncHandler(async (req, res) => sendResponse(res, 200, "Invitation joined", await joinInvitation(req.params.code, req.user)));

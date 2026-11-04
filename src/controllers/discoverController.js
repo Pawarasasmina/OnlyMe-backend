@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { filterStoryAccess } from "../services/storySourceService.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
 import FeedPost from "../models/FeedPost.js";
@@ -8,6 +9,7 @@ import OrbitSignal from "../models/OrbitSignal.js";
 import PremiumMembership from "../models/PremiumMembership.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import Publication from "../models/Publication.js";
+import "../models/PublicationSeries.js";
 import SeenEngagement from "../models/SeenEngagement.js";
 import Story from "../models/Story.js";
 import StoryEngagement from "../models/StoryEngagement.js";
@@ -639,11 +641,14 @@ async function discoverConnections({ blockedIds, previewByCreator, viewerId }) {
         { creator: { $in: ids }, audience: { $in: ["everyone", "followers"] } },
         { creator: { $in: ids }, audience: { $exists: false } },
         { creator: { $in: mutualObjectIds }, audience: "close_circle" },
+        { creator: { $in: ids }, audience: "world" },
       ],
     }).sort({ createdAt: 1, _id: 1 }).populate("creator", "name username avatar isVerified role").lean() : [],
     ids.length ? Publication.find({ creator: { $in: ids }, kind: "PREMIUM_WORLD", status: "PUBLISHED", publishedSnapshot: { $exists: true } }).select("creator").lean() : [],
     ids.length ? countsBy(ProfileRelationship, { target: { $in: ids }, type: "FOLLOW" }, "target") : new Map(),
   ]);
+  const permittedStoryRows = await filterStoryAccess(storyRows, viewerId);
+  storyRows.splice(0, storyRows.length, ...permittedStoryRows);
   const fetchedStoryIds = storyRows.map((story) => story._id);
   const engagementRows = fetchedStoryIds.length
     ? await StoryEngagement.find({ fan: viewerId, story: { $in: fetchedStoryIds } }).lean()
@@ -754,6 +759,35 @@ function filterCreators(creators, term) {
   ].some((value) => String(value || "").toLowerCase().includes(query)));
 }
 
+export function selectSidebarSeens(seens = []) {
+  const trendingSeen = [...seens].sort((a, b) => b.viewCount - a.viewCount || new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0))[0] || null;
+  const fresh = seens.filter(seen => seen.id !== trendingSeen?.id).sort((a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0));
+  return { trendingSeen, freshSeens: [...fresh, ...(trendingSeen ? [trendingSeen] : [])].slice(0, 3) };
+}
+
+async function discoverSidebar(viewer, profiles) {
+  const creatorIds = profiles.map(profile => profile.user._id);
+  const audience = await seenVisibilityFilter(viewer, creatorIds);
+  const [following, publications, followerCounts] = await Promise.all([
+    ProfileRelationship.find({ actor: viewer._id, target: { $in: creatorIds }, type: "FOLLOW" }).select("target").lean(),
+    Publication.find({ creator: { $in: creatorIds }, kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true }, ...audience })
+      .select("title category coverMedia introMedia publishedSnapshot publishedAt createdAt creator")
+      .sort({ publishedAt: -1, updatedAt: -1 }).limit(12)
+      .populate({ path: "creator", match: { role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified" }).lean(),
+    countsBy(ProfileRelationship, { target: { $in: creatorIds }, type: "FOLLOW" }, "target"),
+  ]);
+  const visible = publications.filter(publication => publication.creator);
+  const engagement = await countsBy(SeenEngagement, { publication: { $in: visible.map(item => item._id) } }, "publication");
+  const seens = visible.map(publication => serializeDiscoverSeen(publication, engagement));
+  const followingSet = new Set(following.map(item => String(item.target)));
+  const meta = { followerCounts, followingSet, subscriberCounts: new Map(), worldMemberCounts: new Map(), previewByCreator: new Map() };
+  return {
+    suggestedUsers: profiles.filter(profile => !followingSet.has(String(profile.user._id))).slice(0, 4).map(profile => serializeCreator(profile, meta)),
+    activity: serializeDiscoverActivity(profiles),
+    ...selectSidebarSeens(seens),
+  };
+}
+
 export const getDiscover = asyncHandler(async (req, res) => {
   const viewerModel = roleProfileModel(req.user.role, req.user.creatorApprovalStatus);
   const slidesOnly = req.query.view === "slides";
@@ -784,6 +818,11 @@ export const getDiscover = asyncHandler(async (req, res) => {
     .lean();
 
   const visibleProfiles = profiles.filter((profile) => profile.user);
+  // Shared sidebar must not depend on recommendation ranking, Worlds, stories,
+  // subscriptions or recommendation-exposure writes just to display its cards.
+  if (req.query.view === "sidebar") {
+    return sendResponse(res, 200, "Discover sidebar fetched", await discoverSidebar(req.user, visibleProfiles));
+  }
   const creatorIds = visibleProfiles.map((profile) => profile.user._id);
   const seenAudienceFilter = await seenVisibilityFilter(req.user, creatorIds);
   const [followerCounts, subscriberCounts, worldCounts, following, publications, seens, posts, stories, signalTargetIds, dreamByCreator] = await Promise.all([
@@ -807,7 +846,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
       .limit(80)
       .select("author media")
       .lean(),
-    Story.find({ creator: { $in: creatorIds }, expiresAt: { $gt: new Date() }, audience: { $in: ["everyone", "followers"] } })
+    Story.find({ creator: { $in: creatorIds }, expiresAt: { $gt: new Date() }, audience: { $in: ["everyone", "followers", "close_circle", "world"] } })
       .sort({ createdAt: -1 })
       .limit(40)
       .populate("creator", "name username avatar isVerified role")
@@ -817,6 +856,8 @@ export const getDiscover = asyncHandler(async (req, res) => {
   ]);
 
   const followingSet = new Set(following.map((item) => String(item.target)));
+  const permittedStories = await filterStoryAccess(stories, req.user._id);
+  stories.splice(0, stories.length, ...permittedStories);
   const storyCreatorIds = new Set(stories.map((story) => String(story.creator?._id || story.creator)));
   const previewByCreator = new Map();
   for (const post of posts) {

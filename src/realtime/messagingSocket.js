@@ -69,7 +69,7 @@ export function configureMessagingSocket(io) {
     try {
       const decoded = jwt.verify(socket.handshake.auth?.token, env.accessSecret);
       const user = await User.findOne({ _id: decoded.sub, status: "active", role: { $in: ["fan", "creator"] } });
-      if (!user) return next(new Error("Unauthorized"));
+      if (!user || (decoded.authVersion || 0) !== (user.authVersion || 0)) return next(new Error("Unauthorized"));
       socket.user = user;
       return next();
     } catch { return next(new Error("Unauthorized")); }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { serializeDiscoverSeen } from "./discoverController.js";
+import { serializeDiscoverSeen, selectSidebarSeens } from "./discoverController.js";
 
 test("Fresh and Trending Seens deliver newly uploaded private videos with a signed URL", () => {
   const seen = serializeDiscoverSeen({
@@ -19,4 +19,19 @@ test("Seen sidebar preserves external image covers and missing-cover fallback", 
   assert.equal(seen.cover, image.secureUrl);
   assert.equal(seen.coverMedia.mediaType, "IMAGE");
   assert.equal(serializeDiscoverSeen({ _id: "no-cover" }).coverMedia, null);
+});
+
+test("sidebar selects trending by engagement and fresh by publication date without duplicate cards", () => {
+  const items = [
+    { id: "older", viewCount: 1, publishedAt: "2026-01-01" },
+    { id: "trending", viewCount: 20, publishedAt: "2026-01-02" },
+    { id: "fresh", viewCount: 2, publishedAt: "2026-01-04" },
+    { id: "middle", viewCount: 3, publishedAt: "2026-01-03" },
+  ];
+  const result = selectSidebarSeens(items);
+  assert.equal(result.trendingSeen.id, "trending");
+  assert.deepEqual(result.freshSeens.map(item => item.id), ["fresh", "middle", "older"]);
+  assert.equal(items[0].id, "older");
+  assert.deepEqual(selectSidebarSeens([]), { trendingSeen: null, freshSeens: [] });
+  assert.deepEqual(selectSidebarSeens([items[0]]).freshSeens, [items[0]]);
 });

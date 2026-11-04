@@ -1,3 +1,4 @@
+import { publishedChapterEvents, recordMembershipContentEvents } from "../services/membershipRecapService.js";
 import mongoose from "mongoose";
 import { CONTENT_ENTITY_TYPES } from "../constants/contentEntityConstants.js";
 import { ACTIVE_PLANET_STATUSES, PUBLICATION_KINDS, PUBLICATION_STATUSES, PUBLICATION_VISIBILITIES } from "../constants/publicationConstants.js";
@@ -68,4 +69,10 @@ schema.index({ creator: 1, "planet.slot": 1 }, { unique: true, partialFilterExpr
 schema.index({ creator: 1, kind: 1 }, { unique: true, partialFilterExpression: { kind: "PREMIUM_WORLD", status: { $in: ACTIVE_PLANET_STATUSES } } });
 schema.index({ includedExperienceIds: 1 });
 schema.index({ "worldModerators.user": 1 });
+schema.post("save", async function (doc) {
+  await recordMembershipContentEvents(publishedChapterEvents(doc), doc.$session?.());
+});
+schema.post("findOneAndUpdate", async function (doc) {
+  if (doc) await recordMembershipContentEvents(publishedChapterEvents(doc), this.getOptions().session);
+});
 export default mongoose.model("Publication", schema);

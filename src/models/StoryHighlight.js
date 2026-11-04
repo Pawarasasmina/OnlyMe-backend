@@ -3,11 +3,11 @@ import mongoose from "mongoose";
 const highlightStorySchema = new mongoose.Schema({
   storyId: { type: mongoose.Schema.Types.ObjectId, ref: "Story", required: true },
   caption: { type: String, default: "" },
-  image: { assetId: String, url: String, resourceType: String },
+  image: { assetId: String, url: String, resourceType: String, deliveryType: String },
   mediaType: { type: String, enum: ["image", "video"], default: "image" },
   duration: { type: Number, min: 1, max: 60, default: 5 },
   editorMetadata: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
-  audience: { type: String, enum: ["everyone", "followers", "close_circle", "only_me"], default: "everyone" },
+  audience: { type: String, enum: ["everyone", "followers", "close_circle", "only_me", "world"], default: "everyone" },
   sourceType: { type: String, enum: ["original", "seen"], default: "original" },
   sourceSeen: { type: mongoose.Schema.Types.ObjectId, ref: "Publication", default: null },
   storyCreatedAt: { type: Date, required: true },

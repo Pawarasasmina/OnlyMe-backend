@@ -1,5 +1,6 @@
 ﻿import mongoose from "mongoose";
 import User from "../models/User.js";
+import { profileAccountType } from "../constants/profileCategoryConstants.js";
 import AdminProfile from "../models/AdminProfile.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
@@ -14,6 +15,7 @@ import { env } from "../config/env.js";
 import jwt from "jsonwebtoken";
 import { attributeReferral, resolveReferral } from "../services/referralService.js";
 import PlatformCounter from "../models/PlatformCounter.js";
+import { accountOwnershipSummary, canRestoreAccount, changeAccountOwnership } from "../services/accountOwnershipService.js";
 
 void mongoose;
 
@@ -33,6 +35,10 @@ function sanitizeUser(user) {
     id: user._id,
     name: user.name,
     username: user.username,
+    memberNumber: user.memberNumber,
+    showMemberNumber: user.showMemberNumber !== false,
+    profileAccountType: profileAccountType(user),
+    profileCategory: user.profileCategory,
     email: user.email,
     role: effectiveRole,
     profileType: user.profileType || (effectiveRole === "creator" ? "creator" : "personal"),
@@ -132,7 +138,7 @@ export const register = asyncHandler(async (req, res) => {
   }
   if (!user) throw new ApiError(503, "Could not reserve a member number. Please try again.");
   await createRoleProfile(user);
-  await attributeReferral({ code: req.body.referralCode, invitee: user });
+  await attributeReferral({ code: req.body.referralCode, invitee: user, shareIdentity: req.body.referralShareIdentity !== false });
 
   // Email is a post-registration side effect: a provider outage must never
   // roll back an account that was created successfully.
@@ -157,6 +163,10 @@ export const login = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Invalid email or password");
   }
 
+  if (canRestoreAccount(user)) {
+    const restored = await User.findOneAndUpdate({ _id: user._id, status: user.status, ...(user.status === "pending_deletion" ? { deletionScheduledAt: { $gt: new Date() } } : {}) }, { $set: { status: "active", deactivatedAt: null, deletionRequestedAt: null, deletionScheduledAt: null } }, { new: true });
+    if (restored) Object.assign(user, { status: restored.status, deactivatedAt: null, deletionRequestedAt: null, deletionScheduledAt: null });
+  }
   if (user.status !== "active") {
     throw new ApiError(403, "This account is suspended");
   }
@@ -189,18 +199,21 @@ export const logout = asyncHandler(async (_req, res) => {
 });
 
 export const deleteAccount = asyncHandler(async (req, res) => {
-  if (req.user.role === "admin") {
-    throw new ApiError(403, "Administrator accounts cannot be deleted here");
-  }
-
-  req.user.status = "suspended";
-  req.user.deletionRequestedAt = new Date();
-  await req.user.save({ validateModifiedOnly: true });
-
+  const user = await changeAccountOwnership(req.user, "delete", req.body?.acknowledgeEarningsLoss === true);
+  req.app.get("io")?.in(`user:${req.user._id}`).disconnectSockets(true);
   res.clearCookie("refreshToken", refreshCookieOptions);
   return sendResponse(res, 200, "Account deletion requested", {
-    deletionRequestedAt: req.user.deletionRequestedAt,
+    deletionRequestedAt: user.deletionRequestedAt,
+    deletionScheduledAt: user.deletionScheduledAt,
   });
+});
+
+export const getAccountOwnership = asyncHandler(async (req, res) => sendResponse(res, 200, "Account ownership fetched", await accountOwnershipSummary(req.user)));
+export const deactivateAccount = asyncHandler(async (req, res) => {
+  await changeAccountOwnership(req.user, "deactivate");
+  req.app.get("io")?.in(`user:${req.user._id}`).disconnectSockets(true);
+  res.clearCookie("refreshToken", refreshCookieOptions);
+  return sendResponse(res, 200, "Account deactivated");
 });
 
 export const refreshSession = asyncHandler(async (req, res) => {
@@ -218,7 +231,7 @@ export const refreshSession = asyncHandler(async (req, res) => {
   }
 
   const user = await User.findById(decoded.sub);
-  if (!user || user.status !== "active" || (user.loginRestrictedUntil && user.loginRestrictedUntil > new Date())) {
+  if (!user || user.status !== "active" || (decoded.authVersion || 0) !== (user.authVersion || 0) || (user.loginRestrictedUntil && user.loginRestrictedUntil > new Date())) {
     res.clearCookie("refreshToken", refreshCookieOptions);
     throw new ApiError(401, user?.loginRestrictedUntil > new Date() ? `Account access is restricted until ${user.loginRestrictedUntil.toISOString()}` : "User is not available");
   }

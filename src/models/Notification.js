@@ -12,6 +12,14 @@ const notificationSchema = new mongoose.Schema(
     relatedReport: { type: mongoose.Schema.Types.ObjectId, ref: "MessageReport", default: null },
     readAt: { type: Date, default: null },
     dedupeKey: { type: String, default: undefined, unique: true, sparse: true },
+    actor: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    target: {
+      type: { type: String, default: "" },
+      id: { type: mongoose.Schema.Types.ObjectId, default: null },
+      conversationUserId: { type: mongoose.Schema.Types.ObjectId, default: null },
+      messageId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    },
+    metadata: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
   },
   { timestamps: true }
 );

@@ -5,6 +5,7 @@ const messageSchema = new mongoose.Schema(
     sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     recipient: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     clientMessageId: { type: String, trim: true, maxlength: 100, default: null },
+    storyReactionKey: { type: String, default: undefined },
     body: { type: String, required: true, trim: true, maxlength: 2000 },
     mediaType: { type: String, enum: ["text", "image", "video", "audio", "gift"], default: "text" },
     gift: {
@@ -78,7 +79,7 @@ const messageSchema = new mongoose.Schema(
       expiresAt: { type: Date, default: null },
     },
     sharedContent: {
-      contentType: { type: String, enum: ["", "feed_post", "seen", "world", "experience", "profile", "story"], default: "" },
+      contentType: { type: String, enum: ["", "feed_post", "seen", "world", "experience", "profile", "story", "invitation", "dream"], default: "" },
       contentId: { type: mongoose.Schema.Types.ObjectId, default: null },
       route: { type: String, trim: true, maxlength: 240, default: "" },
       title: { type: String, trim: true, maxlength: 160, default: "" },
@@ -96,6 +97,7 @@ const messageSchema = new mongoose.Schema(
 );
 
 messageSchema.index({ sender: 1, recipient: 1, createdAt: -1 });
+messageSchema.index({ storyReactionKey: 1 }, { unique: true, sparse: true });
 messageSchema.index(
   { sender: 1, clientMessageId: 1 },
   { unique: true, partialFilterExpression: { clientMessageId: { $type: "string" } } },

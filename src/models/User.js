@@ -1,9 +1,15 @@
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 import { ACCOUNT_TYPES, DEFAULT_ACCOUNT_TYPE } from "../constants/accountTypeConstants.js";
+import { nextMemberNumber } from "../services/memberTicketService.js";
 
 const userSchema = new mongoose.Schema(
   {
+    friendInviteRingEarnedAt: { type: Date, default: null },
+    memberNumber: { type: Number, min: 1, immutable: true },
+    showMemberNumber: { type: Boolean, default: true },
+    profileAccountType: { type: String, enum: ["personal", "creator", "business"] },
+    profileCategory: { type: String, maxlength: 40 },
     name: {
       type: String,
       required: true,
@@ -80,10 +86,20 @@ const userSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["active", "suspended"],
+      enum: ["active", "suspended", "deactivated", "pending_deletion", "deleted"],
       default: "active",
     },
     deletionRequestedAt: { type: Date, default: null },
+    deletionScheduledAt: { type: Date, default: null, index: true },
+    deletionCompletedAt: { type: Date, default: null },
+    deactivatedAt: { type: Date, default: null },
+    authVersion: { type: Number, default: 0 },
+    monetization: {
+      dateOfBirth: { type: Date, default: null },
+      country: { type: String, trim: true, maxlength: 80, default: "" },
+      termsAcceptedAt: { type: Date, default: null },
+      termsVersion: { type: String, default: "" },
+    },
     messagingRestrictedUntil: { type: Date, default: null },
     messagingRestrictionReason: { type: String, trim: true, maxlength: 1000, default: "" },
     messagingRestrictedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
@@ -143,6 +159,12 @@ const userSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+userSchema.index({ memberNumber: 1 }, { unique: true, sparse: true });
+
+userSchema.pre("validate", async function assignMemberNumber() {
+  if (this.isNew && !this.memberNumber) this.memberNumber = await nextMemberNumber();
+});
 
 userSchema.pre("save", async function hashPassword(next) {
   if (!this.isModified("password")) {

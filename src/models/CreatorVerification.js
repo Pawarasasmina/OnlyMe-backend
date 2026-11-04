@@ -24,6 +24,7 @@ const documentMetadataSchema = new mongoose.Schema(
 const creatorVerificationSchema = new mongoose.Schema(
   {
     creator: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, unique: true, index: true },
+    purpose: { type: String, enum: ["CREATOR", "IDENTITY"], default: "CREATOR", index: true },
     status: { type: String, enum: VERIFICATION_STATUSES, default: "NOT_STARTED", index: true },
     category: { type: String, trim: true, default: "", maxlength: 40 },
     socialPages: [{ platform: { type: String, trim: true, maxlength: 30 }, handle: { type: String, trim: true, maxlength: 120 } }],

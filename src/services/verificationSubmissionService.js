@@ -44,7 +44,7 @@ async function runSubmission({ creatorId, allowedStatuses, action, transitionId 
     if (!verification) throw new ApiError(409, "Verification changed while it was being submitted");
   }
 
-  await User.updateOne({ _id: creatorId }, { $set: { creatorApprovalStatus: "pending" } }, options(session));
+  if (initial.purpose !== "IDENTITY") await User.updateOne({ _id: creatorId }, { $set: { creatorApprovalStatus: "pending" } }, options(session));
   await CreatorProfile.updateOne(
     { user: creatorId },
     { $set: { verificationStatus: "pending" }, $setOnInsert: { user: creatorId } },

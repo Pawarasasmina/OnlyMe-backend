@@ -5,6 +5,9 @@ import FanProfile from "../models/FanProfile.js";
 import FeedPost from "../models/FeedPost.js";
 import Message from "../models/Message.js";
 import Notification from "../models/Notification.js";
+import Story from "../models/Story.js";
+import User from "../models/User.js";
+import { storyAudiencesFor } from "../services/storyAudienceService.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import Subscription from "../models/Subscription.js";
 import Transaction from "../models/Transaction.js";
@@ -97,11 +100,13 @@ function publicationRoute(publication) {
 
 function publicationTarget(publication) {
   if (!publication) return null;
+  const cover = publication.publishedSnapshot?.metadata?.coverMedia || publication.coverMedia || publication.introMedia;
   return {
     id: String(publication._id),
     type: publication.kind || "SEEN",
     title: publicationTitle(publication),
     preview: textPreview(publication.summary || publication.description || publicationTitle(publication)),
+    ...(cover?.secureUrl ? cover.resourceType === "video" || cover.mediaType === "VIDEO" ? { videoUrl: cover.secureUrl } : { imageUrl: cover.secureUrl } : {}),
   };
 }
 
@@ -150,10 +155,57 @@ function activityBase(input) {
   };
 }
 
-function notificationActivity(notification) {
+function notificationActivity(notification, giftThanksByKey = new Map()) {
+  if (notification.target?.type === "STORY" && notification.target.id) {
+    const reply = notification.type === "story_reply";
+    const sentMention = notification.type === "story_mention_sent";
+    const mention = sentMention || notification.type === "story_mention";
+    const target = { ...notification.target, id: String(notification.target.id) };
+    const query = new URLSearchParams({ with: String(target.conversationUserId || "") });
+    if (target.messageId) query.set("message", String(target.messageId));
+    return activityBase({
+      id: `notification-${notification._id}`, type: notification.type, direction: sentMention ? "sent" : "received",
+      filter: mention ? "mentions" : reply ? "comments" : notification.type === "story_reaction" ? "support" : "other",
+      title: notification.title, preview: notification.message, createdAt: notification.createdAt,
+      actor: notification.actor?._id ? serializeCreator(notification.actor) : null, target,
+      actionPath: reply && target.conversationUserId ? `/messages?${query}` : `/stories/${target.id}`,
+      metadata: notification.metadata || {}, dedupeKey: notification.dedupeKey,
+      acknowledged: Boolean(notification.acknowledgedAt || notification.readAt), read: Boolean(notification.readAt), canAcknowledge: !sentMention,
+    });
+  }
   const isWarning = notification.type === "moderation_warning";
+  const giftThanks = notification.type === "gift_thanks" ? giftThanksByKey.get(notification.dedupeKey) : null;
   const financial = /earning|refund|wallet|stars|debit|credit/i.test(`${notification.type} ${notification.title}`);
-  const filter = isWarning ? "moderation" : financial ? "earnings" : "system";
+  const filter = isWarning ? "moderation" : giftThanks ? "support" : financial ? "earnings" : "system";
+
+  if (giftThanks) {
+    const creator = giftThanks.kind === "dream" ? giftThanks.gift.creator : giftThanks.gift.recipient;
+    const name = creator?.name || creator?.username || "Someone";
+    return activityBase({
+      id: `notification-${notification._id}`,
+      type: "gift_thanks",
+      direction: "received",
+      filter: "support",
+      filterKeys: ["support"],
+      title: `${name} thanked you for your gift`,
+      description: `${name} thanked you for your gift`,
+      preview: notification.message || "Thank you — I saw it right away.",
+      createdAt: notification.createdAt,
+      actor: serializeCreator(creator),
+      actionPath: creator?.username ? `/profile/${encodeURIComponent(creator.username)}` : null,
+      acknowledged: Boolean(notification.acknowledgedAt || notification.readAt),
+      read: Boolean(notification.readAt),
+      dedupeKey: notification.dedupeKey,
+      canAcknowledge: true,
+      reference: { type: giftThanks.kind === "dream" ? "DREAM_GIFT" : "CHAT_GIFT", id: String(giftThanks.gift._id) },
+      metadata: {
+        giftId: String(giftThanks.gift.gift || giftThanks.gift._id),
+        giftImageUrl: giftThanks.gift.giftImageUrl || "",
+        giftName: giftThanks.gift.giftName || "Gift",
+        giftSource: giftThanks.kind === "dream" ? "Dream" : (giftThanks.gift.sourceType === "STORY" ? "Story" : "Direct"),
+      },
+    });
+  }
 
   return activityBase({
     id: `notification-${notification._id}`,
@@ -170,7 +222,7 @@ function notificationActivity(notification) {
     acknowledged: Boolean(notification.acknowledgedAt || notification.readAt),
     read: Boolean(notification.readAt),
     createdAt: notification.createdAt,
-    actionPath: isWarning ? "/settings/support/safety" : null,
+    actionPath: isWarning ? "/settings/support/safety" : notification.type === "membership_cancelled" ? "/memberships" : null,
     dedupeKey: notification.dedupeKey || null,
     canAcknowledge: true,
   });
@@ -627,6 +679,7 @@ function serializeActivityItem(item) {
 
 const ACTIVITY_FILTER_ALIASES = {
   all: "all",
+  mentions: "mentions",
   seen: "seen",
   support: "support",
   saves: "saves",
@@ -723,7 +776,7 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
     sentDreamGifts,
   ] = await Promise.all([
     Subscription.find({ fan: fanId }).sort({ updatedAt: -1 }).limit(limit).populate("creator", "name username avatar").lean(),
-    Notification.find({ user: fanId }).sort({ createdAt: -1 }).limit(limit).lean(),
+    Notification.find({ user: fanId }).sort({ createdAt: -1 }).limit(limit).populate("actor", "name username avatar status").lean(),
     wallet
       ? Transaction.find({ wallet: wallet._id }).sort({ createdAt: -1 }).limit(limit).lean()
       : Promise.resolve([]),
@@ -732,8 +785,8 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
     ProfileRelationship.find({ actor: fanId, type: "FOLLOW" }).sort({ createdAt: -1 }).limit(limit).populate("target", "name username avatar role status").lean(),
     OrbitSignal.find({ targetUser: fanId, type: "SEE_YOU", status: "active" }).sort({ createdAt: -1 }).limit(limit).populate({ path: "sender", match: { status: "active" }, select: "name username avatar role status" }).lean(),
     OrbitSignal.find({ sender: fanId, type: "SEE_YOU", status: "active" }).sort({ createdAt: -1 }).limit(limit).populate({ path: "targetUser", match: { status: "active" }, select: "name username avatar role status" }).lean(),
-    SeenEngagement.find({ user: { $ne: fanId }, type: { $in: ["REACTION", "COMMENT", "SAVE", "SHARE"] } }).sort({ updatedAt: -1, createdAt: -1 }).limit(limit * 6).populate("user", "name username avatar role status").populate({ path: "publication", match: { creator: fanId, status: "PUBLISHED" }, select: "title summary description kind creator publishedSnapshot.metadata.title" }).lean(),
-    SeenEngagement.find({ user: fanId, type: { $in: ["REACTION", "COMMENT", "SAVE", "SHARE"] } }).sort({ updatedAt: -1, createdAt: -1 }).limit(limit).populate({ path: "publication", match: { status: "PUBLISHED" }, select: "title summary description kind creator publishedSnapshot.metadata.title", populate: { path: "creator", select: "name username avatar role status" } }).lean(),
+    SeenEngagement.find({ user: { $ne: fanId }, type: { $in: ["REACTION", "COMMENT", "SAVE", "SHARE"] } }).sort({ updatedAt: -1, createdAt: -1 }).limit(limit * 6).populate("user", "name username avatar role status").populate({ path: "publication", match: { creator: fanId, status: "PUBLISHED" }, select: "title summary description kind creator coverMedia introMedia publishedSnapshot.metadata.title publishedSnapshot.metadata.coverMedia" }).lean(),
+    SeenEngagement.find({ user: fanId, type: { $in: ["REACTION", "COMMENT", "SAVE", "SHARE"] } }).sort({ updatedAt: -1, createdAt: -1 }).limit(limit).populate({ path: "publication", match: { status: "PUBLISHED" }, select: "title summary description kind creator coverMedia introMedia publishedSnapshot.metadata.title publishedSnapshot.metadata.coverMedia", populate: { path: "creator", select: "name username avatar role status" } }).lean(),
     WallEngagement.find({ user: { $ne: fanId }, type: { $in: ["REACTION", "COMMENT", "SAVE", "SHARE"] } }).sort({ updatedAt: -1, createdAt: -1 }).limit(limit * 6).populate("user", "name username avatar role status").populate({ path: "post", match: { creator: fanId, status: "PUBLISHED" }, select: "text creator" }).lean(),
     WallEngagement.find({ user: fanId, type: { $in: ["REACTION", "COMMENT", "SAVE", "SHARE"] } }).sort({ updatedAt: -1, createdAt: -1 }).limit(limit).populate({ path: "post", match: { status: "PUBLISHED" }, select: "text creator", populate: { path: "creator", select: "name username avatar role status" } }).lean(),
     WallShareEngagement.find({ user: { $ne: fanId }, type: { $in: ["REACTION", "COMMENT", "SAVE"] } }).sort({ updatedAt: -1, createdAt: -1 }).limit(limit * 6).populate("user", "name username avatar role status").populate({ path: "share", match: { user: fanId, type: "SHARE" }, select: "post user text createdAt updatedAt", populate: { path: "post", match: { status: "PUBLISHED" }, select: "text creator" } }).lean(),
@@ -765,6 +818,31 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
     DreamGift.find({ supporter: fanId }).sort({ createdAt: -1 }).limit(limit).populate("creator", "name username avatar role status").populate("dream", "title").lean(),
   ]);
 
+  // Resolve previews at read time; old notifications must not expose expired or restricted media.
+  for (const notification of notifications) {
+    if (notification.type !== "story_reaction" || notification.target?.id) continue;
+    const legacy = /^story-reaction:([a-f\d]{24}):([a-f\d]{24})$/i.exec(notification.dedupeKey || "");
+    if (!legacy) continue;
+    notification.target = { type: "STORY", id: legacy[1] };
+    notification.actor = await User.findById(legacy[2]).select("name username avatar status").lean();
+    notification.metadata = { ...notification.metadata, reaction: notification.title?.match(/reacted (.+?) to your story/)?.[1] || null };
+  }
+  const storyIds = notifications.filter((item) => item.target?.type === "STORY").map((item) => item.target.id).filter(Boolean);
+  const currentStories = await Story.find({ _id: { $in: storyIds }, expiresAt: { $gt: new Date() } }).lean();
+  const audienceCache = new Map();
+  for (const notification of notifications.filter((item) => item.target?.type === "STORY")) {
+    const story = currentStories.find((item) => String(item._id) === String(notification.target.id));
+    notification.message = "";
+    notification.metadata = { ...notification.metadata };
+    for (const key of ["imageUrl", "videoUrl", "thumbnailUrl", "previewUrl"]) delete notification.metadata[key];
+    if (!story) continue;
+    const creatorId = String(story.creator);
+    if (!audienceCache.has(creatorId)) audienceCache.set(creatorId, await storyAudiencesFor(story.creator, fanId));
+    if (!audienceCache.get(creatorId).has(story.audience || "everyone")) continue;
+    notification.message = notification.type === "story_mention" ? "Tap to add it to your story" : notification.type === "story_mention_sent" ? "" : story.caption || "";
+    if (notification.type !== "story_mention_sent") notification.metadata = { ...notification.metadata, imageUrl: story.mediaType === "video" ? "" : story.image?.url, videoUrl: story.mediaType === "video" ? story.image?.url : "", contentType: "STORY" };
+  }
+
   const receivedShareRows = receivedWallShareEngagements
     .filter((row) => row.user && row.share?.post)
     .map((row) => ({ ...row, post: row.share.post }));
@@ -782,6 +860,25 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
     const key = String(message.directAccessWindow);
     if (!directAccessQuestionByWindow.has(key)) directAccessQuestionByWindow.set(key, textPreview(message.body, 120));
   }
+  const giftThanksByKey = new Map([
+    ...sentChatGifts.map((gift) => [`gift-thanks:chat:${gift._id}`, { gift, kind: "chat" }]),
+    ...sentDreamGifts.map((gift) => [`gift-thanks:dream:${gift._id}`, { gift, kind: "dream" }]),
+  ]);
+  // Older publications have canonical mention metadata but no author-side notification.
+  // Read that history without manufacturing recipient notifications or rewriting stories.
+  const mentionedStories = await Story.find({ creator: fanId, "editorMetadata.mentions.0": { $exists: true } })
+    .sort({ createdAt: -1 }).limit(limit).select("createdAt editorMetadata.mentions").lean();
+  const mentionedIds = [...new Set(mentionedStories.flatMap((story) => story.editorMetadata.mentions.map((mention) => String(mention.userId))))];
+  const mentionedPeople = mentionedIds.length ? await User.find({ _id: { $in: mentionedIds } }).select("name username avatar status").lean() : [];
+  const sentMentionHistory = mentionedStories.flatMap((story) => story.editorMetadata.mentions.map((mention) => {
+    const person = mentionedPeople.find((entry) => String(entry._id) === String(mention.userId));
+    if (!person || String(mention.userId) === String(fanId)) return null;
+    const dedupeKey = `story-mention-sent:${story._id}:${mention.userId}`;
+    return activityBase({ id: dedupeKey, type: "story_mention_sent", direction: "sent", filter: "mentions",
+      title: `You mentioned ${person.name || person.username} in your story`, actor: serializeCreator(person),
+      target: { type: "STORY", id: String(story._id) }, actionPath: `/stories/${story._id}`,
+      createdAt: story.createdAt, canAcknowledge: false, dedupeKey });
+  }).filter(Boolean));
   const activity = [
     ...receivedFollows.filter((row) => row.actor?.status !== "suspended").map((row) => followActivity(row, "received")),
     ...sentFollows.filter((row) => row.target?.status !== "suspended").map((row) => followActivity(row, "sent")),
@@ -819,6 +916,7 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
     ...transactions.filter((transaction) => !["CHAT_GIFT_DEBIT", "CHAT_GIFT_EARNING", "DREAM_GIFT_DEBIT", "DREAM_CREATOR_EARNING"].includes(transaction.type || transaction.event || transaction.transactionType)).map(transactionActivity),
     ...messages
       .filter((message) => message.sender?.role === "creator" && message.sender?.status === "active")
+      .filter((message) => !message.storyReactionKey && !notifications.some((notification) => notification.type === "story_reply" && String(notification.target?.messageId || "") === String(message._id)))
       .map((message) => activityBase({
         id: `message-${message._id}`,
         type: "message",
@@ -829,9 +927,12 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
         preview: messagePreview(message),
         createdAt: message.createdAt,
         actor: serializeCreator(message.sender),
-        actionPath: "/messages",
+        actionPath: `/messages?with=${message.sender._id}&message=${message._id}`,
       })),
-    ...notifications.filter((notification) => !["chat_gift", "direct_gift", "story_gift", "dream_gift"].includes(notification.type)).map(notificationActivity),
+    ...notifications
+      .filter((notification) => !["chat_gift", "direct_gift", "story_gift", "dream_gift"].includes(notification.type))
+      .map((notification) => notificationActivity(notification, giftThanksByKey)),
+    ...sentMentionHistory,
   ];
 
   const seenDedupe = new Set();
@@ -996,6 +1097,18 @@ export const getFanActivity = asyncHandler(async (req, res) => {
   const wallet = await Wallet.findOne({ user: req.user._id }).lean();
   const direction = normalizeActivityDirection(req.query.direction);
   const filter = normalizeActivityFilter(req.query.filter || req.query.type);
+  const todayStart = req.query.todayStart ? new Date(req.query.todayStart) : null;
+  const includeTodaySeen = direction === "received" && filter === "all" && todayStart && !Number.isNaN(todayStart.getTime());
+  const todaySeenQuery = includeTodaySeen
+    ? { targetUser: req.user._id, type: "SEE_YOU", status: "active", signaledAt: { $gte: todayStart } }
+    : null;
+  const [todaySeenCount, todaySeenSignals] = todaySeenQuery
+    ? await Promise.all([
+      OrbitSignal.countDocuments(todaySeenQuery),
+      OrbitSignal.find(todaySeenQuery).sort({ signaledAt: -1 }).limit(3)
+        .populate({ path: "sender", match: { status: "active" }, select: "name username avatar role status" }).lean(),
+    ])
+    : [0, []];
   const requestedLimit = limitFromQuery(req.query.limit, 30);
   const page = Math.max(1, Number(req.query.page) || 1);
   // Activity is assembled from several independently queried sources and only
@@ -1009,6 +1122,10 @@ export const getFanActivity = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Fan activity fetched", {
     activity,
     items: activity,
+    todaySeen: includeTodaySeen ? {
+      count: todaySeenCount,
+      people: todaySeenSignals.filter((signal) => signal.sender).map((signal) => serializeCreator(signal.sender)),
+    } : null,
     unreadCount: unreadActivityCount(allActivity),
     pageInfo: {
       page,

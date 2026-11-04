@@ -1,0 +1,101 @@
+import test, { before, after } from "node:test";
+import assert from "node:assert/strict";
+import express from "express";
+import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
+import { MongoMemoryServer } from "mongodb-memory-server";
+import User from "../models/User.js";
+import CreatorVerification from "../models/CreatorVerification.js";
+import VerificationReviewHistory from "../models/VerificationReviewHistory.js";
+import VerifiedCreatorSubscription from "../models/VerifiedCreatorSubscription.js";
+import { env } from "../config/env.js";
+import creatorRoutes from "../routes/creatorVerificationRoutes.js";
+import adminRoutes from "../routes/adminVerificationRoutes.js";
+import { reconcileVerifiedCreatorBadges, expireVerifiedCreator, synchronizeIdentityBadge } from "./verifiedCreatorService.js";
+import IdentityVerification from "../models/IdentityVerification.js";
+import { serializeUnifiedProfile } from "./unifiedProfileService.js";
+import { identityStatus } from "./stripeIdentityService.js";
+import { assertCompleteApplication } from "../validators/verificationValidator.js";
+let database, server, origin;
+before(async () => {
+  database = await MongoMemoryServer.create(); await mongoose.connect(database.getUri());
+  await Promise.all([CreatorVerification.init(), VerificationReviewHistory.init()]);
+  const app = express(); app.use(express.json()); app.use("/verification", creatorRoutes); app.use("/admin", adminRoutes);
+  app.use((error, _req, res, _next) => res.status(error.statusCode || 500).json({ message: error.message }));
+  server = app.listen(0, "127.0.0.1"); await new Promise(resolve => server.once("listening", resolve)); origin = `http://127.0.0.1:${server.address().port}`;
+});
+after(async () => { await new Promise(resolve => server.close(resolve)); await mongoose.disconnect(); await database.stop(); });
+const person = (name, role = "fan") => User.create({ name, username: name.toLowerCase(), email: `${name}@example.test`, password: "Password123", role });
+async function request(path, user, method = "GET", body) {
+  const response = await fetch(origin + path, { method, headers: { "Content-Type": "application/json", ...(user && { Authorization: `Bearer ${jwt.sign({ sub: String(user._id) }, env.accessSecret)}` }) }, ...(body && { body: JSON.stringify(body) }) });
+  return { status: response.status, body: await response.json() };
+}
+const details = { legalFullName: "Applicant Name", dateOfBirth: "1995-01-01", country: "Sri Lanka", issuingCountry: "Sri Lanka", documentType: "national_id", ageConfirmed: true, informationConfirmed: true, policyAccepted: true, policyVersion: "identity-manual-v1" };
+const metadata = { storageKey: "private-test", originalName: "identity.png", mimeType: "image/png", size: 100, checksum: "checksum", uploadedAt: new Date() };
+test("manual verification requires documents and an admin; approval persists without changing creator access", async () => {
+  const applicant = await person("Applicant"), other = await person("Other"), admin = await person("Reviewer", "admin");
+  assert.equal((await request("/verification", null)).status, 401);
+  assert.equal((await request("/verification/identity/draft", applicant, "PUT", { ...details, isVerified: true, status: "APPROVED" })).status, 200);
+  let record = await CreatorVerification.findOne({ creator: applicant._id });
+  assert.equal(record.purpose, "IDENTITY"); assert.equal(record.status, "DRAFT");
+  assert.equal((await User.findById(applicant._id)).isVerified, false);
+  assert.equal((await request("/verification/submit", applicant, "POST", {})).status, 400);
+  await CreatorVerification.updateOne({ _id: record._id }, { $set: { documentFront: metadata, documentBack: metadata, selfieWithDocument: metadata } });
+  assert.equal((await request("/verification/submit", applicant, "POST", {})).status, 200);
+  assert.equal((await User.findById(applicant._id)).isVerified, false);
+  assert.equal((await request(`/admin/${record._id}/approve`, other, "POST", { manualReviewConfirmed: true })).status, 403);
+  assert.equal((await request(`/admin/${record._id}/document/documentFront`, other)).status, 403);
+  assert.equal((await request(`/admin/${record._id}/approve`, admin, "POST", {})).status, 400);
+  const originalAccess = (await User.findById(applicant._id)).creatorApprovalStatus;
+  assert.equal((await request(`/admin/${record._id}/approve`, admin, "POST", { manualReviewConfirmed: true, adminInternalNote: "Reviewed ID and selfie" })).status, 200);
+  assert.equal((await User.findById(applicant._id)).isVerified, true);
+  assert.equal((await User.findById(applicant._id)).creatorApprovalStatus, originalAccess);
+  assert.equal((await request(`/admin/${record._id}/reject`, admin, "POST", { rejectionReason: "OTHER", creatorVisibleMessage: "Late decision" })).status, 409);
+  assert.equal(await VerificationReviewHistory.countDocuments({ verification: record._id, action: "APPROVED", admin: admin._id }), 1);
+  await VerifiedCreatorSubscription.create({ creator: applicant._id, status: "APPROVED", currentPeriodEnd: new Date(0), paymentStatus: "PAID" });
+  assert.equal(await expireVerifiedCreator(applicant._id), null);
+  await reconcileVerifiedCreatorBadges();
+  assert.equal((await User.findById(applicant._id)).isVerified, true);
+  const status = await identityStatus(applicant);
+  assert.equal(status.provider, "manual"); assert.equal(status.status, "verified"); assert.equal(status.bankReady, false);
+  // Reproduce the stale flag alongside an older, incomplete Stripe session.
+  await IdentityVerification.create({ user: applicant._id, status: "requires_input" });
+  await User.updateOne({ _id: applicant._id }, { $set: { isVerified: false } });
+  const repaired = await synchronizeIdentityBadge(await User.findById(applicant._id));
+  assert.equal(repaired.isVerified, true);
+  assert.equal((await User.findById(applicant._id)).isVerified, true);
+  assert.equal(serializeUnifiedProfile({ owner: repaired, viewer: repaired, roleProfile: {} }).profile.verified, true);
+  await reconcileVerifiedCreatorBadges();
+  assert.equal((await User.findById(applicant._id)).isVerified, true);
+});
+
+test("incomplete, rejected and revoked identity records cannot grant a badge", async () => {
+  const user = await person("Unverified");
+  await IdentityVerification.create({ user: user._id, status: "requires_input" });
+  assert.equal((await synchronizeIdentityBadge(user)).isVerified, false);
+  await IdentityVerification.updateOne({ user: user._id }, { $set: { status: "verified", sealRevokedAt: new Date() } });
+  assert.equal((await synchronizeIdentityBadge(user)).isVerified, false);
+  await CreatorVerification.collection.insertOne({ creator: user._id, purpose: "IDENTITY", status: "REJECTED", stateSyncPending: false });
+  assert.equal((await synchronizeIdentityBadge(user)).isVerified, false);
+});
+test("rejection and requested changes can be corrected and resubmitted", async () => {
+  const applicant = await person("Resubmitter"), admin = await person("SecondReviewer", "admin");
+  await request("/verification/identity/draft", applicant, "PUT", details);
+  let record = await CreatorVerification.findOne({ creator: applicant._id });
+  await CreatorVerification.updateOne({ _id: record._id }, { $set: { documentFront: metadata, documentBack: metadata, selfieWithDocument: metadata } });
+  await request("/verification/submit", applicant, "POST", {});
+  assert.equal((await request(`/admin/${record._id}/request-changes`, admin, "POST", { reasons: ["Blurry selfie"], creatorVisibleMessage: "Upload a clearer selfie" })).status, 200);
+  assert.equal((await User.findById(applicant._id)).isVerified, false);
+  assert.equal((await request("/verification/resubmit", applicant, "POST", {})).status, 200);
+  assert.equal((await request(`/admin/${record._id}/reject`, admin, "POST", { rejectionReason: "OTHER", creatorVisibleMessage: "The document does not match" })).status, 200);
+  assert.equal((await request("/verification/resubmit", applicant, "POST", {})).status, 200);
+});
+test("manual checks require the right documents, consent and adult age", () => {
+  const complete = { ...details, purpose: "IDENTITY", documentFront: metadata, documentBack: metadata, selfieWithDocument: metadata };
+  assert.doesNotThrow(() => assertCompleteApplication(complete));
+  assert.throws(() => assertCompleteApplication({ ...complete, documentBack: null }), /back/);
+  assert.throws(() => assertCompleteApplication({ ...complete, selfieWithDocument: { ...metadata, mimeType: "application/pdf" } }), /photo/);
+  assert.throws(() => assertCompleteApplication({ ...complete, dateOfBirth: new Date().toISOString() }), /18/);
+  assert.throws(() => assertCompleteApplication({ ...complete, policyAccepted: false }), /consent/);
+  assert.throws(() => assertCompleteApplication({ ...complete, expiryDate: "2000-01-01" }), /expired/);
+});

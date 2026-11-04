@@ -2,6 +2,8 @@ import Wallet from "../models/Wallet.js";
 import StarsLedgerEntry from "../models/StarsLedgerEntry.js";
 import ApiError from "../utils/ApiError.js";
 import { FINANCIAL_ERROR_CODES } from "../constants/financialConstants.js";
+import { getStarExchangeRate } from "./starExchangeService.js";
+import { monthlyWalletSpending, SPENDING_EVENTS, spendingLimitExceeded } from "./walletSpendingService.js";
 
 async function walletFor(user, session, { create = false } = {}) {
   const wallets = await Wallet.find({ user }).limit(2).session(session);
@@ -99,6 +101,17 @@ async function post({ user, amount, bonusAmount = 0, purchasedAmount, earnedAmou
   const bucketWallet = testMode ? { ...wallet.toObject(), balance: Number(wallet.testBalance || 0), bonusBalance: Number(wallet.testBonusBalance || 0), purchasedBalance: Number(wallet.testPurchasedBalance || 0), earnedBalance: Number(wallet.testEarnedBalance || 0) } : wallet;
   let bucketMetadata;
   if (direction === "DEBIT") {
+    if (!reversalOf && SPENDING_EVENTS.includes(entryType)) {
+      const rate = await getStarExchangeRate();
+      const spendingUsd = amount / rate;
+      if (wallet.monthlySpendingLimitUsd > 0) {
+        const spent = await monthlyWalletSpending(user, financialMode, rate, session);
+        if (spendingLimitExceeded(wallet.monthlySpendingLimitUsd, spent.spentThisMonthUsd, spendingUsd)) {
+          throw new ApiError(422, "Your monthly spending limit has been reached. Change it in Wallet to continue.", "MONTHLY_SPENDING_LIMIT_REACHED");
+        }
+      }
+      metadata = { ...metadata, spendingUsd };
+    }
     bucketMetadata = await debitBuckets(bucketWallet, amount, reversalOf, session);
     wallet = await Wallet.findOneAndUpdate(
       { _id: wallet._id, [fields.balance]: { $gte: amount }, [fields.bonus]: { $gte: bucketMetadata.bonus }, [fields.purchased]: { $gte: bucketMetadata.purchased }, [fields.earned]: { $gte: bucketMetadata.earned } },
@@ -120,7 +133,15 @@ async function post({ user, amount, bonusAmount = 0, purchasedAmount, earnedAmou
   return { wallet, entry };
 }
 
-export const creditWallet = (input, session) => post({ ...input, direction: "CREDIT" }, session);
+export const creditWallet = async (input, session) => {
+  const earningFeatures = { CHAT_GIFT_EARNING: "gifts", DREAM_CREATOR_EARNING: "dream", WORLD_CREATOR_EARNING: "paidSeens", PREMIUM_CREATOR_EARNING: "world" };
+  const feature = earningFeatures[input.entryType];
+  if (feature) {
+    const { requireMonetization } = await import("./monetizationService.js");
+    await requireMonetization(input.user, feature);
+  }
+  return post({ ...input, direction: "CREDIT" }, session);
+};
 export const debitWallet = (input, session) => post({ ...input, direction: "DEBIT" }, session);
 export async function transferStars({ fromUser, toUser, amount, debitType, creditType, referenceType, referenceId, publication, creator, command, idempotencyKey, metadata }, session) {
   const debit = await debitWallet({ user: fromUser, amount, entryType: debitType, entryRole: "FAN_DEBIT", referenceType, referenceId, publication, creator, counterpartyUser: toUser, command, idempotencyKey, metadata }, session);

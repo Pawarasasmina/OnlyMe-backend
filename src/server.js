@@ -9,6 +9,7 @@ import { configureMessagingSocket } from "./realtime/messagingSocket.js";
 import { processDueDirectAccessWindows } from "./services/directAccessService.js";
 import { processDuePaidCalls } from "./services/paidCallService.js";
 import { reconcileVerifiedCreatorBadges } from "./services/verifiedCreatorService.js";
+import { processDueAccountDeletions } from "./services/accountDeletionService.js";
 
 const WORKER_INTERVAL_MS = 60 * 1000;
 const INITIAL_WORKER_DELAY_MS = 5 * 1000;
@@ -44,6 +45,7 @@ async function startServer() {
       startWorker("Direct Access expiry", () => processDueDirectAccessWindows(new Date(), io));
       startWorker("Paid call refund", () => processDuePaidCalls(new Date(), io));
       startWorker("Verified Creator renewal", reconcileVerifiedCreatorBadges);
+      startWorker("Account deletion", processDueAccountDeletions);
     });
   } catch (error) {
     console.error("Failed to start server", error);
