@@ -20,9 +20,10 @@ import Payout from "../models/Payout.js";
 import { clearingCutoff, creatorClearingLevel } from "../services/creatorClearingService.js";
 import { getWebCoinTaxRate, packByPrice, priceWithTax, WEB_COIN_PACKS, WEB_COIN_USD } from "../services/coinPackService.js";
 import { createBonusGrant, welcomeBonusFor } from "../services/bonusService.js";
+import { coverPreview } from "../services/activitySupplementService.js";
 
 const CREATOR_EVENTS = ["WORLD_CREATOR_EARNING", "PREMIUM_CREATOR_EARNING", "DREAM_CREATOR_EARNING", "CHAT_GIFT_EARNING", "DA_CREATOR_EARNING", "CALL_CREATOR_EARNING"];
-const safePublication = (item) => item ? { id: item._id, title: item.title || item.publishedSnapshot?.metadata?.title || "", kind: item.kind, planet: item.planet || null } : null;
+const safePublication = (item) => item ? { id: item._id, title: item.title || item.publishedSnapshot?.metadata?.title || "", kind: item.kind, planet: item.planet || null, ...coverPreview(item) } : null;
 export function withdrawalBalances(earnedBalance, recentIncomeStars) {
   const pendingIncomeStars = Math.min(Math.max(0, Number(earnedBalance || 0)), Math.max(0, Number(recentIncomeStars || 0)));
   return { pendingIncomeStars, availableIncomeStars: Math.max(0, Number(earnedBalance || 0) - pendingIncomeStars) };
@@ -192,7 +193,7 @@ export const getLedger = asyncHandler(async (req, res) => {
   const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
   const financialMode = financialModeForAccountType(req.user.accountType);
   const filter = { accountUser: req.user._id, financialMode: financialMode === "TEST" ? "TEST" : { $ne: "TEST" } };
-  const [rows, total] = await Promise.all([StarsLedgerEntry.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).populate("counterpartyUser", "name username avatar isVerified role").populate("publication", "title kind planet publishedSnapshot.metadata.title").lean(), StarsLedgerEntry.countDocuments(filter)]);
+  const [rows, total] = await Promise.all([StarsLedgerEntry.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).populate("counterpartyUser", "name username avatar isVerified role").populate("publication", "title kind planet publishedSnapshot.metadata.title publishedSnapshot.metadata.coverMedia coverMedia").lean(), StarsLedgerEntry.countDocuments(filter)]);
   const chatGiftIds = rows.filter((item) => item.referenceType === "CHAT_GIFT" && item.referenceId).map((item) => item.referenceId);
   const dreamGiftIds = rows.filter((item) => item.referenceType === "DREAM_GIFT" && item.referenceId).map((item) => item.referenceId);
   const [chatGifts, dreamGifts] = await Promise.all([

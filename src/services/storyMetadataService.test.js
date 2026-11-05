@@ -146,3 +146,23 @@ test("question-answer cards and Wall translations retain their content", () => {
   assert.equal(card.displayMode, "text_only");
   assert.doesNotThrow(() => parseStoryEditorMetadata({ textOverlays: [null], stickers: [null], drawing: [null] }));
 });
+
+test("Wall note story cards retain only a valid note deep link", () => {
+  const destinationRoute = "/wall?note=507f1f77bcf86cd799439011";
+  assert.equal(parseStoryEditorMetadata({ sharedCard: { destinationRoute, kind: "post", title: "My note" } }).sharedCard.destinationRoute, destinationRoute);
+  for (const invalid of ["/wall?note=invalid", "/wall?note=507f1f77bcf86cd799439011&redirect=https://evil.example", "https://evil.example/wall?note=507f1f77bcf86cd799439011"]) {
+    assert.equal(parseStoryEditorMetadata({ sharedCard: { destinationRoute: invalid } }).sharedCard, undefined);
+  }
+});
+
+test("Wall note story retains text card and location after publishing", () => {
+  const text = "A meaningful note. ".repeat(15);
+  const card = parseStoryEditorMetadata({ sharedCard: { kind: "note", displayMode: "text_only", destinationRoute: "/wall?note=507f1f77bcf86cd799439011", authorName: "Omar Haddad", authorAvatar: "https://example.com/omar.jpg", variant: "long", eyebrow: "NOTE - Dubai", title: text, subtitle: "from my Wall - tap", x: 50, y: 40, scale: 1 } }).sharedCard;
+  assert.equal(card.title, text.trim());
+  assert.equal(card.displayMode, "text_only");
+  assert.equal(card.y, 40);
+  assert.equal(card.eyebrow, "NOTE - Dubai");
+  assert.equal(card.authorName, "Omar Haddad");
+  assert.equal(card.authorAvatar, "https://example.com/omar.jpg");
+  assert.equal(card.variant, "long");
+});

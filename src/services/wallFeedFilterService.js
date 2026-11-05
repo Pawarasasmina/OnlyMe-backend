@@ -52,7 +52,9 @@ export function readWallFeedFilters(query = {}) {
   if ((scope === "nearby" || sort === "nearby") && !near) throw new ApiError(400, "Choose a city to use Nearby");
   const and = [];
   if (type !== "all") and.push(type === "right_now" ? { $or: [{ rightNow: true }, categoryMatch("postType", WALL_TYPES[type])] } : categoryMatch("postType", WALL_TYPES[type]));
-  if (type === "right_now") and.push({ $expr: wallActiveExpression() });
+  const rightNow = type === "right_now" || query.rightNow === true || ["true", "1"].includes(query.rightNow);
+  if (rightNow && type !== "right_now") and.push({ $or: [{ rightNow: true }, categoryMatch("postType", WALL_TYPES.right_now)] });
+  if (rightNow) and.push({ $expr: wallActiveExpression() });
   if (topic !== "all") and.push(categoryMatch("topic", WALL_TOPICS[topic]));
   const matchLocation = scope === "nearby" ? near : location;
   // A legacy location parameter is still supported even without a scope.
@@ -73,7 +75,7 @@ export function wallFeedPipeline(match, { sort, near }, blockedIds, page, limit)
       __popularity: { $add: [publicCount("reactions"), publicCount("comments", { deletedAt: null }), publicCount("shares")] },
       __nearby: { $cond: [{ $regexMatch: { input: { $ifNull: ["$location", ""] }, regex: escapeRegex(near), options: "i" } }, 0, 1] },
       __activities: { $concatArrays: [
-        [{ shareId: null, createdAt: { $ifNull: ["$publishedAt", "$createdAt"] }, user: null, caption: "" }],
+        [{ shareId: null, createdAt: { $ifNull: ["$bumpedAt", { $ifNull: ["$publishedAt", "$createdAt"] }] }, user: null, caption: "" }],
         { $map: { input: { $filter: { input: { $ifNull: ["$shares", []] }, as: "share", cond: { $not: [{ $in: ["$$share.user", blockedIds] }] } } }, as: "share", in: { shareId: "$$share._id", createdAt: "$$share.createdAt", user: "$$share.user", caption: "$$share.caption" } } },
       ] },
     } },
