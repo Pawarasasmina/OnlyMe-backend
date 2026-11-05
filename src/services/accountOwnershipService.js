@@ -6,6 +6,7 @@ import { financialModeForAccountType } from "../constants/accountTypeConstants.j
 import { rebuildWalletBuckets } from "./walletLedgerService.js";
 import { getStarExchangeRate } from "./starExchangeService.js";
 import ApiError from "../utils/ApiError.js";
+import LegalHold from "../models/LegalHold.js";
 
 export const DELETION_GRACE_MS = 30 * 24 * 60 * 60 * 1000;
 export function canRestoreAccount(user, now = new Date()) {
@@ -25,6 +26,7 @@ export async function accountOwnershipSummary(user) {
 
 export async function changeAccountOwnership(user, action, acknowledgeEarningsLoss, now = new Date()) {
   if (user.role === "admin") throw new ApiError(403, "Administrator accounts cannot be changed here");
+  if (action === "delete" && await LegalHold.exists({ targetType: "USER", targetId: String(user._id), active: true })) throw new ApiError(423, "This account is currently subject to a deletion hold", "LEGAL_HOLD_ACTIVE");
   if (action === "delete" && !acknowledgeEarningsLoss) {
     const summary = await accountOwnershipSummary(user);
     if (summary.unwithdrawnUsd > 0) throw new ApiError(409, "Withdraw your earnings first, or confirm that you want to delete anyway", "UNWITHDRAWN_EARNINGS");

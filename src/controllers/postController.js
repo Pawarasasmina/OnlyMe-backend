@@ -786,7 +786,7 @@ export const reportFeedPost = asyncHandler(async (req, res) => {
   const post = await findPublishedPost(req.params.id);
   if (String(post.author) === String(req.user._id)) throw new ApiError(400, "You cannot report your own post");
   const reason = cleanString(req.body.reason || "OTHER", 80).toUpperCase().replaceAll(/[^A-Z0-9]+/g, "_");
-  const allowed = new Set(["SPAM", "FALSE_INFORMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "OTHER"]);
+    const allowed = new Set(["SPAM", "FALSE_INFORMATION", "DEFAMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "IMPERSONATION", "CHILD_SAFETY", "OTHER"]);
   if (!allowed.has(reason)) throw new ApiError(400, "Select a valid report reason");
   try {
     const report = await MessageReport.create({

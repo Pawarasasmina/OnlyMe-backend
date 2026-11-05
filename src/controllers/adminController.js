@@ -11,6 +11,7 @@ import { storyExpiresAt } from "../services/storyExpiryService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
+import { effectiveAdminRole } from "../middleware/adminPermissionMiddleware.js";
 
 export const getAdminDashboard = asyncHandler(async (_req, res) => {
   const [totalUsers, fans, creators, admins, activeUsers, pendingCreators, publishedContent, draftContent, activeSubscriptions, accountTypeRows] =
@@ -34,6 +35,7 @@ export const getAdminDashboard = asyncHandler(async (_req, res) => {
 
 export const listUsers = asyncHandler(async (req, res) => {
   const filter = {};
+  if (effectiveAdminRole(req.user) !== "MAIN_ADMIN") filter.role = { $ne: "admin" };
   if (req.query.role === "creator") {
     filter.role = { $in: ["fan", "creator"] };
     filter.creatorApprovalStatus = "approved";
@@ -41,14 +43,20 @@ export const listUsers = asyncHandler(async (req, res) => {
     filter.role = { $in: ["fan", "creator"] };
     filter.creatorApprovalStatus = { $ne: "approved" };
   } else if (req.query.role === "admin") {
+    if (effectiveAdminRole(req.user) !== "MAIN_ADMIN") throw new ApiError(403, "Only Main Admins can view staff accounts");
     filter.role = "admin";
   }
   if (["active", "suspended"].includes(req.query.status)) filter.status = req.query.status;
   const requestedAccountType = String(req.query.accountType || "").toUpperCase();
   if (ACCOUNT_TYPES.includes(requestedAccountType)) filter.accountType = requestedAccountType;
+  const search = String(req.query.search || "").trim().replace(/^@/, "");
+  if (search) {
+    const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    filter.$or = [{ username: { $regex: escaped, $options: "i" } }, { email: { $regex: escaped, $options: "i" } }, { phone: { $regex: escaped, $options: "i" } }, ...(mongoose.isValidObjectId(search) ? [{ _id: search }] : [])];
+  }
 
   const users = await User.find(filter)
-    .select("+accountType name username email role status creatorApprovalStatus isVerified avatar createdAt")
+    .select("+accountType name username email phone role status creatorApprovalStatus isVerified avatar createdAt")
     .sort({ createdAt: -1 })
     .limit(200)
     .lean();
@@ -65,7 +73,8 @@ export const updateUserStatus = asyncHandler(async (req, res) => {
   }
 
   const reason = String(req.body.reason || "Administrative account status change").trim().slice(0, 500);
-  const previous = await User.findById(req.params.userId).select("status");
+  const previous = await User.findById(req.params.userId).select("status role");
+  if (previous?.role === "admin") throw new ApiError(403, "Manage staff accounts from Admin team & access");
   const user = await User.findByIdAndUpdate(req.params.userId, { $set: { status: req.body.status } }, { new: true, runValidators: true }).select("+accountType name username email role status creatorApprovalStatus isVerified avatar createdAt");
   if (!user) throw new ApiError(404, "User not found");
   await AdminAccountAudit.create({ admin: req.user._id, user: user._id, action: "ACCOUNT_STATUS_CHANGED", previousStatus: previous?.status, status: user.status, reason });
@@ -84,7 +93,7 @@ export const bulkUpdateUsers = asyncHandler(async (req, res) => {
   if (!accountType && !status) throw new ApiError(400, "Choose an account type or status to update");
   const reason = String(req.body.reason || "").trim();
   if (reason.length < 3 || reason.length > 500) throw new ApiError(400, "A reason between 3 and 500 characters is required");
-  const users = await User.find({ _id: { $in: ids } }).select("+accountType status");
+  const users = await User.find({ _id: { $in: ids }, role: { $ne: "admin" } }).select("+accountType status role");
   if (users.length !== ids.length) throw new ApiError(404, "One or more users were not found");
   const update = { ...(accountType ? { accountType } : {}), ...(status ? { status } : {}) };
   await User.updateMany({ _id: { $in: ids } }, { $set: update }, { runValidators: true });

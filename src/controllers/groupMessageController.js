@@ -314,7 +314,7 @@ export const reportGroupMessage = asyncHandler(async (req, res) => {
   await getGroup(message.group, req.user._id);
   if (String(message.sender) === String(req.user._id)) throw new ApiError(400, "You cannot report your own message");
   const reason = String(req.body.reason || "").toUpperCase();
-  if (!["SPAM", "HARASSMENT", "HATE", "SEXUAL_CONTENT", "VIOLENCE", "SCAM", "OTHER"].includes(reason)) throw new ApiError(400, "Select a valid report reason");
+  if (!["SPAM", "HARASSMENT", "HATE", "DEFAMATION", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "SCAM", "COPYRIGHT", "IMPERSONATION", "CHILD_SAFETY", "OTHER"].includes(reason)) throw new ApiError(400, "Select a valid report reason");
   try {
     const report = await MessageReport.create({ reporter: req.user._id, reportedUser: message.sender, scope: "GROUP_MESSAGE", groupMessage: message._id, reason, details: String(req.body.details || "").slice(0, 1000), snapshot: { groupId: String(message.group), messageId: String(message._id), senderId: String(message.sender), body: message.body, createdAt: message.createdAt } });
     return sendResponse(res, 201, "Report received", { reportId: String(report._id), status: report.status });

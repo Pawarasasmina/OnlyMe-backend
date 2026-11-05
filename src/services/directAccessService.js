@@ -18,13 +18,11 @@ import { requireMonetization } from "./monetizationService.js";
 
 export const DA_WINDOW_MS = 48 * 60 * 60 * 1000;
 export const DA_MESSAGE_LIMIT = 3;
-export const DA_PLATFORM_RATE_BPS = 1000;
-export const DA_REOPEN_PLATFORM_RATE_BPS = 2000;
+export const DA_PLATFORM_RATE_BPS = 0;
+export const DA_REOPEN_PLATFORM_RATE_BPS = 0;
 export const CREATOR_USD_CENTS_PER_STAR = 10;
 
-const platformRateFor = (window) => (
-  ["CREATOR_REOPEN", "FAN_FOLLOWUP"].includes(window.source) ? DA_REOPEN_PLATFORM_RATE_BPS : DA_PLATFORM_RATE_BPS
-);
+const platformRateFor = () => 0;
 
 export function serializeDAWindow(window) {
   if (!window) return null;

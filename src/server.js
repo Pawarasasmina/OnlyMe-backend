@@ -10,6 +10,8 @@ import { processDueDirectAccessWindows } from "./services/directAccessService.js
 import { processDuePaidCalls } from "./services/paidCallService.js";
 import { reconcileVerifiedCreatorBadges } from "./services/verifiedCreatorService.js";
 import { processDueAccountDeletions } from "./services/accountDeletionService.js";
+import { processExpiredBonusGrants } from "./services/bonusService.js";
+import { processAutomaticPayouts } from "./services/payoutService.js";
 
 const WORKER_INTERVAL_MS = 60 * 1000;
 const INITIAL_WORKER_DELAY_MS = 5 * 1000;
@@ -46,6 +48,8 @@ async function startServer() {
       startWorker("Paid call refund", () => processDuePaidCalls(new Date(), io));
       startWorker("Verified Creator renewal", reconcileVerifiedCreatorBadges);
       startWorker("Account deletion", processDueAccountDeletions);
+      startWorker("Bonus expiry", processExpiredBonusGrants);
+      startWorker("Automatic payout", processAutomaticPayouts);
     });
   } catch (error) {
     console.error("Failed to start server", error);

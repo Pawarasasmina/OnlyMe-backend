@@ -25,9 +25,11 @@ import {
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { uploadFeedPostImages, uploadFeedPostMedia, uploadVoiceMessage } from "../middleware/uploadMiddleware.js";
+import { reportComment } from "../controllers/reportingController.js";
+import { requireNoContentHold, requirePostingAccess } from "../middleware/accountRestrictionMiddleware.js";
 
 const router = Router();
-const consumerOnly = [protect, authorize("fan", "creator")];
+const consumerOnly = [protect, authorize("fan", "creator"), requirePostingAccess];
 
 router.get("/", protect, listFeedPosts);
 router.get("/need-counts", protect, getWallNeedCounts);
@@ -51,9 +53,10 @@ router.post("/:id/report", protect, reportFeedPost);
 router.post("/:id/archive", ...consumerOnly, archiveFeedPost);
 router.post("/:id/restore", ...consumerOnly, restoreFeedPost);
 router.put("/:id/block-author", protect, blockPostAuthor);
-router.post("/:id/comments", protect, uploadVoiceMessage.single("voice"), createPostComment);
+router.post("/:id/comments", protect, requirePostingAccess, uploadVoiceMessage.single("voice"), createPostComment);
+router.post("/:id/comments/:commentId/report", protect, reportComment);
 router.put("/:id/resolution", ...consumerOnly, setPostResolution);
 router.put("/:id", ...consumerOnly, updateFeedPost);
-router.delete("/:id", ...consumerOnly, deleteFeedPost);
+router.delete("/:id", ...consumerOnly, requireNoContentHold, deleteFeedPost);
 
 export default router;

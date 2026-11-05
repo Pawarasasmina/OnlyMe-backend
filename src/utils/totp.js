@@ -1,0 +1,7 @@
+import crypto from "node:crypto";
+const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+export function base32Encode(buffer) { let bits = ""; for (const byte of buffer) bits += byte.toString(2).padStart(8, "0"); let out = ""; for (let i = 0; i < bits.length; i += 5) out += alphabet[parseInt(bits.slice(i, i + 5).padEnd(5, "0"), 2)]; return out; }
+export function base32Decode(value) { const clean = String(value).toUpperCase().replace(/[^A-Z2-7]/g, ""); let bits = ""; for (const char of clean) bits += alphabet.indexOf(char).toString(2).padStart(5, "0"); const bytes = []; for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2)); return Buffer.from(bytes); }
+export const createTotpSecret = () => base32Encode(crypto.randomBytes(20));
+export function totp(secret, time = Date.now()) { const counter = Math.floor(time / 30000); const buffer = Buffer.alloc(8); buffer.writeBigUInt64BE(BigInt(counter)); const digest = crypto.createHmac("sha1", base32Decode(secret)).update(buffer).digest(); const offset = digest[digest.length - 1] & 15; return String((digest.readUInt32BE(offset) & 0x7fffffff) % 1000000).padStart(6, "0"); }
+export function verifyTotp(secret, code, time = Date.now()) { const clean = String(code || "").replace(/\s/g, ""); return [-1, 0, 1].some((window) => { const expected = totp(secret, time + window * 30000); return clean.length === expected.length && crypto.timingSafeEqual(Buffer.from(clean), Buffer.from(expected)); }); }

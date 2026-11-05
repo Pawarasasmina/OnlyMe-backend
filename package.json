@@ -35,6 +35,8 @@
     "migrate:account-types:dry-run": "node src/scripts/migrateAccountTypes.js",
     "migrate:account-types": "node src/scripts/migrateAccountTypes.js --apply",
     "setup:wall-indexes": "node src/scripts/ensureWallCreationIndexes.js"
+    ,"migrate:admin-operations:dry-run": "node src/scripts/migrateAdminOperations.js"
+    ,"migrate:admin-operations": "node src/scripts/migrateAdminOperations.js --apply"
   },
   "dependencies": {
     "@deepgram/sdk": "^5.8.0",

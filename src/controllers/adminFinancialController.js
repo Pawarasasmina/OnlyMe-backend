@@ -8,6 +8,7 @@ import { executeFinancialCommand } from "../services/financialCommandService.js"
 import { creditWallet, safeWallet } from "../services/walletLedgerService.js";
 import { activateWalletLedger } from "../services/walletAdministrationService.js";
 import { refundWorld, refundPremium } from "../services/refundService.js";
+import Payout from "../models/Payout.js";
 import { positiveStars, idempotencyKey, requiredReason, fingerprint } from "../validators/financialValidator.js";
 import { env } from "../config/env.js";
 import { getStarExchangeRate, setStarExchangeRate } from "../services/starExchangeService.js";
@@ -15,6 +16,12 @@ import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { financialModeForAccountType } from "../constants/accountTypeConstants.js";
+import AdminAuditEvent from "../models/AdminAuditEvent.js";
+import { effectiveAdminRole } from "../middleware/adminPermissionMiddleware.js";
+import { getWebCoinTaxRate, setWebCoinTaxRate } from "../services/coinPackService.js";
+import { transitionPayout } from "../services/payoutService.js";
+
+const financialAudit = (req, action, targetId, reason, after = null) => AdminAuditEvent.create({ actor: req.user._id, actorRole: effectiveAdminRole(req.user), action, targetType: "FINANCIAL_RECORD", targetId: String(targetId), reason: requiredReason(reason), after });
 
 const objectId = (value) => {
   if (!mongoose.isObjectIdOrHexString(value)) throw new ApiError(400, "A valid financial record identifier is required", "INVALID_FINANCIAL_ID");
@@ -22,6 +29,8 @@ const objectId = (value) => {
 };
 
 export const getExchangeRate = asyncHandler(async (_req, res) => sendResponse(res, 200, "Star exchange rate fetched", { starsPerUsd: await getStarExchangeRate() }));
+export const getCoinTaxRate = asyncHandler(async (_req, res) => sendResponse(res, 200, "Web coin tax rate fetched", { percent: await getWebCoinTaxRate() }));
+export const updateCoinTaxRate = asyncHandler(async (req, res) => sendResponse(res, 200, "Web coin tax rate updated", { percent: await setWebCoinTaxRate(req.body.percent, req.user._id) }));
 
 export const updateExchangeRate = asyncHandler(async (req, res) => {
   const starsPerUsd = Number(req.body.starsPerUsd);
@@ -49,6 +58,7 @@ export const creditStars = asyncHandler(async (req, res) => {
     const posted = await creditWallet({ user: target._id, amount, entryType: "CREDIT_ADMIN", entryRole: "ADMIN_CREDIT", referenceType: "ADMIN_CREDIT", referenceId: command._id, command, idempotencyKey: key, counterpartyUser: req.user._id, metadata: { reason, adminUser: String(req.user._id), legacyWalletReset: Boolean(reset), previousBalance: reset?.previous.balance, previousCurrency: reset?.previous.currency } }, session);
     return { resultReference: posted.entry._id, wallet: safeWallet(posted.wallet, command.financialMode), credit: { starsAmount: amount, createdAt: posted.entry.createdAt }, legacyReset: reset ? { previousBalance: reset.previous.balance, previousCurrency: reset.previous.currency } : null };
   });
+  await financialAudit(req, "ADMIN_STARS_CREDITED", target._id, reason, { starsAmount: amount, resultReference: result.resultReference });
   return sendResponse(res, 200, "Stars credited", result);
 });
 
@@ -123,8 +133,26 @@ export const activateFanWallet = asyncHandler(async (req, res) => {
     const activated = await activateWalletLedger({ user: target._id, openingBalance, reason, admin: req.user._id, command, idempotencyKey: key }, session);
     return { resultReference: activated.entry?._id || activated.wallet._id, wallet: safeWallet(activated.wallet), activation: { openingBalance, previousBalance: activated.previous.balance, previousCurrency: activated.previous.currency, activatedAt: activated.wallet.ledgerActivatedAt } };
   });
+  await financialAudit(req, "WALLET_LEDGER_ACTIVATED", target._id, reason, { openingBalance, resultReference: result.resultReference });
   return sendResponse(res, 200, "Wallet ledger activated", result);
 });
 
-export const refundWorldEntitlement = asyncHandler(async (req, res) => sendResponse(res, 200, "World purchase refunded", await refundWorld({ admin: req.user, entitlementId: objectId(req.params.id), key: req.body.idempotencyKey, reason: req.body.reason })));
-export const refundPremiumMembership = asyncHandler(async (req, res) => sendResponse(res, 200, "Premium period refunded", await refundPremium({ admin: req.user, membershipId: objectId(req.params.id), key: req.body.idempotencyKey, reason: req.body.reason })));
+export const refundWorldEntitlement = asyncHandler(async (req, res) => { const result = await refundWorld({ admin: req.user, entitlementId: objectId(req.params.id), key: req.body.idempotencyKey, reason: req.body.reason }); await financialAudit(req, "REFUND_WORLD", req.params.id, req.body.reason, { resultReference: result.resultReference }); return sendResponse(res, 200, "World purchase refunded", result); });
+export const refundPremiumMembership = asyncHandler(async (req, res) => { const result = await refundPremium({ admin: req.user, membershipId: objectId(req.params.id), key: req.body.idempotencyKey, reason: req.body.reason }); await financialAudit(req, "REFUND_PREMIUM", req.params.id, req.body.reason, { resultReference: result.resultReference }); return sendResponse(res, 200, "Premium period refunded", result); });
+
+export const listPayouts = asyncHandler(async (req, res) => {
+  const status = String(req.query.status || "").toUpperCase();
+  const filter = status ? { status } : {};
+  const items = await Payout.find(filter).populate("user", "name username email").sort({ createdAt: -1 }).limit(200).lean();
+  return sendResponse(res, 200, "Payouts fetched", { items });
+});
+
+export const updatePayoutStatus = asyncHandler(async (req, res) => {
+  const status = String(req.body.status || "").toUpperCase();
+  if (!["PROCESSING", "PAID", "FAILED", "CANCELED"].includes(status)) throw new ApiError(400, "Choose a valid payout status", "INVALID_PAYOUT_STATUS");
+  const reason = String(req.body.reason || "").trim().slice(0, 500);
+  if (status === "FAILED" && !reason) throw new ApiError(400, "A failure reason is required", "PAYOUT_REASON_REQUIRED");
+  const result = await transitionPayout({ payoutId: objectId(req.params.id), status, reason });
+  await financialAudit(req, "PAYOUT_STATUS_UPDATED", String(req.params.id), reason || status, { status, restoredEntry: result.restoredEntry });
+  return sendResponse(res, 200, "Payout status updated", { payout: result.payout, restoredEntry: result.restoredEntry });
+});

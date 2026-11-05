@@ -4,6 +4,7 @@ export function issueAuthTokens(user) {
   const payload = {
     sub: user._id.toString(),
     role: user.role,
+    adminRole: user.role === "admin" ? (user.adminRole || "MAIN_ADMIN") : undefined,
     email: user.email,
     authVersion: user.authVersion || 0,
   };

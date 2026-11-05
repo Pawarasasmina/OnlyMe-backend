@@ -15,6 +15,9 @@ const adminProfileSchema = new mongoose.Schema(
       security: { type: Boolean, default: true },
     },
     lastLoginAt: { type: Date, default: null },
+    twoFactorSecret: { type: String, default: "", select: false },
+    twoFactorPendingSecret: { type: String, default: "", select: false },
+    twoFactorEnabledAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

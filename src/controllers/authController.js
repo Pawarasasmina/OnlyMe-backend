@@ -14,8 +14,11 @@ import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyt
 import { env } from "../config/env.js";
 import jwt from "jsonwebtoken";
 import { attributeReferral, resolveReferral } from "../services/referralService.js";
-import PlatformCounter from "../models/PlatformCounter.js";
+import { nextMemberNumber } from "../services/memberTicketService.js";
 import { accountOwnershipSummary, canRestoreAccount, changeAccountOwnership } from "../services/accountOwnershipService.js";
+import AdminLoginEvent from "../models/AdminLoginEvent.js";
+import { verifyTotp } from "../utils/totp.js";
+import crypto from "node:crypto";
 
 void mongoose;
 
@@ -41,6 +44,9 @@ function sanitizeUser(user) {
     profileCategory: user.profileCategory,
     email: user.email,
     role: effectiveRole,
+    adminRole: effectiveRole === "admin" ? (user.adminRole || "MAIN_ADMIN") : null,
+    adminTwoFactorEnabled: effectiveRole === "admin" ? Boolean(user.adminTwoFactorEnabled) : null,
+    twoFactorEnabled: effectiveRole === "admin" ? Boolean(user.adminTwoFactorEnabled) : Boolean(user.twoFactorEnabled),
     profileType: user.profileType || (effectiveRole === "creator" ? "creator" : "personal"),
     accountRole: user.role === "admin" ? "admin" : "fan",
     creatorApprovalStatus: user.creatorApprovalStatus,
@@ -53,8 +59,6 @@ function sanitizeUser(user) {
     onboardingChecklist: user.onboardingChecklist,
     dateOfBirth: user.dateOfBirth,
     preferredLanguage: user.preferredLanguage || "en",
-    memberNumber: user.memberNumber || null,
-    showMemberNumber: user.showMemberNumber !== false,
     businessContact: user.businessContact || {},
     businessContactButtons: user.businessContactButtons || [],
     businessContactButtonsConfigured: Boolean(user.businessContactButtonsConfigured),
@@ -82,24 +86,6 @@ async function recordAuthAnalytics(req, user, eventType) {
   if (!sessionId) return;
   await recordAnalyticsEvent({ eventType: "SESSION_STARTED", req, sessionId, source: "unknown", userId: user._id });
   await recordAnalyticsEvent({ eventType, req, sessionId, source: "unknown", userId: user._id });
-}
-
-async function nextMemberNumber() {
-  const highest = await User.findOne({ memberNumber: { $type: "number" } })
-    .sort({ memberNumber: -1 })
-    .select("memberNumber")
-    .lean();
-  await PlatformCounter.updateOne(
-    { key: "platform-members" },
-    { $max: { value: Number(highest?.memberNumber || 0) }, $setOnInsert: { key: "platform-members" } },
-    { upsert: true }
-  );
-  const counter = await PlatformCounter.findOneAndUpdate(
-    { key: "platform-members" },
-    { $inc: { value: 1 } },
-    { new: true }
-  );
-  return counter.value;
 }
 
 export const register = asyncHandler(async (req, res) => {
@@ -163,6 +149,15 @@ export const login = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Invalid email or password");
   }
 
+  if (user.role === "admin" && user.adminTwoFactorEnabled) {
+    const profile = await AdminProfile.findOne({ user: user._id }).select("+twoFactorSecret");
+    if (!profile?.twoFactorSecret || !verifyTotp(profile.twoFactorSecret, req.body.twoFactorCode)) throw new ApiError(401, "Enter the current six-digit authenticator code", "ADMIN_2FA_REQUIRED");
+  }
+  if (user.role !== "admin" && user.twoFactorEnabled) {
+    const securedUser = await User.findById(user._id).select("+twoFactorSecret");
+    if (!securedUser?.twoFactorSecret || !verifyTotp(securedUser.twoFactorSecret, req.body.twoFactorCode)) throw new ApiError(401, "Enter the current six-digit authenticator code", "TWO_FACTOR_REQUIRED");
+  }
+
   if (canRestoreAccount(user)) {
     const restored = await User.findOneAndUpdate({ _id: user._id, status: user.status, ...(user.status === "pending_deletion" ? { deletionScheduledAt: { $gt: new Date() } } : {}) }, { $set: { status: "active", deactivatedAt: null, deletionRequestedAt: null, deletionScheduledAt: null } }, { new: true });
     if (restored) Object.assign(user, { status: restored.status, deactivatedAt: null, deletionRequestedAt: null, deletionScheduledAt: null });
@@ -180,6 +175,14 @@ export const login = asyncHandler(async (req, res) => {
       { $set: { lastLoginAt: new Date() }, $setOnInsert: { user: user._id } },
       { upsert: true }
     );
+    const ua = String(req.get("User-Agent") || "").toLowerCase();
+    const deviceType = /ipad|tablet/.test(ua) ? "tablet" : /mobile|iphone|android/.test(ua) ? "mobile" : ua ? "desktop" : "unknown";
+    await AdminLoginEvent.create({ user: user._id, outcome: "SUCCESS", ip: String(req.ip || "").slice(0, 100), userAgent: String(req.get("User-Agent") || "").slice(0, 500), deviceType });
+  }
+  if (user.role !== "admin") {
+    const ua = String(req.get("User-Agent") || "").toLowerCase();
+    const deviceType = /ipad|tablet/.test(ua) ? "tablet" : /mobile|iphone|android/.test(ua) ? "mobile" : ua ? "desktop" : "unknown";
+    await AdminLoginEvent.create({ user: user._id, outcome: "SUCCESS", ip: String(req.ip || "").slice(0, 100), userAgent: String(req.get("User-Agent") || "").slice(0, 500), deviceType });
   }
 
   const tokens = issueAuthTokens(user);
@@ -191,6 +194,50 @@ export const login = asyncHandler(async (req, res) => {
     user: sanitizeUser(user),
     accessToken: tokens.accessToken,
   });
+});
+
+const googleStateCookie = { httpOnly: true, sameSite: "lax", secure: env.nodeEnv === "production", path: "/api/auth/google", maxAge: 10 * 60 * 1000 };
+const googleFailure = (res, reason) => res.redirect(`${env.clientUrl.replace(/\/+$/u, "")}/login?google_error=${encodeURIComponent(reason)}`);
+
+export const googleLogin = asyncHandler(async (_req, res) => {
+  if (!env.googleClientId || !env.googleClientSecret) throw new ApiError(503, "Google login is not configured");
+  const state = crypto.randomBytes(24).toString("base64url");
+  res.cookie("googleOAuthState", state, googleStateCookie);
+  const params = new URLSearchParams({ client_id: env.googleClientId, redirect_uri: env.googleCallbackUrl, response_type: "code", scope: "openid email profile", state, prompt: "select_account" });
+  return res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+});
+
+export const googleCallback = asyncHandler(async (req, res) => {
+  const state = String(req.query.state || "");
+  if (!state || state !== req.cookies.googleOAuthState || !req.query.code) return googleFailure(res, "Google sign-in could not be verified");
+  res.clearCookie("googleOAuthState", googleStateCookie);
+  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code: String(req.query.code), client_id: env.googleClientId, client_secret: env.googleClientSecret, redirect_uri: env.googleCallbackUrl, grant_type: "authorization_code" }) });
+  if (!tokenResponse.ok) return googleFailure(res, "Google sign-in was rejected");
+  const token = await tokenResponse.json();
+  const profileResponse = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${token.access_token}` } });
+  if (!profileResponse.ok) return googleFailure(res, "Google profile could not be loaded");
+  const profile = await profileResponse.json();
+  if (!profile.email || profile.email_verified !== true) return googleFailure(res, "Google must provide a verified email address");
+  const email = String(profile.email).trim().toLowerCase();
+  let user = await User.findOne({ $or: [{ googleId: profile.sub }, { email }] });
+  if (user?.role === "admin") return googleFailure(res, "Administrator accounts must use password sign-in");
+  if (user) {
+    if (user.googleId && user.googleId !== profile.sub) return googleFailure(res, "This email is linked to another Google account");
+    user.googleId = profile.sub;
+    if (!user.avatar && profile.picture) user.avatar = profile.picture;
+    await user.save({ validateModifiedOnly: true });
+  } else {
+    const root = String(profile.name || email.split("@")[0]).toLowerCase().replace(/[^a-z0-9_]/gu, "").slice(0, 20) || "member";
+    let username = root;
+    for (let suffix = 0; await User.exists({ username }); suffix += 1) username = `${root.slice(0, 16)}${suffix + 1}`;
+    user = await User.create({ name: String(profile.name || email.split("@")[0]).slice(0, 100), username, email, googleId: profile.sub, avatar: profile.picture || "", password: crypto.randomBytes(32).toString("base64url"), role: "fan", profileType: "personal", creatorApprovalStatus: null });
+    await FanProfile.create({ user: user._id });
+  }
+  if (user.status !== "active") return googleFailure(res, "This account is not available");
+  if (user.twoFactorEnabled) return googleFailure(res, "This account uses two-factor authentication. Sign in with your password and authenticator code.");
+  const tokens = issueAuthTokens(user);
+  res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
+  return res.redirect(`${env.clientUrl.replace(/\/+$/u, "")}/login?google=success`);
 });
 
 export const logout = asyncHandler(async (_req, res) => {
