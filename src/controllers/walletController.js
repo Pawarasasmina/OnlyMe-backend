@@ -16,15 +16,11 @@ import ApiError from "../utils/ApiError.js";
 import { financialModeForAccountType } from "../constants/accountTypeConstants.js";
 import { monthlyWalletSpending, SPENDING_LIMIT_OPTIONS_USD, validSpendingLimit } from "../services/walletSpendingService.js";
 import PayoutHold from "../models/PayoutHold.js";
+import Payout from "../models/Payout.js";
+import { clearingCutoff, creatorClearingLevel } from "../services/creatorClearingService.js";
+import { getWebCoinTaxRate, packByPrice, priceWithTax, WEB_COIN_PACKS, WEB_COIN_USD } from "../services/coinPackService.js";
+import { createBonusGrant, welcomeBonusFor } from "../services/bonusService.js";
 
-const TOPUP_PACKS = {
-  "4.99": { usd: 4.99, bonus: 0 },
-  "9.99": { usd: 9.99, bonus: 5 },
-  "29.99": { usd: 29.99, bonus: 20 },
-  "49.99": { usd: 49.99, bonus: 50 },
-  "99.99": { usd: 99.99, bonus: 150 },
-  "249.99": { usd: 249.99, bonus: 500 },
-};
 const CREATOR_EVENTS = ["WORLD_CREATOR_EARNING", "PREMIUM_CREATOR_EARNING", "DREAM_CREATOR_EARNING", "CHAT_GIFT_EARNING", "DA_CREATOR_EARNING", "CALL_CREATOR_EARNING"];
 const safePublication = (item) => item ? { id: item._id, title: item.title || item.publishedSnapshot?.metadata?.title || "", kind: item.kind, planet: item.planet || null } : null;
 export function withdrawalBalances(earnedBalance, recentIncomeStars) {
@@ -36,11 +32,13 @@ export const getWallet = asyncHandler(async (req, res) => {
   const financialMode = financialModeForAccountType(req.user.accountType);
   const ledgerMode = { financialMode: financialMode === "TEST" ? "TEST" : { $ne: "TEST" } };
   const now = new Date();
-  const withdrawalCutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const clearingLevel = await creatorClearingLevel(req.user._id, now);
+  const withdrawalCutoff = clearingCutoff(clearingLevel, now);
   const automaticFilter = { creator: req.user._id, status: "ACTIVE", cancelAtPeriodEnd: false, currentPeriodEnd: { $gt: now } };
-  const [wallet, starsPerUsd, income, recentIncome, automaticMemberships, automaticSummary, payoutStatus, refundedIncome] = await Promise.all([
+  const [wallet, starsPerUsd, taxPercent, income, recentIncome, automaticMemberships, automaticSummary, payoutStatus, refundedIncome] = await Promise.all([
     Wallet.findOne({ user: req.user._id }).lean(),
     getStarExchangeRate(),
+    getWebCoinTaxRate(),
     StarsLedgerEntry.aggregate([{ $match: { accountUser: req.user._id, ...ledgerMode, entryType: { $in: CREATOR_EVENTS } } }, { $group: { _id: null, stars: { $sum: "$signedAmount" } } }]),
     StarsLedgerEntry.aggregate([
       { $match: { accountUser: req.user._id, ...ledgerMode, entryType: { $in: CREATOR_EVENTS }, createdAt: { $gt: withdrawalCutoff } } },
@@ -67,25 +65,32 @@ export const getWallet = asyncHandler(async (req, res) => {
   const { pendingIncomeStars, availableIncomeStars } = withdrawalBalances(earnedBalance, recentIncome[0]?.stars);
   const autoTotals = automaticSummary[0] || { count: 0, starsPerMonth: 0 };
   const spending = await monthlyWalletSpending(req.user._id, financialMode, starsPerUsd);
-  const topUpPacks = Object.values(TOPUP_PACKS).map(pack => ({ usd: pack.usd, stars: Math.round(pack.usd * starsPerUsd), bonusStars: pack.bonus, badge: pack.usd === 49.99 ? "popular" : pack.usd === 99.99 ? "best_value" : null }));
-  return sendResponse(res, 200, "Wallet fetched", { wallet: { ...spending, payouts: { ...payoutStatus, refundsDeductedUsd: Number(refundedIncome[0]?.stars || 0) / starsPerUsd, standard: { enabled: true, feeUsd: 0, status: "PENDING_ADMIN_PROCESSING" }, instant: { enabled: false }, automaticProcessingAvailable: false }, topUpPacks, monthlySpendingLimit: wallet?.monthlySpendingLimit ?? null, monthlySpendingLimitUsd: wallet?.monthlySpendingLimitUsd ?? 0, spendingLimitOptionsUsd: SPENDING_LIMIT_OPTIONS_USD, clearingDays: 14, balance, bonusBalance, purchasedBalance, earnedBalance, version: wallet?.version || 0, currency: "STARS", role: req.user.role, starsPerUsd, lifetimeIncomeStars: incomeStars, pendingIncomeStars, availableIncomeStars, withdrawalHoldHours: 336, withdrawalMinimumUsd: 50, balanceUsd: balance / starsPerUsd, incomeUsd: earnedBalance / starsPerUsd, pendingIncomeUsd: pendingIncomeStars / starsPerUsd, availableIncomeUsd: availableIncomeStars / starsPerUsd, automaticIncome: { activeSubscriptions: Number(autoTotals.count || 0), starsPerMonth: Number(autoTotals.starsPerMonth || 0), usdPerMonth: Number(autoTotals.starsPerMonth || 0) / starsPerUsd, items: automaticMemberships.map((membership) => ({ id: membership._id, subscriber: membership.user ? { name: membership.user.name, username: membership.user.username, avatar: membership.user.avatar || "" } : null, world: { id: membership.premiumPublication?._id, title: membership.premiumPublication?.title || membership.premiumPublication?.publishedSnapshot?.metadata?.title || "Premium World" }, stars: membership.starsPerPeriod, usd: membership.starsPerPeriod / starsPerUsd, nextRenewalAt: membership.currentPeriodEnd })) } } });
+  const topUpPacks = WEB_COIN_PACKS.map(pack => ({ id: pack.id, usd: pack.subtotalUsd, stars: pack.stars, bonusStars: pack.bonusStars, badge: pack.badge, ...priceWithTax(pack.subtotalUsd, taxPercent) }));
+  return sendResponse(res, 200, "Wallet fetched", { wallet: { ...spending, payouts: { ...payoutStatus, refundsDeductedUsd: Number(refundedIncome[0]?.stars || 0) / starsPerUsd, standard: { enabled: true, feeUsd: 0, status: "PENDING_ADMIN_PROCESSING" }, instant: { enabled: false }, automaticProcessingAvailable: false }, topUpPacks, monthlySpendingLimit: wallet?.monthlySpendingLimit ?? null, monthlySpendingLimitUsd: wallet?.monthlySpendingLimitUsd ?? 0, spendingLimitOptionsUsd: SPENDING_LIMIT_OPTIONS_USD, clearingLevel: clearingLevel.key, clearingDays: clearingLevel.days, balance, bonusBalance, purchasedBalance, earnedBalance, version: wallet?.version || 0, currency: "STARS", role: req.user.role, starsPerUsd, lifetimeIncomeStars: incomeStars, pendingIncomeStars, availableIncomeStars, withdrawalHoldHours: clearingLevel.days * 24, withdrawalMinimumUsd: 50, balanceUsd: balance / starsPerUsd, incomeUsd: earnedBalance / starsPerUsd, pendingIncomeUsd: pendingIncomeStars / starsPerUsd, availableIncomeUsd: availableIncomeStars / starsPerUsd, automaticIncome: { activeSubscriptions: Number(autoTotals.count || 0), starsPerMonth: Number(autoTotals.starsPerMonth || 0), usdPerMonth: Number(autoTotals.starsPerMonth || 0) / starsPerUsd, items: automaticMemberships.map((membership) => ({ id: membership._id, subscriber: membership.user ? { name: membership.user.name, username: membership.user.username, avatar: membership.user.avatar || "" } : null, world: { id: membership.premiumPublication?._id, title: membership.premiumPublication?.title || membership.premiumPublication?.publishedSnapshot?.metadata?.title || "Premium World" }, stars: membership.starsPerPeriod, usd: membership.starsPerPeriod / starsPerUsd, nextRenewalAt: membership.currentPeriodEnd })) } } });
 });
 
 export const topUpWallet = asyncHandler(async (req, res) => {
   const key = idempotencyKey(req.body.idempotencyKey);
   const starsPerUsd = await getStarExchangeRate();
+  const taxPercent = await getWebCoinTaxRate();
   const exactStars = req.body.exactStars === undefined ? null : positiveStars(req.body.exactStars);
-  const pack = exactStars === null ? TOPUP_PACKS[String(req.body.packUsd)] : null;
+  const pack = exactStars === null ? packByPrice(req.body.packUsd) : null;
   if (exactStars === null && !pack) throw new ApiError(400, "Choose a valid top-up pack", "INVALID_TOPUP_PACK");
-  const baseStars = exactStars ?? Math.round(pack.usd * starsPerUsd);
-  const bonusStars = pack?.bonus || 0;
-  const usdAmount = pack?.usd ?? Number((baseStars / starsPerUsd).toFixed(2));
+  const baseStars = exactStars ?? pack.stars;
+  const previousPack = pack ? await StarsLedgerEntry.exists({ accountUser: req.user._id, entryType: "WALLET_TOPUP_CREDIT", "metadata.exactTopUp": { $ne: true } }) : true;
+  const packBonusStars = pack?.bonusStars || 0;
+  const welcomeBonusStars = pack && !previousPack ? welcomeBonusFor(baseStars) : 0;
+  const bonusStars = packBonusStars + welcomeBonusStars;
+  const subtotalUsd = pack?.subtotalUsd ?? Number((baseStars * WEB_COIN_USD).toFixed(2));
+  const pricing = priceWithTax(subtotalUsd, taxPercent);
+  const usdAmount = pricing.totalUsd;
   const totalStars = baseStars + bonusStars;
   const result = await executeFinancialCommand(
-    { user: req.user._id, commandType: "WALLET_TOPUP", idempotencyKey: key, requestFingerprint: fingerprint({ packUsd: pack?.usd || null, exactStars, baseStars, bonusStars, starsPerUsd }) },
+    { user: req.user._id, commandType: "WALLET_TOPUP", idempotencyKey: key, requestFingerprint: fingerprint({ packId: pack?.id || null, exactStars, baseStars, packBonusStars, welcomeBonusStars, ...pricing }) },
     async (session, command) => {
-      const posted = await creditWallet({ user: req.user._id, amount: totalStars, bonusAmount: bonusStars, entryType: "WALLET_TOPUP_CREDIT", entryRole: "USER_TOPUP", referenceType: "WALLET_TOPUP", referenceId: command._id, command, idempotencyKey: key, metadata: { usdAmount, starsPerUsd, baseStars, bonusStars, exactTopUp: exactStars !== null, temporaryCheckout: true } }, session);
-      return { resultReference: posted.entry._id, wallet: safeWallet(posted.wallet, command.financialMode), topUp: { usd: usdAmount, baseStars, bonusStars, totalStars } };
+      const posted = await creditWallet({ user: req.user._id, amount: totalStars, bonusAmount: bonusStars, entryType: "WALLET_TOPUP_CREDIT", entryRole: "USER_TOPUP", referenceType: "WALLET_TOPUP", referenceId: command._id, command, idempotencyKey: key, metadata: { usdAmount, ...pricing, starsPerUsd, fanCoinUsd: WEB_COIN_USD, baseStars, bonusStars, packBonusStars, welcomeBonusStars, packId: pack?.id || null, exactTopUp: exactStars !== null, temporaryCheckout: true } }, session);
+      const bonusGrant = await createBonusGrant({ user: req.user._id, sourceLedgerEntry: posted.entry._id, packBonusStars, welcomeBonusStars }, session);
+      return { resultReference: posted.entry._id, wallet: safeWallet(posted.wallet, command.financialMode), topUp: { usd: usdAmount, ...pricing, baseStars, bonusStars, packBonusStars, welcomeBonusStars, totalStars, bonusExpiresAt: bonusGrant?.expiresAt || null } };
     },
   );
   return sendResponse(res, 200, "Wallet topped up", result);
@@ -136,9 +141,9 @@ export const convertIncomeToCoins = asyncHandler(async (req, res) => {
 });
 
 export const withdrawCreatorIncome = asyncHandler(async (req, res) => {
+  if (req.body.method != null && req.body.method !== "standard") throw new ApiError(400, "This payout method is unavailable", "PAYOUT_METHOD_UNAVAILABLE");
   if (req.user.sellingRestrictedUntil && req.user.sellingRestrictedUntil > new Date()) throw new ApiError(403, `Payouts are restricted until ${req.user.sellingRestrictedUntil.toISOString()}`, "PAYOUT_RESTRICTED");
   if (await PayoutHold.exists({ user: req.user._id, active: true })) throw new ApiError(403, "Payouts are currently on administrative hold", "PAYOUT_ON_HOLD");
-  if (req.body.method != null && req.body.method !== "standard") throw new ApiError(400, "This payout method is unavailable", "PAYOUT_METHOD_UNAVAILABLE");
   if (!(await manualPayoutIdentityStatus(req.user)).bankReady) throw new ApiError(409, "Admin identity and bank approval are required before requesting payouts", "BANK_NOT_APPROVED");
   const key = idempotencyKey(req.body.idempotencyKey);
   const amount = positiveStars(req.body.starsAmount);
@@ -152,7 +157,8 @@ export const withdrawCreatorIncome = asyncHandler(async (req, res) => {
       if (!payoutBank) throw new ApiError(409, "An admin must approve your bank details before a payout can be requested", "BANK_NOT_APPROVED");
       const wallet = await Wallet.findOne({ user: req.user._id }).session(session);
       if (!wallet) throw new ApiError(422, "Wallet is unavailable", "WALLET_UNAVAILABLE");
-      const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+      const clearingLevel = await creatorClearingLevel(req.user._id);
+      const cutoff = clearingCutoff(clearingLevel);
       const recentRows = await StarsLedgerEntry.aggregate([
         { $match: { accountUser: req.user._id, entryType: { $in: CREATOR_EVENTS }, createdAt: { $gt: cutoff } } },
         { $lookup: { from: StarsLedgerEntry.collection.name, localField: "_id", foreignField: "reversalOf", as: "reversals" } },
@@ -174,7 +180,8 @@ export const withdrawCreatorIncome = asyncHandler(async (req, res) => {
         metadata: { bankLast4: payoutBank.accountLast4, bankApplicationId: String(payoutBank._id), bankVersion: payoutBank.version, payoutProvider: "manual", bucketSpend: { bonus: 0, purchased: 0, earned: amount }, starsPerUsd, usdAmount: amount / starsPerUsd },
       }], { session });
       await Wallet.updateOne({ _id: updated._id }, { $set: { lastLedgerEntry: entry._id } }, { session });
-      return { resultReference: entry._id, wallet: safeWallet(updated), withdrawal: { id: entry._id, starsAmount: amount, usdAmount: amount / starsPerUsd, status: "PENDING_ADMIN_PROCESSING", bankLast4: payoutBank.accountLast4, estimatedArrival: "After admin processing" } };
+      const [payout] = await Payout.create([{ user: req.user._id, ledgerEntry: entry._id, command: command._id, trigger: "MANUAL", status: "PENDING", starsAmount: amount, usdAmount: amount / starsPerUsd, feeUsd: 0, bankLast4: payoutBank.accountLast4 }], { session });
+      return { resultReference: payout._id, wallet: safeWallet(updated), withdrawal: { id: payout._id, ledgerEntryId: entry._id, starsAmount: amount, usdAmount: amount / starsPerUsd, status: payout.status, bankLast4: payoutBank.accountLast4, estimatedArrival: "After admin processing" } };
     },
   );
   return sendResponse(res, 200, "Withdrawal submitted", result);
@@ -197,6 +204,12 @@ export const getLedger = asyncHandler(async (req, res) => {
     ...dreamGifts.map((gift) => [`DREAM_GIFT:${gift._id}`, { giftName: gift.giftName, giftImageUrl: gift.giftImageUrl, giftSource: "Dream" }]),
   ]);
   return sendResponse(res, 200, "Ledger fetched", { items: rows.map((item) => { const storedGift = giftsByReference.get(`${item.referenceType}:${item.referenceId}`); const metadata = item.metadata?.giftName || storedGift ? { giftName: item.metadata?.giftName || storedGift?.giftName || "a gift", giftImageUrl: item.metadata?.giftImageUrl || storedGift?.giftImageUrl || "", giftSource: item.metadata?.giftSource || storedGift?.giftSource || "" } : undefined; return { id: item._id, event: item.entryType, starsChange: item.signedAmount, reference: { type: item.referenceType, id: item.referenceId }, publication: safePublication(item.publication), usdAmount: Number.isFinite(Number(item.metadata?.usdAmount)) ? Number(item.metadata.usdAmount) : undefined, metadata, counterparty: item.counterpartyUser ? { id: item.counterpartyUser._id, name: item.counterpartyUser.name, username: item.counterpartyUser.username, avatar: item.counterpartyUser.avatar || "", verified: Boolean(item.counterpartyUser.isVerified), role: item.counterpartyUser.role } : null, createdAt: item.createdAt }; }), pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) } });
+});
+
+export const getPayouts = asyncHandler(async (req, res) => {
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
+  const rows = await Payout.find({ user: req.user._id }).sort({ createdAt: -1 }).limit(limit).lean();
+  return sendResponse(res, 200, "Payout history fetched", { items: rows.map((item) => ({ id: item._id, method: item.method, trigger: item.trigger, status: item.status, starsAmount: item.starsAmount, usdAmount: item.usdAmount, feeUsd: item.feeUsd, bankLast4: item.bankLast4, failureReason: item.failureReason, processedAt: item.processedAt, paidAt: item.paidAt, createdAt: item.createdAt })) });
 });
 
 export const getWorldEntitlements = asyncHandler(async (req, res) => {

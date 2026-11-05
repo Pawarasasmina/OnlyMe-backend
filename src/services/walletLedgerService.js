@@ -4,6 +4,7 @@ import ApiError from "../utils/ApiError.js";
 import { FINANCIAL_ERROR_CODES } from "../constants/financialConstants.js";
 import { getStarExchangeRate } from "./starExchangeService.js";
 import { monthlyWalletSpending, SPENDING_EVENTS, spendingLimitExceeded } from "./walletSpendingService.js";
+import BonusGrant from "../models/BonusGrant.js";
 
 async function walletFor(user, session, { create = false } = {}) {
   const wallets = await Wallet.find({ user }).limit(2).session(session);
@@ -90,6 +91,19 @@ async function debitBuckets(wallet, amount, reversalOf, session) {
   return { bonus, purchased, earned: afterBonus - purchased };
 }
 
+async function consumeBonusGrants(user, amount, session) {
+  let remaining = Number(amount || 0);
+  if (!remaining) return;
+  const grants = await BonusGrant.find({ user, remainingStars: { $gt: 0 }, expiresAt: { $gt: new Date() } }).sort({ expiresAt: 1, createdAt: 1 }).session(session);
+  for (const grant of grants) {
+    if (!remaining) break;
+    const used = Math.min(grant.remainingStars, remaining);
+    grant.remainingStars -= used;
+    remaining -= used;
+    await grant.save({ session });
+  }
+}
+
 async function post({ user, amount, bonusAmount = 0, purchasedAmount, earnedAmount, direction, entryType, entryRole, referenceType, referenceId, publication, creator, counterpartyUser, command, idempotencyKey, reversalOf, metadata = {} }, session) {
   const create = direction === "CREDIT";
   let wallet = await normalizeBuckets(await walletFor(user, session, { create }), session);
@@ -119,6 +133,7 @@ async function post({ user, amount, bonusAmount = 0, purchasedAmount, earnedAmou
       { new: true, session, runValidators: true },
     );
     if (!wallet) throw new ApiError(422, "Insufficient Stars", FINANCIAL_ERROR_CODES.INSUFFICIENT_STARS);
+    if (bucketMetadata.bonus > 0 && !metadata.skipBonusGrantConsumption) await consumeBonusGrants(user, bucketMetadata.bonus, session);
   } else {
     bucketMetadata = await creditBuckets({ amount, bonusAmount, purchasedAmount, earnedAmount, entryType, reversalOf }, session);
     wallet = await Wallet.findOneAndUpdate(
@@ -146,8 +161,6 @@ export const debitWallet = (input, session) => post({ ...input, direction: "DEBI
 export async function transferStars({ fromUser, toUser, amount, debitType, creditType, referenceType, referenceId, publication, creator, command, idempotencyKey, metadata }, session) {
   const debit = await debitWallet({ user: fromUser, amount, entryType: debitType, entryRole: "FAN_DEBIT", referenceType, referenceId, publication, creator, counterpartyUser: toUser, command, idempotencyKey, metadata }, session);
   const credit = await creditWallet({ user: toUser, amount, entryType: creditType, entryRole: "CREATOR_EARNING", referenceType, referenceId, publication, creator, counterpartyUser: fromUser, command, idempotencyKey, metadata: { ...metadata, settlementStatus: "UNSETTLED", grossStars: amount } }, session);
-  const { awardReferralEarnings } = await import("./referralFinancialService.js");
-  await awardReferralEarnings({ fromUser, toUser, amount, referenceType, sourceDebit: debit, sourceCredit: credit, publication, creator, command, idempotencyKey }, session);
   return { debit, credit };
 }
 export const safeWallet = (wallet, financialMode = "REAL_SEED") => {

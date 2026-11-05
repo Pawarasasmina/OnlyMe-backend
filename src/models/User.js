@@ -52,6 +52,10 @@ const userSchema = new mongoose.Schema(
     },
     adminCreatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     adminTwoFactorEnabled: { type: Boolean, default: false },
+    twoFactorEnabled: { type: Boolean, default: false },
+    twoFactorSecret: { type: String, default: "", select: false },
+    twoFactorPendingSecret: { type: String, default: "", select: false },
+    twoFactorEnabledAt: { type: Date, default: null },
     accountType: {
       type: String,
       enum: ACCOUNT_TYPES,

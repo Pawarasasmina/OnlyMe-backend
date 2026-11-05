@@ -37,6 +37,19 @@ const summary = (membership) => ({
   autoRenew: membership.status === "ACTIVE" && !membership.cancelAtPeriodEnd,
 });
 
+async function nextOrReservedMemberNumber(user, publication, now, session) {
+  const previous = await PremiumMembership.findOne({ user, premiumPublication: publication, status: "CANCELED", memberNumber: { $ne: null }, memberNumberReservedUntil: { $gt: now } }).sort({ endedAt: -1 }).session(session);
+  if (previous) {
+    const number = previous.memberNumber;
+    previous.memberNumber = null;
+    previous.memberNumberReservedUntil = null;
+    await previous.save({ session });
+    return number;
+  }
+  const highest = await PremiumMembership.findOne({ premiumPublication: publication, memberNumber: { $ne: null } }).sort({ memberNumber: -1 }).select("memberNumber").session(session).lean();
+  return Number(highest?.memberNumber || 0) + 1;
+}
+
 const waitingSummary = async (entry, session = null) => {
   const query = WorldWaitlist.countDocuments({ publication: entry.publication, status: "WAITING", createdAt: { $lte: entry.createdAt } });
   if (session) query.session(session);
@@ -137,7 +150,7 @@ export async function joinPremium({ user, publicationId, key }) {
         await waiting.save({ session });
         return { resultReference: waiting._id, queued: true, waitingList: await waitingSummary(waiting, session), wallet: safeWallet(held.wallet), access: "WAITING_LIST" };
       }
-      const memberNumber = await PremiumMembership.countDocuments({ premiumPublication: publication._id }).session(session) + 1;
+      const memberNumber = await nextOrReservedMemberNumber(user._id, publication._id, new Date(), session);
 
       const moved = await transferStars(
         {
@@ -231,7 +244,7 @@ export async function admitWorldWaitlist(publicationId) {
           await entry.save({ session });
           return { resultReference: existing._id, membership: summary(existing), refundedDuplicate: true };
         }
-        const memberNumber = await PremiumMembership.countDocuments({ premiumPublication: entry.publication }).session(session) + 1;
+        const memberNumber = await nextOrReservedMemberNumber(entry.user, entry.publication, new Date(), session);
         const credited = await creditWallet({
           user: entry.creator,
           amount: entry.heldStars,
@@ -403,6 +416,7 @@ async function endCanceledMemberships(now) {
       $set: {
         status: "CANCELED",
         endedAt: now,
+        memberNumberReservedUntil: new Date(now.getTime() + 30 * 86400000),
       },
       $unset: { activeMembershipKey: 1 },
       $inc: { membershipVersion: 1 },
@@ -506,7 +520,7 @@ export async function renewPremiumMembership(membershipId, now = new Date()) {
           currentPeriodEnd: due.currentPeriodEnd,
         },
         {
-          $set: { status: "SUSPENDED", endedAt: now },
+          $set: { status: "CANCELED", endedAt: now, cancelAtPeriodEnd: false, memberNumberReservedUntil: new Date(now.getTime() + 30 * 86400000) },
           $unset: { activeMembershipKey: 1 },
           $inc: { membershipVersion: 1 },
         },

@@ -45,6 +45,7 @@ function sanitizeUser(user) {
     role: effectiveRole,
     adminRole: effectiveRole === "admin" ? (user.adminRole || "MAIN_ADMIN") : null,
     adminTwoFactorEnabled: effectiveRole === "admin" ? Boolean(user.adminTwoFactorEnabled) : null,
+    twoFactorEnabled: effectiveRole === "admin" ? Boolean(user.adminTwoFactorEnabled) : Boolean(user.twoFactorEnabled),
     profileType: user.profileType || (effectiveRole === "creator" ? "creator" : "personal"),
     accountRole: user.role === "admin" ? "admin" : "fan",
     creatorApprovalStatus: user.creatorApprovalStatus,
@@ -150,6 +151,10 @@ export const login = asyncHandler(async (req, res) => {
   if (user.role === "admin" && user.adminTwoFactorEnabled) {
     const profile = await AdminProfile.findOne({ user: user._id }).select("+twoFactorSecret");
     if (!profile?.twoFactorSecret || !verifyTotp(profile.twoFactorSecret, req.body.twoFactorCode)) throw new ApiError(401, "Enter the current six-digit authenticator code", "ADMIN_2FA_REQUIRED");
+  }
+  if (user.role !== "admin" && user.twoFactorEnabled) {
+    const securedUser = await User.findById(user._id).select("+twoFactorSecret");
+    if (!securedUser?.twoFactorSecret || !verifyTotp(securedUser.twoFactorSecret, req.body.twoFactorCode)) throw new ApiError(401, "Enter the current six-digit authenticator code", "TWO_FACTOR_REQUIRED");
   }
 
   if (canRestoreAccount(user)) {
