@@ -1,11 +1,13 @@
 import { Router } from "express";
-import { deactivateAccount, getAccountOwnership, deleteAccount, getMe, login, logout, refreshSession, register, updateProfileType } from "../controllers/authController.js";
+import { deactivateAccount, getAccountOwnership, deleteAccount, getMe, googleCallback, googleLogin, login, logout, refreshSession, register, updateProfileType } from "../controllers/authController.js";
 import { protect } from "../middleware/authMiddleware.js";
 
 const router = Router();
 
 router.post("/register", register);
 router.post("/login", login);
+router.get("/google", googleLogin);
+router.get("/google/callback", googleCallback);
 router.post("/logout", logout);
 router.post("/refresh", refreshSession);
 router.get("/me", protect, getMe);
