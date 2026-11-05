@@ -81,6 +81,7 @@ function accountDetails(user) {
     role: user.role,
     profileType: user.profileType || "personal",
     businessContactButtons: user.businessContactButtons || [],
+    businessContactButtonsConfigured: Boolean(user.businessContactButtonsConfigured),
     profilePhoto: user.avatar,
     isVerified: user.isVerified,
     status: user.status,
@@ -503,7 +504,7 @@ export const getMyAccountSettings = asyncHandler(async (req, res) => {
     account: { ...accountDetails(req.user), profileAccountType: profileAccountType(req.user), profileCategory: profileCategory(req.user, profile) },
     preferences: {
       preferredLanguage: profile.preferredLanguage,
-      preferredLanguageExplicit: Boolean(profile.uiLanguageSelectedAt || profile.preferredLanguage && !/^en(?:-US)?$/i.test(profile.preferredLanguage)),
+      preferredLanguageExplicit: Boolean(profile.uiLanguageSelectedAt),
       timezone: profile.timezone,
       phoneNumber: profile.phoneNumber || "",
     },
@@ -521,7 +522,7 @@ export const updateMyAccountSettings = asyncHandler(async (req, res) => {
   }
   const updates = stripUndefined(validateSettingsPayload(req.user.role, "account", req.body));
   if (updates.preferredLanguage !== undefined) updates.uiLanguageSelectedAt = new Date();
-  const Model = profileModels[req.user.role];
+  const Model = profileModels[effectiveProfileRole(req.user)];
   await Model.updateOne(
     { user: req.user._id },
     { $set: updates, $setOnInsert: { user: req.user._id } },
@@ -532,7 +533,7 @@ export const updateMyAccountSettings = asyncHandler(async (req, res) => {
     account: accountDetails(req.user),
     preferences: {
       preferredLanguage: profile.preferredLanguage,
-      preferredLanguageExplicit: Boolean(profile.uiLanguageSelectedAt || profile.preferredLanguage && !/^en(?:-US)?$/i.test(profile.preferredLanguage)),
+      preferredLanguageExplicit: Boolean(profile.uiLanguageSelectedAt),
       timezone: profile.timezone,
       phoneNumber: profile.phoneNumber || "",
     },

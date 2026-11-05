@@ -20,3 +20,14 @@ test("legacy creators retain their category; Personal hides it", () => {
   assert.equal(profileCategory({ profileAccountType: "personal", profileCategory: "Artist" }), "");
   assert.equal(profileCategory({ profileAccountType: "business", profileCategory: "Brand" }), "Brand");
 });
+
+test("Business contact choices are validated and empty selection stays explicitly configured", () => {
+  const user = { profileAccountType: "creator" };
+  const payload = { profileAccountType: "business", profileCategory: "Shop", confirmSwitch: true };
+  for (const buttons of [["call", "directions", "website"], []]) {
+    const updates = validateProfileAccountType(user, { ...payload, businessContactButtons: buttons });
+    assert.deepEqual(updates.businessContactButtons, buttons);
+    assert.equal(updates.businessContactButtonsConfigured, true);
+  }
+  for (const buttons of [["booking"], ["call", "call"], "call", null]) assert.throws(() => validateProfileAccountType(user, { ...payload, businessContactButtons: buttons }), /contact buttons/);
+});

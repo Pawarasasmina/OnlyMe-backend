@@ -1,4 +1,5 @@
 import Content from "../models/Content.js";
+import Publication from "../models/Publication.js";
 import CallSession from "../models/CallSession.js";
 import DAWindow from "../models/DAWindow.js";
 import FanProfile from "../models/FanProfile.js";
@@ -21,6 +22,7 @@ import ChatGift from "../models/ChatGift.js";
 import DreamGift from "../models/DreamGift.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
+import { supplementalActivity } from "../services/activitySupplementService.js";
 
 const DEFAULT_LIMITS = {
   dashboardSubscriptions: 3,
@@ -156,6 +158,19 @@ function activityBase(input) {
 }
 
 function notificationActivity(notification, giftThanksByKey = new Map()) {
+  if (notification.type === "publication_tag" && notification.target?.id) {
+    return activityBase({ id: `notification-${notification._id}`, type: notification.type, filter: "mentions", title: notification.title, preview: notification.message, createdAt: notification.createdAt, actor: notification.actor?._id ? serializeCreator(notification.actor) : null, target: { ...notification.target, ...notification.metadata?.cover }, actionPath: `/seen/${notification.target.id}`, canAcknowledge: true, acknowledged: Boolean(notification.readAt || notification.acknowledgedAt) });
+  }
+  if (/^premium_renewal|^premium_membership_cancelled$|^membership_cancelled$|^publication_chapter_added$/.test(notification.type || "")) {
+    const metadata = notification.metadata || {};
+    const worldId = notification.target?.id || metadata.publicationId;
+    const lowBalance = /low_balance|failed/.test(notification.type);
+    return activityBase({ id: `notification-${notification._id}`, type: notification.type, filter: "subscriptions", filterKeys: ["subscriptions"], title: notification.title, preview: notification.message, createdAt: notification.createdAt, actor: notification.actor?._id ? serializeCreator(notification.actor) : null, target: worldId ? { type: notification.target?.type || "PREMIUM_WORLD", id: String(worldId), ...metadata.cover } : null, metadata, actionPath: lowBalance ? "/wallet" : worldId ? `${notification.target?.type === "SEEN" || notification.target?.type === "EXPERIENCE" ? "/seen" : "/world"}/${worldId}` : "/memberships", canAcknowledge: true, acknowledged: Boolean(notification.readAt || notification.acknowledgedAt), read: Boolean(notification.readAt) });
+  }
+  if (/^direct_access_(answered|refunded)$/.test(notification.type || "") && notification.metadata?.windowId) {
+    const metadata = notification.metadata;
+    return activityBase({ id: `notification-${notification._id}`, type: notification.type, filter: notification.type.endsWith("refunded") ? "purchases" : "comments", title: notification.title, createdAt: notification.createdAt, actor: notification.actor?._id ? serializeCreator(notification.actor) : null, metadata, actionPath: `/messages?tab=direct&with=${metadata.creatorId}&window=${metadata.windowId}`, canAcknowledge: true, acknowledged: Boolean(notification.readAt || notification.acknowledgedAt) });
+  }
   if (notification.target?.type === "STORY" && notification.target.id) {
     const reply = notification.type === "story_reply";
     const sentMention = notification.type === "story_mention_sent";
@@ -174,6 +189,7 @@ function notificationActivity(notification, giftThanksByKey = new Map()) {
     });
   }
   const isWarning = notification.type === "moderation_warning";
+  const systemTitle = /react/i.test(notification.type || "") ? notification.title : String(notification.title || "").replace(/\p{Extended_Pictographic}[\uFE0F\u200D]?/gu, "").replace(/\s{2,}/g, " ").trim();
   const giftThanks = notification.type === "gift_thanks" ? giftThanksByKey.get(notification.dedupeKey) : null;
   const financial = /earning|refund|wallet|stars|debit|credit/i.test(`${notification.type} ${notification.title}`);
   const filter = isWarning ? "moderation" : giftThanks ? "support" : financial ? "earnings" : "system";
@@ -214,8 +230,8 @@ function notificationActivity(notification, giftThanksByKey = new Map()) {
     direction: "received",
     filter,
     filterKeys: filter === "moderation" ? ["system"] : [filter],
-    title: notification.title,
-    description: isWarning ? (notification.message || notification.title) : notification.title,
+    title: systemTitle,
+    description: isWarning ? (notification.message || systemTitle) : systemTitle,
     preview: isWarning ? notification.message : notification.message,
     severity: notification.severity,
     priority: notification.priority || 0,
@@ -415,11 +431,9 @@ function feedPostEngagementActivities(posts, { direction, fanId }) {
         rows.push(feedPostEngagementActivity(post, row, { direction, type: "COMMENT" }));
       }
     }
-    for (const row of post.saves || []) {
-      if (belongsInDirection(row)) {
-        rows.push(feedPostEngagementActivity(post, row, { direction, type: "SAVE" }));
-      }
-    }
+    const saves = (post.saves || []).filter(belongsInDirection);
+    if (direction === "received") rows.push(...groupedSaveActivities(saves.map(row => ({ ...row, post })), { source: "wall" }));
+    else for (const row of saves) rows.push(feedPostEngagementActivity(post, row, { direction, type: "SAVE" }));
     return rows.filter(Boolean);
   });
 }
@@ -437,7 +451,8 @@ function groupedSaveActivities(rows, { source }) {
   }
 
   return [...groups.values()].map((group) => {
-    if (group.rows.length === 1) return engagementActivity(group.latest, { direction: "received", source });
+    if (group.rows.length === 1 && source === "seen") return engagementActivity(group.latest, { direction: "received", source });
+    const count = new Set(group.rows.map(row => String(row.user?._id || row.user || row._id))).size;
     const target = source === "seen" ? publicationTarget(group.latest.publication) : wallTarget(group.latest.post);
     const targetLabel = source === "seen" ? "Seen" : "note";
     return activityBase({
@@ -446,11 +461,11 @@ function groupedSaveActivities(rows, { source }) {
       direction: "received",
       filter: "saves",
       filterKeys: ["saves"],
-      title: `${group.rows.length} people saved your ${targetLabel}`,
+      title: `${count} ${count === 1 ? "person" : "people"} saved your ${targetLabel}`,
       preview: target.preview,
       createdAt: engagementTime(group.latest),
       target,
-      aggregate: { count: group.rows.length },
+      aggregate: { count },
       actionPath: source === "seen" ? publicationRoute(group.latest.publication) : `/posts/${group.latest.post._id}`,
       canAcknowledge: false,
     });
@@ -471,7 +486,8 @@ function directAccessActivity(window, fanId) {
     preview: window.questionQuote || "",
     createdAt: window.openedAt || window.createdAt,
     actor: serializeCreator(other),
-    actionPath: "/messages?tab=direct",
+    actionPath: `/messages?tab=direct&with=${other?._id || other}&window=${window._id}`,
+    metadata: { canAnswer: asCreator && window.status === "OPEN" && new Date(window.expiresAt) > new Date(), windowId: String(window._id) },
     reference: { type: "DIRECT_ACCESS_WINDOW", id: String(window._id) },
     dedupeKey: `da-open:${window._id}`,
     canAcknowledge: asCreator,
@@ -751,7 +767,7 @@ async function applyAcknowledgements(items) {
   });
 }
 
-async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivity) {
+async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivity, { truncate = true } = {}) {
   const [
     subscriptions,
     notifications,
@@ -820,6 +836,17 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
 
   // Resolve previews at read time; old notifications must not expose expired or restricted media.
   for (const notification of notifications) {
+    if (["publication_tag", "publication_chapter_added"].includes(notification.type)) {
+      const publication = await Publication.findById(notification.target?.id).select("status publishedSnapshot visibility creator").lean();
+      notification.unavailable = !publication || publication.status !== "PUBLISHED" || ((publication.publishedSnapshot?.metadata?.visibility || publication.visibility) === "PRIVATE" && String(publication.creator) !== String(fanId));
+    }
+    const da = /^da-(?:refund|answer):(.+)$/.exec(notification.dedupeKey || "");
+    const window = da && directAccessWindows.find(row => String(row._id) === da[1]);
+    if (window && String(window.fan?._id || window.fan) === String(fanId)) {
+      notification.actor = window.creator;
+      notification.metadata = { ...notification.metadata, windowId: String(window._id), creatorId: String(window.creator?._id || window.creator), ...(notification.type === "direct_access_refunded" ? { refundCoins: window.priceStars } : {}) };
+      if (notification.type === "direct_access_refunded") notification.title = `${window.creator?.name || "The creator"} didn’t reply in 48h — ${window.priceStars} coins are back`;
+    }
     if (notification.type !== "story_reaction" || notification.target?.id) continue;
     const legacy = /^story-reaction:([a-f\d]{24}):([a-f\d]{24})$/i.exec(notification.dedupeKey || "");
     if (!legacy) continue;
@@ -880,6 +907,7 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
       createdAt: story.createdAt, canAcknowledge: false, dedupeKey });
   }).filter(Boolean));
   const activity = [
+    ...await supplementalActivity(fanId, limit),
     ...receivedFollows.filter((row) => row.actor?.status !== "suspended").map((row) => followActivity(row, "received")),
     ...sentFollows.filter((row) => row.target?.status !== "suspended").map((row) => followActivity(row, "sent")),
     ...receivedSeeSignals.filter((signal) => signal.sender).map((signal) => orbitActivity(signal, "received")),
@@ -930,13 +958,14 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
         actionPath: `/messages?with=${message.sender._id}&message=${message._id}`,
       })),
     ...notifications
-      .filter((notification) => !["chat_gift", "direct_gift", "story_gift", "dream_gift"].includes(notification.type))
+      .filter(notification => !notification.unavailable)
+      .filter((notification) => !["chat_gift", "direct_gift", "story_gift", "dream_gift", "direct_access_opened"].includes(notification.type))
       .map((notification) => notificationActivity(notification, giftThanksByKey)),
     ...sentMentionHistory,
   ];
 
   const seenDedupe = new Set();
-  return activity
+  const ordered = activity
     .filter((item) => {
       const key = item.dedupeKey || item.id;
       if (!key) return true;
@@ -944,9 +973,8 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
       seenDedupe.add(key);
       return true;
     })
-    .sort((left, right) => (new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()) || (Number(right.priority) - Number(left.priority)))
-    .slice(0, limit)
-    .map(serializeActivityItem);
+    .sort((left, right) => (new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()) || (Number(right.priority) - Number(left.priority)));
+  return (truncate ? ordered.slice(0, limit) : ordered).map(serializeActivityItem);
 }
 
 async function getWalletData(fanId, transactionLimit = DEFAULT_LIMITS.pageSize) {
@@ -1111,11 +1139,10 @@ export const getFanActivity = asyncHandler(async (req, res) => {
     : [0, []];
   const requestedLimit = limitFromQuery(req.query.limit, 30);
   const page = Math.max(1, Number(req.query.page) || 1);
-  // Activity is assembled from several independently queried sources and only
-  // then filtered by direction/category. A small pre-filter limit can be filled
-  // entirely by Sent rows, making a valid Received page appear empty.
+  // Bound each source query, but keep the combined candidates until after the
+  // direction/category filter. Otherwise newer unrelated events hide Saves.
   const queryLimit = 100;
-  const allActivity = await applyAcknowledgements(await getActivity(req.user._id, wallet, queryLimit));
+  const allActivity = await applyAcknowledgements(await getActivity(req.user._id, wallet, queryLimit, { truncate: false }));
   const filteredActivity = filterActivityItems(allActivity, { direction, filter });
   const activity = filteredActivity.slice(0, requestedLimit * page);
 

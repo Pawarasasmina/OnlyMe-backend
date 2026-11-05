@@ -2,7 +2,7 @@ import { wallViewCount } from "../services/wallViewCount.js";
 import { cleanupWallFiles, creationKey, reserveWallCreation, validateWallCreation, wallFingerprint } from "../services/wallCreationService.js";
 import { wallActiveExpression, wallClosedReason } from "../services/wallLifecycleService.js";
 import { prepareWallVoiceTranscript } from "../services/transcriptionService.js";
-import { isRequestWallPost, wallResolutionTarget } from "../services/wallResolutionService.js";
+import { isRequestWallPost, needsAvailabilityConfirmation, WALL_AVAILABILITY_DAYS, wallResolutionTarget } from "../services/wallResolutionService.js";
 import { readWallFeedFilters, wallFeedPipeline } from "../services/wallFeedFilterService.js";
 import mongoose from "mongoose";
 import FeedPost from "../models/FeedPost.js";
@@ -146,13 +146,17 @@ function authorPayload(author) {
   };
 }
 
-function serializeComment(comment, savedCommentIds = new Set()) {
+function serializeComment(comment, savedCommentIds = new Set(), viewerId = "") {
   const user = comment.user || {};
   return {
     id: String(comment._id),
     text: comment.text || "",
     audio: comment.audio?.assetId ? { url: messageVoiceUrl(comment.audio), duration: comment.audio.duration, waveform: comment.audio.waveform || [] } : null,
     createdAt: comment.createdAt,
+    parentCommentId: comment.parentCommentId ? String(comment.parentCommentId) : null,
+    reactionCount: (comment.reactions || []).length,
+    topReactions: reactionSummary(comment.reactions || []),
+    viewerReaction: (comment.reactions || []).find(item => String(item.user?._id || item.user) === viewerId)?.reaction || null,
     author: authorPayload(user),
     viewerSaved: savedCommentIds.has(String(comment._id)),
   };
@@ -222,7 +226,9 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
     shareId: activity.shareId || null,
     sharedBy: activity.sharedBy || null,
     shareCaption: activity.shareCaption || "",
-    feedCreatedAt: activity.feedCreatedAt || post.publishedAt || post.createdAt,
+    feedCreatedAt: activity.feedCreatedAt || post.bumpedAt || post.publishedAt || post.createdAt,
+    bumpedAt: post.bumpedAt || null,
+    canBump: authorId === viewerId && post.status === "published" && !post.deletedAt && !wallClosedReason(post) && needsAvailabilityConfirmation(post),
     author: authorPayload(author),
     text: post.text || "",
     resolvedAt: post.resolvedAt || null,
@@ -265,12 +271,13 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
     visibility: post.visibility,
     status: post.status,
     reactions: reactionSummary(reactions),
+    reactorPreviews: [...reactions].filter(item => item.user && typeof item.user === "object" && item.user.name).sort((a, b) => Number(String(b.user._id) === viewerId) - Number(String(a.user._id) === viewerId)).slice(0, 2).map(item => authorPayload(item.user)),
     viewerReaction,
     viewerSaved,
     viewerViewed,
     viewerShared,
     viewerHidden,
-    comments: comments.map((comment) => serializeComment(comment, savedCommentIds)),
+    comments: comments.map((comment) => serializeComment(comment, savedCommentIds, viewerId)),
     supportCount: reactions.length || post.supportCount || 0,
     commentCount: comments.length || post.commentCount || 0,
     saveCount: saves.length || post.saveCount || 0,
@@ -300,6 +307,7 @@ async function populatePostForResponse(post) {
   await post.populate([
     { path: "author", select: "name username avatar isVerified" },
     { path: "comments.user", select: "name username avatar isVerified" },
+    { path: "reactions.user", select: "name username avatar isVerified" },
   ]);
   return post;
 }
@@ -467,7 +475,12 @@ export const getWallNeedCounts = asyncHandler(async (req, res) => {
   };
   for (const [key, match] of Object.entries(previewMatches)) {
     facets[`preview_${key}`] = [
-      { $match: match }, { $sort: { publishedAt: -1, createdAt: -1, _id: -1 } }, { $limit: 3 },
+      { $match: match }, { $sort: { publishedAt: -1, createdAt: -1, _id: -1 } },
+      // Pick the latest note per author before limiting the avatar stack.
+      // Three notes from one person must not hide the other active authors.
+      { $group: { _id: "$author", note: { $first: "$$ROOT" } } },
+      { $replaceRoot: { newRoot: "$note" } },
+      { $sort: { publishedAt: -1, createdAt: -1, _id: -1 } }, { $limit: 3 },
       { $lookup: { from: "users", localField: "author", foreignField: "_id", as: "person" } },
       { $project: { _id: 0, text: { $cond: [
         { $gt: [{ $strLenCP: { $trim: { input: { $ifNull: ["$text", ""] } } } }, 0] }, "$text",
@@ -507,6 +520,7 @@ export const listFeedPosts = asyncHandler(async (req, res) => {
     .populate([
       { path: "author", select: "name username avatar isVerified" },
       { path: "comments.user", select: "name username avatar isVerified" },
+      { path: "reactions.user", select: "name username avatar isVerified" },
     ]).lean() : [];
   await attachSavedCommentState(items, req.user?._id);
   await attachEntityMetadata(items, req.user || null);
@@ -594,6 +608,7 @@ export const listMyPosts = asyncHandler(async (req, res) => {
       .populate([
         { path: "author", select: "name username avatar isVerified" },
         { path: "comments.user", select: "name username avatar isVerified" },
+        { path: "reactions.user", select: "name username avatar isVerified" },
       ])
       .lean(),
     FeedPost.countDocuments({ author: req.user._id, status, deletedAt: null }),
@@ -657,6 +672,25 @@ export const setPostResolution = asyncHandler(async (req, res) => {
   await attachSavedCommentState([post], req.user._id);
   await attachEntityMetadata(post, req.user || null);
   return sendResponse(res, 200, req.body.solved ? "Request marked as Solved" : "Request reopened", { post: serializePost(post, req.user) });
+});
+
+export const bumpFeedPost = asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid post ID");
+  const now = new Date();
+  // Owner-only, active listings; the same conditional write prevents repeated bumps.
+  const post = await FeedPost.findOneAndUpdate({
+    _id: req.params.id, author: req.user._id, status: "published", deletedAt: null,
+    $and: [
+      { $or: [{ postType: { $in: ["Buy & Sell", "Offering"] } }, { postType: { $in: ["", null] }, context: { $in: ["Buy/Sell", "Shopping"] } }] },
+      { $expr: wallActiveExpression(now) },
+      { $expr: { $lte: [{ $ifNull: ["$bumpedAt", { $ifNull: ["$publishedAt", "$createdAt"] }] }, new Date(now.getTime() - WALL_AVAILABILITY_DAYS * 86400000)] } },
+    ],
+  }, { $set: { bumpedAt: now } }, { new: true, runValidators: true });
+  if (!post) throw new ApiError(409, "Only your active Buy & Sell or Offering notes older than 14 days can be bumped");
+  await populatePostForResponse(post);
+  await attachSavedCommentState(post, req.user._id);
+  await attachEntityMetadata(post, req.user || null);
+  return sendResponse(res, 200, "Bumped — back in front of people nearby", { post: serializePost(post, req.user) });
 });
 
 export const updateFeedPost = asyncHandler(async (req, res) => {
@@ -752,7 +786,6 @@ export const togglePostSave = asyncHandler(async (req, res) => {
 export const togglePostShare = asyncHandler(async (req, res) => {
   const post = await findPublishedPost(req.params.id);
   const userId = String(req.user._id);
-  if (String(post.author?._id || post.author) === userId) throw new ApiError(409, "You cannot repost your own content");
   const existing = post.shares.find((item) => String(item.user) === userId);
 
   if (existing) {
@@ -763,7 +796,7 @@ export const togglePostShare = asyncHandler(async (req, res) => {
 
   post.shareCount = post.shares.filter((item) => item.actorAccountType !== "TEST").length;
   await post.save();
-  await syncRepost({ enabled: !existing, kind: "note", originalAuthor: post.author?._id || post.author, targetId: post._id, targetModel: "FeedPost", user: req.user._id });
+  await syncRepost({ allowOwn: true, enabled: !existing, kind: "note", originalAuthor: post.author?._id || post.author, targetId: post._id, targetModel: "FeedPost", user: req.user._id });
   if (!existing) await trackPostEvent(req, "SHARE", post._id);
   await populatePostForResponse(post);
   await attachSavedCommentState(post, req.user?._id);
@@ -828,7 +861,10 @@ export const blockPostAuthor = asyncHandler(async (req, res) => {
 
 export const createPostComment = asyncHandler(async (req, res) => {
   const post = await findPublishedPost(req.params.id);
-  if (wallClosedReason(post)) throw new ApiError(409, "This note is closed. Existing replies remain visible.");
+  const parentCommentId = req.body.parentCommentId || null;
+  if (parentCommentId && !post.comments.some(comment => String(comment._id) === String(parentCommentId) && !comment.deletedAt)) {
+    throw new ApiError(400, "Reply target is no longer available on this note");
+  }
   const hasVoiceFile = Boolean(req.file?.buffer?.length);
   const text = String(req.body.text || "").trim();
   if ((!text && !hasVoiceFile) || text.length > 500) throw new ApiError(400, hasVoiceFile ? "Voice comment text must not exceed 500 characters" : "Comment must contain 1 to 500 characters");
@@ -836,7 +872,7 @@ export const createPostComment = asyncHandler(async (req, res) => {
   if (audio) {
     try { audio.waveform = JSON.parse(req.body.waveform || "[]").map(Number).filter(Number.isFinite).slice(0, 100); } catch { audio.waveform = []; }
   }
-  post.comments.push({ user: req.user._id, actorAccountType: req.user.accountType, text: text || "Voice comment", audio: audio || undefined });
+  post.comments.push({ user: req.user._id, actorAccountType: req.user.accountType, parentCommentId, text: text || "Voice comment", audio: audio || undefined });
   post.commentCount = post.comments.filter((comment) => !comment.deletedAt && comment.actorAccountType !== "TEST").length;
   await post.save();
   await trackPostEvent(req, "COMMENT", post._id);
@@ -844,6 +880,21 @@ export const createPostComment = asyncHandler(async (req, res) => {
   await attachSavedCommentState(post, req.user?._id);
   await attachEntityMetadata(post, req.user || null);
   return sendResponse(res, 201, "Comment saved", { post: serializePost(post, req.user) });
+});
+
+export const updatePostCommentReaction = asyncHandler(async (req, res) => {
+  const post = await findPublishedPost(req.params.id);
+  const comment = post.comments.find(item => String(item._id) === req.params.commentId && !item.deletedAt);
+  if (!comment) throw new ApiError(404, "Reply not found");
+  const reaction = req.body.reaction;
+  if (typeof reaction !== "string" || (reaction && !POST_REACTIONS.includes(reaction))) throw new ApiError(400, "Invalid reaction");
+  comment.reactions = (comment.reactions || []).filter(item => String(item.user) !== String(req.user._id));
+  if (reaction) comment.reactions.push({ user: req.user._id, actorAccountType: req.user.accountType, reaction });
+  await post.save();
+  await populatePostForResponse(post);
+  await attachSavedCommentState(post, req.user?._id);
+  await attachEntityMetadata(post, req.user || null);
+  return sendResponse(res, 200, "Reply reaction saved", { post: serializePost(post, req.user) });
 });
 
 export const deleteFeedPost = asyncHandler(async (req, res) => {

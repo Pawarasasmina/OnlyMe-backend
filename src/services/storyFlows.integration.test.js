@@ -15,7 +15,7 @@ import WorldEntitlement from "../models/WorldEntitlement.js";
 import Publication from "../models/Publication.js";
 import FanProfile from "../models/FanProfile.js";
 import { createStory, getStory, reactStory, replyStory } from "../controllers/storyController.js";
-import { storyAudiencesFor } from "./storyAudienceService.js";
+import { storyAudiencesFor, storyAudiencesByCreator } from "./storyAudienceService.js";
 import { upsertStoryReactionMessage } from "./storyReactionMessageService.js";
 import { resolveStorySources } from "./storySourceService.js";
 import { getFanActivity, acknowledgeFanActivity } from "../controllers/fanController.js";
@@ -61,6 +61,29 @@ async function invoke(controller, user, { id, body = {}, file, query = {} } = {}
 }
 const mediaFile = () => ({ path: "story-test-no-file", mimetype: "image/jpeg" });
 async function publish(user, body = {}) { return (await invoke(createStory, user, { body: { publishKey: String(new mongoose.Types.ObjectId()), ...body }, file: mediaFile() })).data.story; }
+
+test("batched story permissions match individual checks for privacy, blocks and membership", async () => {
+  const viewer = await person("BatchViewer");
+  const owners = await Promise.all(Array.from({ length: 8 }, (_, i) => person(`BatchOwner${i}`)));
+  await ProfileRelationship.create([
+    { actor: viewer._id, target: owners[0]._id, type: "FOLLOW" },
+    { actor: viewer._id, target: owners[1]._id, type: "FOLLOW" },
+    { actor: owners[1]._id, target: viewer._id, type: "FOLLOW" },
+  ]);
+  await UserBlock.create({ blocker: owners[2]._id, blocked: viewer._id });
+  await User.updateOne({ _id: owners[3]._id }, { $set: { status: "deactivated" } });
+  await User.updateOne({ _id: owners[4]._id }, { $set: { status: "deleted" } });
+  await PremiumMembership.collection.insertMany([3, 4, 5].map(i => ({ user: viewer._id, creator: owners[i]._id, status: "ACTIVE", currentPeriodEnd: new Date(Date.now() + 60000) })));
+  const publication = new mongoose.Types.ObjectId();
+  await Publication.collection.insertOne({ _id: publication, creator: owners[6]._id, kind: "WORLD" });
+  await WorldEntitlement.collection.insertOne({ user: viewer._id, creator: owners[6]._id, publication, status: "ACTIVE" });
+  const ids = [viewer._id, ...owners.map(owner => owner._id)];
+  for (const viewerId of [viewer._id, null]) {
+    const batched = await storyAudiencesByCreator(ids, viewerId);
+    for (const id of ids) assert.deepEqual(batched.get(String(id)), await storyAudiencesFor(id, viewerId));
+  }
+  assert.deepEqual(await storyAudiencesByCreator([], viewer._id), new Map());
+});
 
 test("publication retries keep one story and one canonical mention notification", async () => {
   const owner = await person("Owner"); const mentioned = await person("Mentioned");

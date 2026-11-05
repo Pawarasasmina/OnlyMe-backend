@@ -63,7 +63,7 @@ export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], en
     categories: creatorEnabled ? (roleProfile?.categories?.length ? roleProfile.categories : roleProfile?.category ? [roleProfile.category] : []) : [],
     location: [roleProfile?.city, roleProfile?.country].filter(Boolean).join(", "),
     socialLinks,
-    ...(owner.profileType === "business" ? {
+    ...(profileAccountType(owner) === "business" ? {
       businessContact: {
         enabled: owner.businessContactButtonsConfigured ? (owner.businessContactButtons || []) : ["call", "directions", "website"],
         call: roleProfile?.phoneNumber || owner.businessContact?.call || "",
