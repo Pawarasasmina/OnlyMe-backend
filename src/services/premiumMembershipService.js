@@ -12,6 +12,7 @@ import { PREMIUM_WORLD_DEFAULT_CAPACITY } from "../constants/publicationConstant
 import ApiError from "../utils/ApiError.js";
 import { FINANCIAL_ERROR_CODES } from "../constants/financialConstants.js";
 import { sendWorldCancellationEmail, sendWorldRenewalReminderEmail } from "./emailService.js";
+import { coverPreview } from "./activitySupplementService.js";
 
 export const PREMIUM_PERIOD_DAYS = 30;
 export const nextPremiumPeriod = (value) =>
@@ -349,8 +350,11 @@ export async function cancelPremium({ user, membershipId, key }) {
         { $setOnInsert: {
           user: user._id,
           type: "premium_membership_cancelled",
-          title: "Membership cancellation confirmed",
-          message: `${publication?.title || "Your World"} stays open until ${membership.currentPeriodEnd.toISOString()}. No further renewal will be charged.`,
+          title: "Membership cancelled",
+          message: `${publication?.title || "Your World"} · open until ${membership.currentPeriodEnd.toLocaleDateString("en-US", { timeZone: "UTC", year: "numeric", month: "short", day: "numeric" })}. No further renewal will be charged.`,
+          actor: membership.creator,
+          target: { type: "PREMIUM_WORLD", id: membership.premiumPublication },
+          metadata: { membershipId: String(membership._id), currentPeriodEnd: membership.currentPeriodEnd },
           dedupeKey: `premium-cancel:${String(membership._id)}:${String(membership.membershipVersion)}`,
         } },
         { upsert: true, session },
@@ -499,7 +503,7 @@ export async function renewPremiumMembership(membershipId, now = new Date()) {
         FINANCIAL_ERROR_CODES.PUBLICATION_NOT_PURCHASABLE,
       ].includes(error.code)
     ) {
-      await PremiumMembership.updateOne(
+      const suspended = await PremiumMembership.updateOne(
         {
           _id: due._id,
           status: "ACTIVE",
@@ -511,6 +515,11 @@ export async function renewPremiumMembership(membershipId, now = new Date()) {
           $inc: { membershipVersion: 1 },
         },
       );
+      if (suspended.modifiedCount && [FINANCIAL_ERROR_CODES.INSUFFICIENT_STARS, FINANCIAL_ERROR_CODES.WALLET_UNAVAILABLE].includes(error.code)) {
+        await Notification.updateOne({ dedupeKey: `premium-renewal-failed:${due._id}:${periodStart.toISOString()}` }, { $setOnInsert: {
+          user: due.user, actor: due.creator, type: "premium_renewal_failed", title: "Not enough coins to renew — top up to stay", message: "Your World membership could not renew. Top up your Wallet, then restart your membership.", target: { type: "PREMIUM_WORLD", id: due.premiumPublication }, metadata: { membershipId: String(due._id), coins: due.starsPerPeriod, currentPeriodEnd: due.currentPeriodEnd }, dedupeKey: `premium-renewal-failed:${due._id}:${periodStart.toISOString()}`,
+        } }, { upsert: true });
+      }
       return { resultReference: due._id, suspended: true, failureCode: error.code };
     }
     throw error;
@@ -522,15 +531,33 @@ export const premiumReminderWindow = (now = new Date()) => ({ after: new Date(no
 
 export async function processPremiumRenewalReminders(now = new Date(), io = null) {
   const window = premiumReminderWindow(now);
-  const memberships = await PremiumMembership.find({ status: "ACTIVE", cancelAtPeriodEnd: false, currentPeriodEnd: { $gte: window.after, $lt: window.before } }).populate("user", "name email").populate("premiumPublication", "title").limit(200).lean();
   let sent = 0;
+  let cursor = null;
+  // Catch up after downtime and page through every due reminder, not just the
+  // first 200 subscriptions in a one-minute window.
+  while (true) {
+  const memberships = await PremiumMembership.find({ status: "ACTIVE", cancelAtPeriodEnd: false, currentPeriodEnd: { $gt: now, $lte: window.after }, ...(cursor ? { _id: { $gt: cursor } } : {}) }).sort({ _id: 1 }).populate("user", "name email accountType").populate("premiumPublication", "title creator publishedSnapshot.metadata.coverMedia").limit(200).lean();
+  if (!memberships.length) break;
   for (const membership of memberships) {
+    if (!membership.user || !membership.premiumPublication) continue;
+    const wallet = await Wallet.findOne({ user: membership.user._id }).select("balance testBalance").lean();
+    const balance = membership.user.accountType === "TEST" ? wallet?.testBalance : wallet?.balance;
+    const low = Number(balance || 0) < membership.starsPerPeriod;
     const dedupeKey = `premium-renewal-reminder:${membership._id}:${new Date(membership.currentPeriodEnd).toISOString()}`;
-    const inserted = await Notification.updateOne({ dedupeKey }, { $setOnInsert: { user: membership.user?._id || membership.user, type: "premium_renewal_reminder", title: `${membership.premiumPublication?.title || "Your World"} renews in 3 days`, message: `${membership.starsPerPeriod} coins will be charged on ${new Date(membership.currentPeriodEnd).toISOString()}. Top up, manage, or cancel anytime.`, dedupeKey } }, { upsert: true });
-    if (!inserted.upsertedCount) continue;
-    sent += 1;
-    io?.to(`user:${String(membership.user?._id || membership.user)}`).emit("activity:updated", { type: "premium_renewal_reminder", membershipId: String(membership._id) });
-    await sendWorldRenewalReminderEmail({ idempotencyKey: dedupeKey, membership, user: membership.user, worldTitle: membership.premiumPublication?.title }).catch(() => null);
+    const date = new Date(membership.currentPeriodEnd).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric" });
+    const inserted = await Notification.updateOne({ dedupeKey }, { $setOnInsert: { user: membership.user._id, actor: membership.creator, target: { type: "PREMIUM_WORLD", id: membership.premiumPublication._id }, type: low ? "premium_renewal_low_balance" : "premium_renewal_reminder", title: low ? "Not enough coins to renew — top up to stay" : `${membership.premiumPublication.title || "Your World"} renews on ${date}`, message: `${membership.starsPerPeriod} coins · next payment ${date}. We remind you 3 days before renewal.`, metadata: { membershipId: String(membership._id), currentPeriodEnd: membership.currentPeriodEnd, coins: membership.starsPerPeriod, cover: coverPreview(membership.premiumPublication) }, dedupeKey } }, { upsert: true });
+    if (inserted.upsertedCount) {
+      sent += 1;
+      io?.to(`user:${String(membership.user._id)}`).emit("activity:updated", { type: "premium_renewal_reminder", membershipId: String(membership._id) });
+    }
+    const notice = await Notification.findOne({ dedupeKey }).select("metadata").lean();
+    if (!notice?.metadata?.emailDelivered) {
+      const email = await sendWorldRenewalReminderEmail({ idempotencyKey: dedupeKey, membership, user: membership.user, worldTitle: membership.premiumPublication?.title }).catch(() => null);
+      if (email?.delivered || email?.skipped && email.reason === "EMAIL_MISSING") await Notification.updateOne({ dedupeKey }, { $set: { "metadata.emailDelivered": true } });
+    }
+  }
+  cursor = memberships[memberships.length - 1]._id;
+  if (memberships.length < 200) break;
   }
   return { sent };
 }

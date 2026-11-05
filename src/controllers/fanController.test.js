@@ -90,6 +90,29 @@ test("activity helpers aggregate received saves by target without inventing acto
   assert.equal(activity.actionPath, "/seen/seen1");
 });
 
+test("Wall note saves produce one anonymous row per note with a distinct-person count", () => {
+  const post = { _id: "note1", text: "Zuma after 8 PM — book a table in advance.", author: { _id: "owner", name: "Owner" }, saves: [
+    { _id: "s1", user: { _id: "fan1", name: "First saver" }, createdAt: new Date("2026-11-01T10:00:00Z") },
+    { _id: "s2", user: { _id: "fan2", name: "Second saver" }, createdAt: new Date("2026-11-01T11:00:00Z") },
+    { _id: "s3", user: { _id: "fan1", name: "First saver" }, createdAt: new Date("2026-11-01T12:00:00Z") },
+  ] };
+  const [row] = fanDashboardTestUtils.feedPostEngagementActivities([post], { direction: "received", fanId: "owner" });
+  assert.equal(row.title, "2 people saved your note");
+  assert.equal(row.aggregate.count, 2);
+  assert.equal(row.relatedCreator, null);
+  assert.equal(row.actor, null);
+  assert.equal(row.target.preview, post.text);
+  assert.equal(row.actionPath, "/posts/note1");
+  assert.equal(row.createdAt.toISOString(), "2026-11-01T12:00:00.000Z");
+  post.saves = post.saves.slice(0, 1);
+  const [single] = fanDashboardTestUtils.feedPostEngagementActivities([post], { direction: "received", fanId: "owner" });
+  assert.equal(single.title, "1 person saved your note");
+  assert.equal(single.relatedCreator, null);
+  const [sent] = fanDashboardTestUtils.feedPostEngagementActivities([post], { direction: "sent", fanId: "fan1" });
+  assert.equal(sent.direction, "sent");
+  assert.equal(sent.actionPath, "/posts/note1");
+});
+
 test("activity helpers use updated timestamps for mutable reactions", () => {
   const publication = { _id: "seen1", title: "Morning Espresso Ritual", kind: "SEEN", summary: "Counter seats halve the wait." };
   const reaction = {

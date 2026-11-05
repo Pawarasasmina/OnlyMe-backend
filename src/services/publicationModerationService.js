@@ -4,6 +4,7 @@ import Notification from "../models/Notification.js";
 import Publication from "../models/Publication.js";
 import PublicationReviewHistory from "../models/PublicationReviewHistory.js";
 import ApiError from "../utils/ApiError.js";
+import { notifyAddedChapters } from "./publicationUpdateNotificationService.js";
 
 const decisions = { APPROVED: { status: "PUBLISHED", title: "Your publication was approved", type: "publication_approved" }, CHANGES_REQUESTED: { status: "CHANGES_REQUESTED", title: "Changes were requested for your publication", type: "publication_changes_requested" }, REJECTED: { status: "REJECTED", title: "Your publication was rejected", type: "publication_rejected" } };
 
@@ -18,6 +19,7 @@ export async function moderatePublication({ adminId, decision, id, review = {} }
   if (decision === "APPROVED") Object.assign(set, { publishedAt: now, publishedVersion: current.submittedVersion, publishedSnapshot: current.submittedSnapshot });
   const publication = await Publication.findOneAndUpdate({ _id: id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: "PENDING_REVIEW", statusVersion: current.statusVersion, submittedVersion: current.submittedVersion }, { $set: set, $inc: { statusVersion: 1 } }, { new: true }).select("+submittedSnapshot +internalModerationNote");
   if (!publication) throw new ApiError(409, "Publication was reviewed concurrently");
+  if (decision === "APPROVED") await notifyAddedChapters(current, publication);
   await PublicationReviewHistory.create({ publication: publication._id, creator: publication.creator, action: decision, previousStatus: "PENDING_REVIEW", newStatus: config.status, revisionVersion: current.submittedVersion, admin: adminId, creatorVisibleMessage: message, internalNote: set.internalModerationNote, reasonCodes: Array.isArray(review.reasonCodes) ? review.reasonCodes : review.rejectionReason ? [String(review.rejectionReason)] : [], transitionId });
   Notification.updateOne({ dedupeKey: transitionId }, { $setOnInsert: { user: publication.creator, title: config.title, type: config.type, dedupeKey: transitionId } }, { upsert: true }).catch(() => {});
   return publication;
