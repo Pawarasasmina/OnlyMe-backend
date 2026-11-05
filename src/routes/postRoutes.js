@@ -4,9 +4,11 @@ import { Router } from "express";
 import {
   getWallNeedCounts,
   setPostResolution,
+  bumpFeedPost,
   createDraftPost,
   createFeedPost,
   createPostComment,
+  updatePostCommentReaction,
   archiveFeedPost,
   deleteFeedPost,
   blockPostAuthor,
@@ -52,7 +54,9 @@ router.post("/:id/archive", ...consumerOnly, archiveFeedPost);
 router.post("/:id/restore", ...consumerOnly, restoreFeedPost);
 router.put("/:id/block-author", protect, blockPostAuthor);
 router.post("/:id/comments", protect, uploadVoiceMessage.single("voice"), createPostComment);
+router.put("/:id/comments/:commentId/reaction", protect, updatePostCommentReaction);
 router.put("/:id/resolution", ...consumerOnly, setPostResolution);
+router.post("/:id/bump", ...consumerOnly, bumpFeedPost);
 router.put("/:id", ...consumerOnly, updateFeedPost);
 router.delete("/:id", ...consumerOnly, deleteFeedPost);
 

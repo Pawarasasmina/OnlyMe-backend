@@ -35,7 +35,8 @@ test("need counts enforce visibility, location, unresolved state, blocks and hid
   const facets = pipeline[1].$facet;
   assert.equal(Object.keys(facets).length, 34);
   assert.equal(facets.preview_need_help[1].$sort.publishedAt, -1);
-  assert.equal(facets.preview_need_help[2].$limit, 3);
+  assert.equal(facets.preview_need_help[2].$group._id, "$author");
+  assert.equal(facets.preview_need_help[5].$limit, 3);
   assert.deepEqual(Object.keys(facets.preview_need_help.at(-1).$project), ["text", "author._id", "author.name", "author.avatar"]);
   assert.deepEqual(res.body.data.previews.right_now, []);
   assert.equal(Object.keys(res.body.data.topicCounts).length, 9);

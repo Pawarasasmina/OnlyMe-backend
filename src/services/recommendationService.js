@@ -180,8 +180,10 @@ export function rankCandidates(items, { config, exposureIds = new Set(), refresh
 export async function personalizeCandidates({ exposureLimit, items, req, surface }) {
   if (!SURFACES.has(surface) || !req.user?._id) return { items, recommendation: null };
   const { config, version } = await getActiveRecommendationConfig();
-  const signals = await buildViewerSignals(req.user, config);
-  const exposureIds = await recentExposureIds(req.user._id, surface, config);
+  const [signals, exposureIds] = await Promise.all([
+    buildViewerSignals(req.user, config),
+    recentExposureIds(req.user._id, surface, config),
+  ]);
   const refreshSeed = String(req.query.refreshToken || crypto.randomUUID()).slice(0, 100);
   const ranked = rankCandidates(items, { config, exposureIds, refreshSeed, signals, surface });
   const exposedItems = Number.isFinite(exposureLimit) ? ranked.slice(0, Math.max(1, exposureLimit)) : ranked;

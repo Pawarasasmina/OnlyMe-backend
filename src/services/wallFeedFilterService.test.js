@@ -59,3 +59,13 @@ test("Right now includes independently flagged categories and legacy types", () 
   assert.equal(match.$and[0].$or[0].rightNow, true);
   assert.equal(match.$and[0].$or[1].$or[0].postType, "Right Now");
 });
+
+test("Right now intersects with the selected type, topic and area", () => {
+  const { match } = readWallFeedFilters({ rightNow: "true", type: "need_help", topic: "meet_people", location: "Dubai" });
+  assert.equal(match.$and[0].$or[0].postType, "Need Help");
+  assert.equal(match.$and[1].$or[0].rightNow, true);
+  assert.ok(match.$and[2].$expr);
+  assert.equal(match.$and[3].$or[0].topic, "Meet people");
+  assert.equal(match.$and[4].location.$regex, "Dubai");
+  assert.deepEqual(readWallFeedFilters({ rightNow: "false" }).match, {});
+});

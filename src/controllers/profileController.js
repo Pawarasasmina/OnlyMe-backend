@@ -81,6 +81,7 @@ function accountDetails(user) {
     role: user.role,
     profileType: user.profileType || "personal",
     businessContactButtons: user.businessContactButtons || [],
+    businessContactButtonsConfigured: Boolean(user.businessContactButtonsConfigured),
     profilePhoto: user.avatar,
     isVerified: user.isVerified,
     status: user.status,

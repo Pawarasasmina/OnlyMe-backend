@@ -44,6 +44,8 @@ const postReactionSchema = new mongoose.Schema(
 
 const postCommentSchema = new mongoose.Schema(
   {
+    parentCommentId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    reactions: { type: [postReactionSchema], default: [] },
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     actorAccountType: { type: String, enum: ACCOUNT_TYPES, default: DEFAULT_ACCOUNT_TYPE },
     text: { type: String, trim: true, required: true, maxlength: 500 },
@@ -118,6 +120,7 @@ const feedPostSchema = new mongoose.Schema(
     author: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     text: { type: String, trim: true, default: "", maxlength: 2000 },
     resolvedAt: { type: Date, default: null },
+    bumpedAt: { type: Date, default: null },
     rightNow: { type: Boolean, default: false },
     creationKey: { type: String },
     creationFingerprint: { type: String },

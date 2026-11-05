@@ -27,7 +27,7 @@ export function parseStoryEditorMetadata(value) {
     ? input.sharedCard
     : null;
   const destinationRoute = text(inputSharedCard?.destinationRoute, 180);
-  const sharedCard = inputSharedCard && (/^\/(?:seen|posts|stories)\/[a-zA-Z0-9_-]+$/.test(destinationRoute) || inputSharedCard.kind === "question_reply" && !destinationRoute) ? {
+  const sharedCard = inputSharedCard && (/^\/(?:seen|posts|stories)\/[a-zA-Z0-9_-]+$/.test(destinationRoute) || /^\/wall\?note=[a-f0-9]{24}$/i.test(destinationRoute) || inputSharedCard.kind === "question_reply" && !destinationRoute) ? {
     destinationRoute,
     ...(text(inputSharedCard.eyebrow, 100) ? { eyebrow: text(inputSharedCard.eyebrow, 100) } : {}),
     ...(colors.has(String(inputSharedCard.cardBackgroundColor).toUpperCase()) ? { cardBackgroundColor: String(inputSharedCard.cardBackgroundColor).toUpperCase() } : {}),
@@ -35,10 +35,11 @@ export function parseStoryEditorMetadata(value) {
     ...(text(inputSharedCard.excerpt, 280) ? { excerpt: text(inputSharedCard.excerpt, 280) } : {}),
     imageUrl: text(inputSharedCard.imageUrl, 2000),
     kind: text(inputSharedCard.kind, 20) || "post",
+    ...(inputSharedCard.kind === "note" ? { authorName: text(inputSharedCard.authorName, 100), authorAvatar: text(inputSharedCard.authorAvatar, 2000) } : {}),
     ...(inputSharedCard.mediaType === "video" ? { mediaType: "video" } : {}),
     points: (Array.isArray(inputSharedCard.points) ? inputSharedCard.points : []).slice(0, 2).map((item) => text(item, 60)).filter(Boolean),
     subtitle: text(inputSharedCard.subtitle, 100),
-    title: text(inputSharedCard.title, 120) || "View post",
+    title: text(inputSharedCard.title, inputSharedCard.kind === "note" ? 400 : 120) || "View post",
     ...(text(inputSharedCard.originalTranscript, 2000) ? { originalTranscript: text(inputSharedCard.originalTranscript, 2000) } : {}),
     ...(text(inputSharedCard.translationText, 2000) ? { translationText: text(inputSharedCard.translationText, 2000) } : {}),
     ...(text(inputSharedCard.translationLabel, 80) ? { translationLabel: text(inputSharedCard.translationLabel, 80) } : {}),
