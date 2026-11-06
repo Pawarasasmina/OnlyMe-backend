@@ -454,6 +454,10 @@ export const createStory = asyncHandler(async (req, res) => {
   }
   const deliveryType = options.audience === "everyone" ? "upload" : "authenticated";
   const stored = await storeFile(req.file, { folder: `onlyme/stories/${req.user._id}`, resourceType: mediaType === "video" ? "video" : "image", deliveryType });
+  if (mediaType === "video" && stored.duration > 15.1) {
+    await deleteAsset(stored.id, stored.resourceType, deliveryType).catch(() => {});
+    throw new ApiError(400, "Story videos must be 15 seconds or shorter");
+  }
   let story;
   try { story = await Story.create({
     creator: req.user._id,

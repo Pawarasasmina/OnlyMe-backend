@@ -53,12 +53,16 @@ export async function storeFile(file, options = {}) {
       resource_type: resourceType,
       folder,
       ...(options.deliveryType ? { type: options.deliveryType } : {}),
+      ...(resourceType === "video" ? { transformation: [{ width: 1920, height: 1080, crop: "limit" }] } : {}),
     });
 
     return {
       id: result.public_id,
       url: options.deliveryType === "authenticated" ? cloudinary.url(result.public_id, { secure: true, sign_url: true, type: "authenticated", resource_type: result.resource_type || resourceType }) : result.secure_url,
       resourceType: result.resource_type || resourceType,
+      duration: Number(result.duration) || 0,
+      width: Number(result.width) || 0,
+      height: Number(result.height) || 0,
     };
   } finally {
     await fs.unlink(file.path).catch(() => {});

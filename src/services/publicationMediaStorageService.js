@@ -39,3 +39,8 @@ export function publicationDeliveryUrl(media) {
   if (/^https?:\/\//i.test(media.secureUrl || "") && !String(media.assetId).startsWith("onlyme/publications/")) return media.secureUrl;
   return cloudinary.url(media.assetId, { secure: true, sign_url: true, type: "authenticated", resource_type: media.resourceType || (media.mediaType === "IMAGE" ? "image" : "video"), format: media.format || undefined });
 }
+
+export function publicationMobileDeliveryUrl(media) {
+  if (!media?.assetId || media.mediaType !== "VIDEO") return "";
+  return cloudinary.url(media.assetId, { secure: true, sign_url: true, type: "authenticated", resource_type: "video", format: media.format || undefined, transformation: [{ width: 1280, height: 720, crop: "limit", quality: "auto" }] });
+}
