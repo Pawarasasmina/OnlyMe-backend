@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { welcomeEmail, worldCancellationEmail, worldRenewalReminderEmail } from "./emailService.js";
+import { passwordResetEmail, welcomeEmail, worldCancellationEmail, worldRenewalReminderEmail } from "./emailService.js";
 
 test("welcome email is branded and role-aware for fans", () => {
   const email = welcomeEmail({ name: "Pawara Sasmina", role: "fan" });
@@ -19,6 +19,15 @@ test("welcome email escapes user-provided names", () => {
   const email = welcomeEmail({ name: "<script>alert(1)</script>", role: "fan" });
   assert.doesNotMatch(email.html, /<script>/);
   assert.match(email.html, /&lt;script&gt;/);
+});
+
+test("password reset email contains a single-use reset destination and escapes names", () => {
+  const email = passwordResetEmail({ name: "<Pawara>", resetUrl: "https://seen.example/reset-password/abc123" });
+  assert.match(email.subject, /Reset your @seen password/);
+  assert.match(email.text, /expires in 30 minutes/);
+  assert.match(email.html, /https:\/\/seen\.example\/reset-password\/abc123/);
+  assert.doesNotMatch(email.html, /<Pawara>/);
+  assert.match(email.html, /&lt;Pawara&gt;/);
 });
 
 test("World cancellation email states the real access end and no further charge", () => {

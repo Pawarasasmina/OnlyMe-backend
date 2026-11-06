@@ -36,6 +36,19 @@ export async function sendWelcomeEmail(user) {
   return sendEmail({ to: user.email, ...welcomeEmail({ name: user.name, template }), idempotencyKey: `welcome-${String(user._id)}` });
 }
 
+export function passwordResetEmail({ name, resetUrl }) {
+  const firstName = String(name || "there").trim().split(/\s+/)[0] || "there";
+  const safeUrl = escapeHtml(required(resetUrl, "Password reset URL"));
+  const subject = "Reset your @seen password";
+  const text = `Hi ${firstName},\n\nUse this secure link to reset your @seen password. It expires in 30 minutes and can only be used once:\n\n${resetUrl}\n\nIf you did not request this, you can ignore this email.`;
+  const html = `<!doctype html><html><body style="margin:0;background:#06080b;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#06080b;padding:32px 14px"><tr><td align="center"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;border:1px solid rgba(255,255,255,.1);border-radius:24px;background:#12151b"><tr><td style="padding:34px"><div style="font-size:25px;font-weight:800">@<span style="color:#9ccbff">seen</span></div><h1 style="margin:34px 0 0;font-size:30px;line-height:1.18">Reset your password</h1><p style="margin:18px 0 0;color:rgba(255,255,255,.68);font-size:16px;line-height:1.65">Hi ${escapeHtml(firstName)}, use the secure link below to choose a new password. This link expires in 30 minutes and can only be used once.</p><a href="${safeUrl}" style="display:inline-block;margin-top:28px;border-radius:14px;background:#9ccbff;color:#07101a;padding:14px 22px;font-size:14px;font-weight:800;text-decoration:none">Reset password</a><div style="height:1px;margin-top:30px;background:rgba(255,255,255,.08)"></div><p style="margin:22px 0 0;color:rgba(255,255,255,.4);font-size:12px;line-height:1.6">If you did not request this, you can safely ignore this email. Your password has not changed.</p></td></tr></table></td></tr></table></body></html>`;
+  return { subject, text, html };
+}
+
+export function sendPasswordResetEmail({ idempotencyKey, name, resetUrl, to }) {
+  return sendEmail({ to, ...passwordResetEmail({ name, resetUrl }), idempotencyKey });
+}
+
 export function worldCancellationEmail({ currentPeriodEnd, memberName, worldTitle }) {
   const name = String(memberName || "there").trim().split(/\s+/)[0] || "there";
   const title = String(worldTitle || "your World membership").trim();
