@@ -983,15 +983,23 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
     ...sentMentionHistory,
   ];
 
-  const seenDedupe = new Set();
-  const ordered = activity
-    .filter((item) => {
-      const key = item.dedupeKey || item.id;
-      if (!key) return true;
-      if (seenDedupe.has(key)) return false;
-      seenDedupe.add(key);
-      return true;
-    })
+  const dedupeKeyFor = (item) => {
+    if (/^(premium_)?membership_cancelled$/.test(item.type || "") && item.metadata?.membershipId) {
+      return `membership-cancelled:${item.metadata.membershipId}`;
+    }
+    return item.dedupeKey || item.id;
+  };
+  const richness = (item) => Number(Boolean(item.actor)) * 8
+    + Number(Boolean(item.target?.id || item.reference?.id)) * 4
+    + Number(Boolean(item.preview || item.description)) * 2
+    + Number(Boolean(item.actionPath));
+  const byDedupeKey = new Map();
+  activity.forEach((item) => {
+    const key = dedupeKeyFor(item);
+    const current = byDedupeKey.get(key);
+    if (!current || richness(item) > richness(current)) byDedupeKey.set(key, item);
+  });
+  const ordered = [...byDedupeKey.values()]
     .sort((left, right) => (new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()) || (Number(right.priority) - Number(left.priority)));
   return (truncate ? ordered.slice(0, limit) : ordered).map(serializeActivityItem);
 }
