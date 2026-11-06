@@ -829,13 +829,17 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
   await attachEntityMetadata(items, req.user || null);
   const publicationIds = items.map((item) => item._id);
   const creatorIds = [...new Set(items.map((item) => String(item.creator?._id || item.creator)).filter(Boolean))];
-  const [engagementRows, reactionRows, viewerRows, profileRows, commentRows] = await Promise.all([
+  const [engagementRows, reactionRows, viewerRows, profileRows, commentRows, premiumWorldRows, activeMembershipRows] = await Promise.all([
     publicationIds.length ? SeenEngagement.aggregate([{ $match: { publication: { $in: publicationIds } } }, { $group: { _id: { publication: "$publication", type: "$type" }, count: { $sum: 1 } } }]) : [],
     publicationIds.length ? SeenEngagement.aggregate([{ $match: { publication: { $in: publicationIds }, type: "REACTION" } }, { $group: { _id: { publication: "$publication", reaction: { $ifNull: ["$reaction", "LIKE"] } }, count: { $sum: 1 } } }]) : [],
     req.user?._id && publicationIds.length ? SeenEngagement.find({ publication: { $in: publicationIds }, user: req.user._id, type: { $in: ["REACTION", "SHARE", "SAVE"] } }).lean() : [],
     creatorIds.length ? CreatorProfile.find({ user: { $in: creatorIds } }).select("user city country orbitStatus").lean() : [],
     publicationIds.length ? SeenEngagement.find({ publication: { $in: publicationIds }, type: "COMMENT" }).sort({ createdAt: -1 }).limit(100).populate("user", "name username avatar").lean() : [],
+    creatorIds.length ? Publication.find({ creator: { $in: creatorIds }, kind: "PREMIUM_WORLD", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("creator title pricing firstMonthOfferEnabled publishedSnapshot.metadata.title publishedSnapshot.metadata.pricing publishedSnapshot.metadata.firstMonthOfferEnabled").lean() : [],
+    req.user?._id && creatorIds.length ? PremiumMembership.find({ user: req.user._id, creator: { $in: creatorIds }, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }).select("creator").lean() : [],
   ]);
+  const premiumWorldByCreator = new Map(premiumWorldRows.map((world) => [String(world.creator), world]));
+  const activeWorldCreators = new Set(activeMembershipRows.map((membership) => String(membership.creator)));
   const profileByUser = new Map(profileRows.map((item) => [String(item.user), item]));
   const engagementByPublication = new Map();
   for (const row of engagementRows) {
@@ -873,14 +877,20 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
     });
   }
   const itemsWithEngagement = items.map((item) => {
-    const serialized = serializePublication(item, req.user || null, { audienceAllowed: true });
+    const itemCreatorId = String(item.creator?._id || item.creator);
+    const serialized = serializePublication(item, req.user || null, { audienceAllowed: true, entitlement: activeWorldCreators.has(itemCreatorId) ? "ACTIVE_PREMIUM_MEMBER" : null });
     if (!serialized) return null;
     const counts = engagementByPublication.get(String(item._id)) || {};
     const reactionSummary = reactionsByPublication.get(String(item._id)) || { reactionBreakdown: {}, topReactions: [] };
     const viewer = viewerByPublication.get(String(item._id)) || {};
     const profile = profileByUser.get(String(item.creator?._id || item.creator)) || {};
+    const premiumWorld = premiumWorldByCreator.get(itemCreatorId);
+    const worldMetadata = premiumWorld?.publishedSnapshot?.metadata || premiumWorld;
+    const regularStars = Number(worldMetadata?.pricing?.starsAmount || 0);
+    const firstMonthOfferEnabled = Boolean(worldMetadata?.firstMonthOfferEnabled);
     return {
       ...serialized,
+      ...(premiumWorld && serialized.chapters?.some((chapter) => chapter.worldBonus) ? { bonusWorld: { id: String(premiumWorld._id), title: worldMetadata.title || premiumWorld.title || "World", regularStars, firstMonthStars: firstMonthOfferEnabled ? Math.max(1, Math.ceil(regularStars / 2)) : regularStars, firstMonthOfferEnabled } } : {}),
       creator: {
         ...serialized.creator,
         verified: Boolean(item.creator?.isVerified),
@@ -933,6 +943,17 @@ export const getPublishedPublication = asyncHandler(async (req, res) => {
   const audienceAllowed = publication ? await canAccessPublicationAudience(publication, req.user || null, { shareToken: req.query.access || req.query.token }) : false;
   const serialized = publication && serializePublication(publication, req.user || null, { audienceAllowed, entitlement });
   if (!serialized) throw new ApiError(404, "Publication not found");
+  if (publication.kind === "SEEN" && serialized.chapters?.some((chapter) => chapter.worldBonus)) {
+    const premiumWorld = await Publication.findOne({ creator: publication.creator?._id || publication.creator, kind: "PREMIUM_WORLD", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } })
+      .select("title pricing firstMonthOfferEnabled publishedSnapshot.metadata.title publishedSnapshot.metadata.pricing publishedSnapshot.metadata.firstMonthOfferEnabled")
+      .lean();
+    if (premiumWorld) {
+      const metadata = premiumWorld.publishedSnapshot?.metadata || premiumWorld;
+      const regularStars = Number(metadata.pricing?.starsAmount || 0);
+      const firstMonthOfferEnabled = Boolean(metadata.firstMonthOfferEnabled);
+      serialized.bonusWorld = { id: String(premiumWorld._id), title: metadata.title || premiumWorld.title || "World", regularStars, firstMonthStars: firstMonthOfferEnabled ? Math.max(1, Math.ceil(regularStars / 2)) : regularStars, firstMonthOfferEnabled };
+    }
+  }
   if (publication.kind === "SEEN" && publication.pricing?.mode === "ONE_TIME") {
     serialized.ownerCount = await WorldEntitlement.countDocuments({ publication: publication._id, status: "ACTIVE" });
   }
