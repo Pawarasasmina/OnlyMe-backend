@@ -23,9 +23,11 @@ test("owner detection requires matching user IDs rather than usernames", () => {
   assert.equal(profileViewerCapabilities(owner, { _id: "owner-id" }).isOwner, true);
 });
 
-test("approved and pending creator capabilities are server-derived", () => {
+test("all account owners can create while creator approval gates Studio", () => {
   assert.equal(profileViewerCapabilities(owner, { _id: "owner-id" }).canCreate, true);
-  assert.equal(profileViewerCapabilities({ ...owner, creatorApprovalStatus: "pending" }, { _id: "owner-id" }).canCreate, false);
+  const pending = profileViewerCapabilities({ ...owner, creatorApprovalStatus: "pending" }, { _id: "owner-id" });
+  assert.equal(pending.canCreate, true);
+  assert.equal(pending.canAccessStudio, false);
 });
 
 test("approved unified accounts receive creator capabilities while retaining the fan role", () => {

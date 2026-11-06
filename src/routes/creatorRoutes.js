@@ -2,6 +2,7 @@
 import {
   getCreatorByUsername,
   getCreatorDashboard,
+  getWaysToEarnDashboard,
   getGrowDashboard,
   getReferralInvitation,
   listCreators,
@@ -21,6 +22,7 @@ function requireDashboardAccess(req, res, next) {
 const router = Router();
 
 router.get("/dashboard", protect, authorize("fan", "creator"), requireDashboardAccess, getCreatorDashboard);
+router.get("/ways-to-earn", protect, authorize("fan", "creator"), getWaysToEarnDashboard);
 router.get("/grow", protect, authorize("fan", "creator"), requireDashboardAccess, getGrowDashboard);
 router.get("/referrals/:code", getReferralInvitation);
 router.get("/referrals/:code/landing", protect, getInvitationLanding);

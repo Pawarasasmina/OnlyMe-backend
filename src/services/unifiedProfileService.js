@@ -20,7 +20,9 @@ export function profileViewerCapabilities(owner, viewer, roleProfile = null) {
   return {
     isOwner,
     canEditProfile: isOwner,
-    canCreate: approved,
+    // Every signed-in consumer can publish free Seens, stories, and Wall posts.
+    // Creator approval only gates monetization/Studio features.
+    canCreate: isOwner && consumerOwner,
     canAccessStudio: approved,
     canAccessVerification: isOwner && consumerOwner,
     canAccessSettings: isOwner,
