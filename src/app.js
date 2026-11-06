@@ -60,7 +60,7 @@ app.use(cookieParser());
 app.use("/uploads", express.static(path.resolve("uploads")));
 const rateLimitResponse = (_req, res) => res.status(429).json({ success: false, message: "Too many requests. Please wait a moment and try again.", data: {}, code: "RATE_LIMITED" });
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: env.apiRateLimit, skip: (req) => ["/api/health", "/api/messages", "/api/calls"].some((path) => req.originalUrl.startsWith(path)), standardHeaders: true, legacyHeaders: false, handler: rateLimitResponse, passOnStoreError: true }));
-app.use(["/api/auth/login", "/api/auth/register", "/api/auth/refresh"], rateLimit({ windowMs: 15 * 60 * 1000, limit: env.authRateLimit, standardHeaders: true, legacyHeaders: false, handler: rateLimitResponse, passOnStoreError: true }));
+app.use(["/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/auth/forgot-password", "/api/auth/reset-password"], rateLimit({ windowMs: 15 * 60 * 1000, limit: env.authRateLimit, standardHeaders: true, legacyHeaders: false, handler: rateLimitResponse, passOnStoreError: true }));
 
 app.use("/api", routes);
 app.use("/api/identity", manualBankRoutes);

@@ -9,7 +9,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { validateLoginPayload, validateRegisterPayload } from "../validators/authValidator.js";
 import { issueAuthTokens } from "../services/tokenService.js";
-import { sendWelcomeEmail } from "../services/emailService.js";
+import { sendPasswordResetEmail, sendWelcomeEmail } from "../services/emailService.js";
 import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyticsEventService.js";
 import { env } from "../config/env.js";
 import jwt from "jsonwebtoken";
@@ -194,6 +194,51 @@ export const login = asyncHandler(async (req, res) => {
     user: sanitizeUser(user),
     accessToken: tokens.accessToken,
   });
+});
+
+export const forgotPassword = asyncHandler(async (req, res) => {
+  const email = String(req.body.email || "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ApiError(400, "Enter a valid email address");
+
+  const user = await User.findOne({ email, status: { $ne: "deleted" } });
+  if (user) {
+    const token = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+    user.resetPasswordToken = tokenHash;
+    user.resetPasswordExpires = new Date(Date.now() + 30 * 60 * 1000);
+    await user.save({ validateModifiedOnly: true });
+    const resetUrl = `${env.clientUrl.replace(/\/+$/u, "")}/reset-password/${token}`;
+    try {
+      const delivery = await sendPasswordResetEmail({ idempotencyKey: `password-reset-${String(user._id)}-${tokenHash.slice(0, 12)}`, name: user.name, resetUrl, to: user.email });
+      if (delivery.skipped) console.warn("Password reset email skipped", { reason: delivery.reason, userId: String(user._id) });
+    } catch {
+      user.resetPasswordToken = undefined;
+      user.resetPasswordExpires = undefined;
+      await user.save({ validateModifiedOnly: true });
+      throw new ApiError(503, "We could not send the reset email. Please try again shortly.");
+    }
+  }
+
+  return sendResponse(res, 200, "If an account exists for that email, a reset link has been sent", {});
+});
+
+export const resetPassword = asyncHandler(async (req, res) => {
+  const token = String(req.params.token || "");
+  const password = String(req.body.password || "");
+  if (!/^[a-f0-9]{64}$/i.test(token)) throw new ApiError(400, "This reset link is invalid or has expired");
+  if (password.length < 8) throw new ApiError(400, "Password must be at least 8 characters");
+
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const user = await User.findOne({ resetPasswordToken: tokenHash, resetPasswordExpires: { $gt: new Date() }, status: { $ne: "deleted" } }).select("+resetPasswordToken +resetPasswordExpires +password");
+  if (!user) throw new ApiError(400, "This reset link is invalid or has expired");
+
+  user.password = password;
+  user.resetPasswordToken = undefined;
+  user.resetPasswordExpires = undefined;
+  user.authVersion = (user.authVersion || 0) + 1;
+  await user.save();
+  res.clearCookie("refreshToken", refreshCookieOptions);
+  return sendResponse(res, 200, "Password reset successfully", {});
 });
 
 const googleStateCookie = { httpOnly: true, sameSite: "lax", secure: env.nodeEnv === "production", path: "/api/auth/google", maxAge: 10 * 60 * 1000 };
