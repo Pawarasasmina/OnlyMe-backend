@@ -1,4 +1,4 @@
-import { publicationDeliveryUrl } from "./publicationMediaStorageService.js";
+import { publicationDeliveryUrl, publicationMobileDeliveryUrl } from "./publicationMediaStorageService.js";
 import ProfileRelationship from "../models/ProfileRelationship.js";
 import User from "../models/User.js";
 import PremiumMembership from "../models/PremiumMembership.js";
@@ -6,7 +6,7 @@ import { env } from "../config/env.js";
 import { PUBLICATION_VISIBILITIES } from "../constants/publicationConstants.js";
 
 const plain = (value) => typeof value?.toObject === "function" ? value.toObject() : value;
-const safeMedia = (media, includeAssetId = false) => media && ({ ...(includeAssetId && { assetId: media.assetId }), mediaType: media.mediaType, resourceType: media.resourceType, format: media.format, bytes: media.bytes, width: media.width, height: media.height, duration: media.duration, secureUrl: publicationDeliveryUrl(media) });
+const safeMedia = (media, includeAssetId = false) => media && ({ ...(includeAssetId && { assetId: media.assetId }), mediaType: media.mediaType, resourceType: media.resourceType, format: media.format, bytes: media.bytes, width: media.width, height: media.height, duration: media.duration, secureUrl: publicationDeliveryUrl(media), ...(media.mediaType === "VIDEO" ? { mobileDataUrl: publicationMobileDeliveryUrl(media) } : {}) });
 const fullChapter = (chapter, includeAssetId = false) => ({ stableChapterId: chapter.stableChapterId, order: chapter.order, title: chapter.title, isPreview: chapter.isPreview, worldBonus: Boolean(chapter.worldBonus), locked: false, blocks: chapter.blocks.map((block) => ({ id: block.id, type: block.type, order: block.order, ...(block.text && { text: block.text }), ...(block.url && { url: block.url, label: block.label }), ...(block.metadata && { metadata: block.metadata }), ...(block.media && { media: safeMedia(block.media, includeAssetId) }) })) });
 const lockedChapter = (chapter, exposeStoryPreviews = false) => ({ stableChapterId: chapter.stableChapterId, order: chapter.order, title: chapter.title, isPreview: false, locked: true, blocks: exposeStoryPreviews ? chapter.blocks.filter((block) => block.metadata?.storyPreview && block.media).map((block) => ({ id: block.id, type: block.type, order: block.order, metadata: block.metadata, media: safeMedia(block.media) })) : [] });
 const normalizedVisibility = (value) => PUBLICATION_VISIBILITIES.includes(value) ? value : "PUBLIC";
