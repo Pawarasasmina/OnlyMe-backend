@@ -352,7 +352,8 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
   const currentStars = currentLedger.reduce((sum, entry) => sum + entry.signedAmount, 0);
   const previousStars = previousLedger.reduce((sum, entry) => sum + entry.signedAmount, 0);
   const bySourceStars = { directAccess: 0, dreamSupport: 0, gifts: 0, unlocks: 0, worldSubscriptions: 0, other: 0 };
-  currentLedger.forEach((entry) => { bySourceStars[sourceBucketForEntry(entry)] += entry.signedAmount; });
+  const bySourceCount = { directAccess: 0, dreamSupport: 0, gifts: 0, unlocks: 0, worldSubscriptions: 0, other: 0 };
+  currentLedger.forEach((entry) => { const source = sourceBucketForEntry(entry); bySourceStars[source] += entry.signedAmount; bySourceCount[source] += 1; });
 
   const followerIds = followerRows.map((row) => row.actor);
   const [newFollowersThisMonth, previousFollowersThisPeriod, mutualRows, audience] = await Promise.all([
@@ -409,6 +410,7 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
     },
     earnings: {
       bySource: Object.fromEntries(Object.entries(bySourceStars).map(([key, value]) => [key, money(value)])),
+      sourceCounts: bySourceCount,
       changePercent: percentChange(currentStars, previousStars),
       currency: "USD",
       recent: recentLedger.map((entry) => ({
