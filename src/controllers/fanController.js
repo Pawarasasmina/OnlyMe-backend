@@ -158,6 +158,25 @@ function activityBase(input) {
 }
 
 function notificationActivity(notification, giftThanksByKey = new Map()) {
+  if (notification.type === "seen_owner_thanks" && notification.target?.id) {
+    const metadata = notification.metadata || {};
+    return activityBase({
+      id: `notification-${notification._id}`,
+      type: notification.type,
+      filter: "support",
+      filterKeys: ["support"],
+      title: notification.title,
+      preview: notification.message,
+      createdAt: notification.createdAt,
+      actor: notification.actor?._id ? serializeCreator(notification.actor) : null,
+      target: { ...notification.target, ...(metadata.cover || {}) },
+      actionPath: `/seen/${notification.target.id}`,
+      metadata,
+      acknowledged: Boolean(notification.acknowledgedAt || notification.readAt),
+      read: Boolean(notification.readAt),
+      canAcknowledge: true,
+    });
+  }
   if (notification.type === "publication_tag" && notification.target?.id) {
     return activityBase({ id: `notification-${notification._id}`, type: notification.type, filter: "mentions", title: notification.title, preview: notification.message, createdAt: notification.createdAt, actor: notification.actor?._id ? serializeCreator(notification.actor) : null, target: { ...notification.target, ...notification.metadata?.cover }, actionPath: `/seen/${notification.target.id}`, canAcknowledge: true, acknowledged: Boolean(notification.readAt || notification.acknowledgedAt) });
   }
@@ -1186,6 +1205,8 @@ export const acknowledgeFanActivity = asyncHandler(async (req, res) => {
       { new: true },
     ).lean();
 
+    req.app.get("io")?.to(`user:${req.user._id}`).emit("activity:updated");
+
     return sendResponse(res, notification ? 200 : 404, notification ? "Activity acknowledged" : "Activity not found", {
       acknowledged: Boolean(notification),
       acknowledgedAt: notification?.acknowledgedAt || null,
@@ -1200,12 +1221,15 @@ export const acknowledgeFanActivity = asyncHandler(async (req, res) => {
       { new: true },
     ).lean();
 
+    req.app.get("io")?.to(`user:${req.user._id}`).emit("activity:updated");
+
     return sendResponse(res, signal ? 200 : 404, signal ? "Activity acknowledged" : "Activity not found", {
       acknowledged: Boolean(signal),
       acknowledgedAt: signal?.acknowledgedAt || null,
     });
   }
 
+  req.app.get("io")?.to(`user:${req.user._id}`).emit("activity:updated");
   return sendResponse(res, 200, "Activity acknowledged", { acknowledged: true, acknowledgedAt });
 });
 
@@ -1247,6 +1271,8 @@ export const acknowledgeAllFanActivity = asyncHandler(async (req, res) => {
       { $set: { acknowledgedAt } },
     );
   }
+
+  req.app.get("io")?.to(`user:${req.user._id}`).emit("activity:updated", { unreadCount: 0 });
 
   return sendResponse(res, 200, "Activity acknowledged", {
     acknowledged: keys.length,
