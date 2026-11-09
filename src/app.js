@@ -13,11 +13,13 @@ import { env } from "./config/env.js";
 import { errorHandler } from "./middleware/errorMiddleware.js";
 import { notFoundHandler } from "./middleware/notFoundMiddleware.js";
 import { assertPrivateStorageConfiguration } from "./services/privateDocumentStorageService.js";
+import mongoose from "mongoose";
 
 assertPrivateStorageConfiguration();
 
 
 const app = express();
+app.disable("x-powered-by");
 if (env.trustProxy) app.set("trust proxy", env.trustProxy);
 const allowedOrigins = new Set([
   env.clientUrl,
@@ -53,6 +55,11 @@ app.use(
 );
 app.use(helmet());
 app.use(morgan(env.nodeEnv === "production" ? "combined" : "dev"));
+app.get("/api/health/live", (_req, res) => res.status(200).json({ success: true, message: "OnlyMe API process is alive", data: {} }));
+app.get("/api/health/ready", (_req, res) => {
+  const ready = !app.get("shuttingDown") && mongoose.connection.readyState === 1;
+  return res.status(ready ? 200 : 503).json({ success: ready, message: ready ? "OnlyMe API is ready" : "Database is unavailable", data: {} });
+});
 app.post("/api/identity/webhook", express.raw({ type: "application/json", limit: "1mb" }), stripeIdentityWebhook);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
