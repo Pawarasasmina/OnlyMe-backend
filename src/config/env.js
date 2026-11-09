@@ -50,5 +50,29 @@ export const env = {
   turnUsername: process.env.WEBRTC_TURN_USERNAME || "",
   turnCredential: process.env.WEBRTC_TURN_CREDENTIAL || "",
   turnSecret: process.env.WEBRTC_TURN_SECRET || "",
+  mongoMaxPoolSize: Math.max(5, Number(process.env.MONGODB_MAX_POOL_SIZE) || 20),
+  mongoMinPoolSize: Math.max(0, Number(process.env.MONGODB_MIN_POOL_SIZE) || 1),
+  requestTimeoutMs: Math.max(5000, Number(process.env.HTTP_REQUEST_TIMEOUT_MS) || 30000),
+  headersTimeoutMs: Math.max(6000, Number(process.env.HTTP_HEADERS_TIMEOUT_MS) || 35000),
+  keepAliveTimeoutMs: Math.max(1000, Number(process.env.HTTP_KEEP_ALIVE_TIMEOUT_MS) || 5000),
+  shutdownTimeoutMs: Math.max(5000, Number(process.env.SHUTDOWN_TIMEOUT_MS) || 30000),
+  maintenanceWorkersEnabled: process.env.MAINTENANCE_WORKERS_ENABLED !== "false",
 };
+
+export function validateProductionEnv() {
+  if (env.nodeEnv !== "production") return;
+
+  const errors = [];
+  const insecureSecrets = new Set(["", "replace_with_secure_access_secret", "replace_with_secure_refresh_secret"]);
+  if (!env.mongoUri) errors.push("MONGODB_URI is required");
+  if (insecureSecrets.has(env.accessSecret) || env.accessSecret.length < 32) errors.push("JWT_ACCESS_SECRET must be a unique secret of at least 32 characters");
+  if (insecureSecrets.has(env.refreshSecret) || env.refreshSecret.length < 32) errors.push("JWT_REFRESH_SECRET must be a unique secret of at least 32 characters");
+  if (env.accessSecret === env.refreshSecret) errors.push("JWT access and refresh secrets must be different");
+  if (!process.env.MAINTENANCE_WORKERS_ENABLED) errors.push("MAINTENANCE_WORKERS_ENABLED must explicitly be true or false in production");
+  try { new URL(env.clientUrl); } catch { errors.push("CLIENT_URL must be a valid URL"); }
+  if (env.mongoMinPoolSize > env.mongoMaxPoolSize) errors.push("MONGODB_MIN_POOL_SIZE cannot exceed MONGODB_MAX_POOL_SIZE");
+  if (env.headersTimeoutMs <= env.requestTimeoutMs) errors.push("HTTP_HEADERS_TIMEOUT_MS must be greater than HTTP_REQUEST_TIMEOUT_MS");
+
+  if (errors.length) throw new Error(`Unsafe production configuration:\n- ${errors.join("\n- ")}`);
+}
 

@@ -18,5 +18,12 @@ export async function connectDb() {
   }
 
   attachConnectionLogging();
-  await mongoose.connect(env.mongoUri, { serverSelectionTimeoutMS: 10000, connectTimeoutMS: 10000, socketTimeoutMS: 45000, maxPoolSize: 20, minPoolSize: 1 });
+  await mongoose.connect(env.mongoUri, {
+    serverSelectionTimeoutMS: 10000,
+    connectTimeoutMS: 10000,
+    socketTimeoutMS: 45000,
+    maxPoolSize: env.mongoMaxPoolSize,
+    minPoolSize: env.mongoMinPoolSize,
+    maxIdleTimeMS: 60000,
+  });
 }

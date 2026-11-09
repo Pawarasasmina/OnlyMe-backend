@@ -11,7 +11,7 @@ import SavedItem from "../models/SavedItem.js";
 import UserBlock from "../models/UserBlock.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { sendResponse } from "../utils/response.js";
+import { sendCommentResponse as sendResponse } from "../services/commentBadgeService.js";
 import {
   POST_CONTEXTS,
   POST_COMMENT_MAX_LENGTH,
@@ -895,6 +895,33 @@ export const updatePostCommentReaction = asyncHandler(async (req, res) => {
   await attachSavedCommentState(post, req.user?._id);
   await attachEntityMetadata(post, req.user || null);
   return sendResponse(res, 200, "Reply reaction saved", { post: serializePost(post, req.user) });
+});
+
+export const deletePostComment = asyncHandler(async (req, res) => {
+  const post = await findPublishedPost(req.params.id);
+  const comment = post.comments.find((item) => String(item._id) === req.params.commentId && !item.deletedAt);
+  if (!comment) throw new ApiError(404, "Comment not found");
+  if (String(comment.user?._id || comment.user) !== String(req.user._id)) throw new ApiError(403, "You can only delete your own comment");
+
+  const removedIds = new Set([String(comment._id)]);
+  let foundReply = true;
+  while (foundReply) {
+    foundReply = false;
+    post.comments.forEach((item) => {
+      if (!item.deletedAt && item.parentCommentId && removedIds.has(String(item.parentCommentId)) && !removedIds.has(String(item._id))) {
+        removedIds.add(String(item._id));
+        foundReply = true;
+      }
+    });
+  }
+  const deletedAt = new Date();
+  post.comments.forEach((item) => { if (removedIds.has(String(item._id))) item.deletedAt = deletedAt; });
+  post.commentCount = post.comments.filter((item) => !item.deletedAt && item.actorAccountType !== "TEST").length;
+  await post.save();
+  await populatePostForResponse(post);
+  await attachSavedCommentState(post, req.user?._id);
+  await attachEntityMetadata(post, req.user || null);
+  return sendResponse(res, 200, "Comment deleted", { post: serializePost(post, req.user) });
 });
 
 export const deleteFeedPost = asyncHandler(async (req, res) => {
