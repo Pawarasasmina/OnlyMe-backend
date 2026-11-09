@@ -1,6 +1,11 @@
 import bcrypt from "bcryptjs";
+import { execFile } from "node:child_process";
 import crypto from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import mongoose from "mongoose";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 import { connectDb } from "../config/db.js";
 import { env } from "../config/env.js";
 import Chapter from "../models/Chapter.js";
@@ -29,10 +34,12 @@ import { giftsForRecipient } from "../services/giftPreferenceService.js";
 import { joinPremium } from "../services/premiumMembershipService.js";
 import { purchaseWorld } from "../services/worldPurchaseService.js";
 import { getStarExchangeRate } from "../services/starExchangeService.js";
+import { uploadPublicationFile } from "../services/publicationMediaStorageService.js";
 
 const SOURCE = "client-showcase-v1";
 const PASSWORD = "12341234";
 const HOUR = 60 * 60_000;
+const execFileAsync = promisify(execFile);
 
 const creators = [
   { first: "Maya", last: "Senanayake", username: "mayamind", category: "Psychology", city: "Colombo", country: "Sri Lanka", color: "7c3aed", bio: "Psychologist translating emotional science into calmer, more connected everyday lives.", quote: "Name the feeling, then choose the next kind step.", seen: ["How to Stop Overthinking Tonight", "Boundaries Without Guilt"], world: "The Inner Room", worldSummary: "Weekly guided reflections, emotional tools, and honest conversations for a steadier mind." },
@@ -158,27 +165,125 @@ const coverIds = [
   "1518770660439-4636190af475", "1517836357463-d25dfeac3438", "1506126613408-eca07ce68773", "1513364776144-60967b0f800f",
   "1556761175-b413da4baf72", "1571019613454-1cb2f99b2d8b",
 ];
-const seenCoverVideos = [
-  { url: "https://res.cloudinary.com/demo/video/upload/dog.mp4", duration: 13.413, width: 854, height: 480 },
-  { url: "https://res.cloudinary.com/demo/video/upload/cld-sample-video.mp4", duration: 15.215, width: 1920, height: 1080 },
-  { url: "https://res.cloudinary.com/demo/video/upload/elephants.mp4", duration: 52.519, width: 1920, height: 1080 },
-  { url: "https://res.cloudinary.com/demo/video/upload/snow_deer.mp4", duration: 29.76, width: 1920, height: 1080 },
-];
+const categoryVideoSources = {
+  Psychology: {
+    soundUrl: "https://cdn.coverr.co/audios/34-meditation-in-the-mountains-R5AKJJ/preview.mp3",
+    videos: [
+      "https://cdn.coverr.co/videos/coverr-meditating-outdoors-in-the-park-8335/1080p.mp4",
+      "https://cdn.coverr.co/videos/coverr-woman-meditating-by-the-ocean/1080p.mp4",
+      "https://cdn.coverr.co/videos/coverr-premium-close-up-shot-of-a-man-focusing-during-meditation/1080p.mp4",
+    ],
+  },
+  Lifestyle: {
+    soundUrl: "https://cdn.coverr.co/audios/02-discover-JK3DMw/preview.mp3",
+    videos: [
+      "https://cdn.coverr.co/videos/coverr-woman-browsing-phone-outdoors/1080p.mp4",
+      "https://cdn.coverr.co/videos/coverr-woman-enjoying-her-coffee-3715/1080p.mp4",
+      "https://cdn.coverr.co/videos/coverr-a-woman-smelling-and-tasting-an-aromatic-coffee-3726/1080p.mp4",
+    ],
+  },
+  Fashion: {
+    soundUrl: "https://cdn.coverr.co/audios/coverr-11-drama-on-the-dance-floor-kJOuYo/preview.mp3",
+    videos: [
+      "https://cdn.coverr.co/videos/coverr-premium-model-poses-for-the-camera-8398/1080p.mp4",
+      "https://cdn.coverr.co/videos/coverr-posing-for-the-camera-4974/1080p.mp4",
+      "https://cdn.coverr.co/videos/coverr-woman-posing-in-sportswear-3912/1080p.mp4",
+    ],
+  },
+  Business: {
+    soundUrl: "https://cdn.coverr.co/audios/coverr-08-cinematic-visions-wdPqT9/preview.mp3",
+    videos: [
+      "https://cdn.coverr.co/videos/coverr-premium-a-team-prepares-to-work-in-the-office-7343/1080p.mp4",
+      "https://cdn.coverr.co/videos/coverr-working-in-the-office-7108/1080p.mp4",
+      "https://cdn.coverr.co/videos/coverr-focused-working-space-1555/1080p.mp4",
+    ],
+  },
+  Tech: {
+    soundUrl: "https://cdn.coverr.co/audios/coverr-08-intensive-care-XTxHvq/preview.mp3",
+    videos: [
+      "https://cdn.coverr.co/videos/coverr-coding-technology-5974/1080p.mp4",
+      "https://cdn.coverr.co/videos/coverr-coding-developer-7198/1080p.mp4",
+      "https://cdn.coverr.co/videos/coverr-developing-coding-sequences-3909/1080p.mp4",
+    ],
+  },
+  Fitness: {
+    soundUrl: "https://cdn.coverr.co/audios/coverr-08-lotus-flower-mDp10e/preview.mp3",
+    videos: [
+      "https://cdn.coverr.co/videos/coverr-training-in-the-gym-1456/1080p.mp4",
+      "https://cdn.coverr.co/videos/coverr-a-man-squatting-in-the-gym-2016/1080p.mp4",
+      "https://cdn.coverr.co/videos/coverr-athletic-woman-stretching-her-legs-700/1080p.mp4",
+    ],
+  },
+};
 
-function seenVideoFor(index) {
-  return seenCoverVideos[index % seenCoverVideos.length];
+function seenVideoFor(creator, index) {
+  const source = categoryVideoSources[creator.category] || categoryVideoSources.Lifestyle;
+  return { sourceUrl: source.videos[index % source.videos.length], soundUrl: source.soundUrl };
+}
+
+let preparedVideoDirectory = null;
+const preparedVideoPaths = new Map();
+
+async function downloadShowcaseAsset(url, destination) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Unable to download showcase media (${response.status}): ${url}`);
+  await writeFile(destination, Buffer.from(await response.arrayBuffer()));
+}
+
+async function prepareShowcaseVideo(video) {
+  const cacheKey = `${video.sourceUrl}|${video.soundUrl}`;
+  if (preparedVideoPaths.has(cacheKey)) return preparedVideoPaths.get(cacheKey);
+  const preparation = (async () => {
+    preparedVideoDirectory ||= await mkdtemp(path.join(os.tmpdir(), "onlyme-showcase-videos-"));
+    const key = crypto.createHash("sha256").update(cacheKey).digest("hex").slice(0, 16);
+    const sourcePath = path.join(preparedVideoDirectory, `${key}-source.mp4`);
+    const soundPath = path.join(preparedVideoDirectory, `${key}-sound.mp3`);
+    const outputPath = path.join(preparedVideoDirectory, `${key}.mp4`);
+    await Promise.all([
+      downloadShowcaseAsset(video.sourceUrl, sourcePath),
+      downloadShowcaseAsset(video.soundUrl, soundPath),
+    ]);
+    await execFileAsync("ffmpeg", [
+      "-y", "-i", sourcePath, "-i", soundPath,
+      "-map", "0:v:0", "-map", "1:a:0", "-t", "12",
+      "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+      "-filter:a", "volume=0.2,afade=t=in:st=0:d=0.5,afade=t=out:st=11:d=1",
+      "-movflags", "+faststart", "-shortest", outputPath,
+    ]);
+    const { stdout: audioCodec } = await execFileAsync("ffprobe", [
+      "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name",
+      "-of", "default=noprint_wrappers=1:nokey=1", outputPath,
+    ]);
+    if (!audioCodec.trim()) throw new Error(`Prepared showcase video has no audio stream: ${video.sourceUrl}`);
+    return outputPath;
+  })();
+  preparedVideoPaths.set(cacheKey, preparation);
+  return preparation;
+}
+
+async function cleanupPreparedShowcaseVideos() {
+  if (preparedVideoDirectory) await rm(preparedVideoDirectory, { recursive: true, force: true });
+}
+
+async function uploadedSeenVideo(creator, publicationId, video) {
+  const preparedVideoPath = await prepareShowcaseVideo(video);
+  return uploadPublicationFile({
+    creatorId: creator.id,
+    publicationId,
+    chapterId: "root",
+    blockId: "cover",
+    mediaType: "VIDEO",
+    file: { path: preparedVideoPath, mimetype: "video/mp4" },
+  });
 }
 
 function media(key, url, mediaType = "IMAGE") {
   return { assetId: `${SOURCE}-${key}`, resourceType: mediaType === "VIDEO" ? "video" : "image", mediaType, secureUrl: url, format: mediaType === "VIDEO" ? "mp4" : "jpg" };
 }
 
-function seenCoverFor(c, creatorIndex, seenIndex) {
-  if ((creatorIndex + seenIndex) % 4 === 0) {
-    const video = seenVideoFor(creatorIndex + seenIndex);
-    return { ...media(`${c.username}-seen-${seenIndex}-cover`, video.url, "VIDEO"), duration: video.duration, width: video.width, height: video.height };
-  }
-  return media(`${c.username}-seen-${seenIndex}-cover`, imageUrl(c, coverIds[(creatorIndex + seenIndex + 2) % coverIds.length]));
+async function seenCoverFor(c, creatorIndex, seenIndex) {
+  const video = seenVideoFor(c, creatorIndex + seenIndex);
+  return uploadedSeenVideo(c, objectId(`publication:${c.username}-seen-${seenIndex}`), video);
 }
 
 async function seedUser(c, index, passwordHash) {
@@ -205,7 +310,7 @@ function seenChapters(c, seenIndex, topic = c.seen[seenIndex], insideVideo = nul
   return [
     { title: "Start here", isPreview: true, blocks: [
       { type: "HIGHLIGHT", text: `${topic} starts with one honest observation, not a perfect plan.` },
-      ...(insideVideo?.url ? [{ type: "VIDEO", media: { ...media(`${c.username}-seen-${seenIndex}-inside-video`, insideVideo.url, "VIDEO"), duration: insideVideo.duration, width: insideVideo.width, height: insideVideo.height }, metadata: { label: "Watch the practical demonstration" } }] : []),
+      ...(insideVideo?.secureUrl ? [{ type: "VIDEO", media: insideVideo, metadata: { label: "Watch the practical demonstration" } }] : []),
       { type: "TEXT", text: `Notice what is happening without judging it. ${c.first} explains a simple way to turn awareness into a useful next step.` },
     ] },
     { title: "Try this today", isPreview: true, blocks: [
@@ -221,7 +326,7 @@ function additionalVideoSeenChapters(c, creatorIndex, topic, video) {
   return titles.map((title, chapterIndex) => {
     if (chapterIndex === 0) return { title, isPreview: true, blocks: [
       { type: "HIGHLIGHT", text: `${c.first} begins ${topic.toLowerCase()} by showing what to notice before taking action.` },
-      { type: "VIDEO", media: { ...media(`${c.username}-video-seen-0-demonstration`, video.url, "VIDEO"), duration: video.duration, width: video.width, height: video.height }, metadata: { label: `${title} demonstration` } },
+      { type: "VIDEO", media: video, metadata: { label: `${title} demonstration` } },
       { type: "TEXT", text: `Watch the demonstration once, then return to the moment that matters most for your own ${c.category.toLowerCase()} practice.` },
     ] };
     if (chapterIndex === 1) return { title, isPreview: true, blocks: [
@@ -280,7 +385,7 @@ async function seedContent(c, index) {
   const seenIds = [];
   for (let i = 0; i < c.seen.length; i += 1) {
     const title = c.seen[i];
-    const cover = seenCoverFor(c, index, i);
+    const cover = await seenCoverFor(c, index, i);
     seenIds.push(await seedPublication(c, `${c.username}-seen-${i}`, { kind: "SEEN", title, summary: `A clear, practical guide from ${c.first} with ideas you can use today.`, description: `${c.first} breaks ${title.toLowerCase()} into approachable steps, honest context, and a useful experiment.`, tags: [c.category.toLowerCase(), "practical", "showcase"], coverMedia: cover, pricing: { mode: "FREE", starsAmount: null, presetId: null }, planet: { slot: null, emoji: "", accent: `#${c.color}` }, chapters: seenChapters(c, i) }, at(index * 6 + i * 24 + 18)));
   }
 
@@ -507,7 +612,7 @@ async function seedSeenCoversOnly() {
   let videoCount = 0;
   for (const [creatorIndex, creator] of creators.entries()) {
     for (let seenIndex = 0; seenIndex < creator.seen.length; seenIndex += 1) {
-      const coverMedia = seenCoverFor(creator, creatorIndex, seenIndex);
+      const coverMedia = await seenCoverFor({ ...creator, id: objectId(`user:${creator.username}`) }, creatorIndex, seenIndex);
       if (coverMedia.mediaType === "VIDEO") videoCount += 1;
       await Publication.updateOne(
         { _id: objectId(`publication:${creator.username}-seen-${seenIndex}`), kind: "SEEN" },
@@ -525,14 +630,14 @@ async function seedAdditionalVideoSeensOnly() {
 
   for (const [ownerIndex, owner] of rows.entries()) {
     const title = additionalVideoSeenTitles[ownerIndex];
-    const video = seenVideoFor(ownerIndex);
+    const video = await uploadedSeenVideo(owner, objectId(`publication:${owner.username}-video-seen-0`), seenVideoFor(owner, ownerIndex + 2));
     const publicationId = await seedPublication(owner, `${owner.username}-video-seen-0`, {
       kind: "SEEN",
       title,
       summary: `A concise video-led ${owner.category.toLowerCase()} guide from ${owner.first} that you can put into practice today.`,
       description: `${owner.first} demonstrates ${title.toLowerCase()} with clear context, a practical example, and a small next step.`,
       tags: [owner.category.toLowerCase(), "video", "practical"],
-      coverMedia: { ...media(`${owner.username}-video-seen-0-cover`, video.url, "VIDEO"), duration: video.duration, width: video.width, height: video.height },
+      coverMedia: video,
       pricing: { mode: "FREE", starsAmount: null, presetId: null },
       planet: { slot: null, emoji: "", accent: `#${owner.color}` },
       chapters: additionalVideoSeenChapters(owner, ownerIndex, title, video),
@@ -553,6 +658,26 @@ async function seedAdditionalVideoSeensOnly() {
 
   console.table(rows.map((creator, index) => ({ creator: `${creator.first} ${creator.last}`, category: creator.category, seen: additionalVideoSeenTitles[index], cover: "VIDEO" })));
   console.log(`Added ${rows.length} category-matched Seens with video covers, chapters, reactions, comments, saves, and reposts.`);
+}
+
+async function auditSeenVideosOnly() {
+  await connectDb();
+  const publicationIds = creators.flatMap((creator) => [
+    objectId(`publication:${creator.username}-seen-0`),
+    objectId(`publication:${creator.username}-seen-1`),
+    objectId(`publication:${creator.username}-video-seen-0`),
+  ]);
+  const publications = await Publication.find({ _id: { $in: publicationIds }, kind: "SEEN" }).select("coverMedia").lean();
+  const covers = publications.map((publication) => publication.coverMedia || {});
+  console.table({
+    showcaseSeens: publications.length,
+    videoCovers: covers.filter((cover) => cover.mediaType === "VIDEO").length,
+    uploadedAssets: covers.filter((cover) => cover.assetId).length,
+    dimensionsStored: covers.filter((cover) => cover.width && cover.height).length,
+    durationStored: covers.filter((cover) => Number(cover.duration || cover.durationSeconds) > 0).length,
+    demoUrls: covers.filter((cover) => String(cover.secureUrl || cover.url || "").includes("/showcase-video/")).length,
+    demoKeys: covers.filter((cover) => cover.showcaseVideoKey).length,
+  });
 }
 
 async function seedGroupedActivitiesOnly() {
@@ -658,10 +783,15 @@ async function seedWithdrawalBalancesOnly() {
     ? seedSeenCoversOnly()
     : process.argv.includes("--additional-video-seens-only")
       ? seedAdditionalVideoSeensOnly()
+      : process.argv.includes("--audit-seen-videos-only")
+        ? auditSeenVideosOnly()
     : process.argv.includes("--grouped-activities-only")
       ? seedGroupedActivitiesOnly()
       : process.argv.includes("--withdrawal-balances-only")
         ? seedWithdrawalBalancesOnly()
       : seed())
   .catch((error) => { console.error(error); process.exitCode = 1; })
-  .finally(async () => mongoose.disconnect());
+  .finally(async () => {
+    await cleanupPreparedShowcaseVideos();
+    await mongoose.disconnect();
+  });
