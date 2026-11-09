@@ -1,11 +1,6 @@
 import bcrypt from "bcryptjs";
-import { execFile } from "node:child_process";
 import crypto from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import mongoose from "mongoose";
-import os from "node:os";
-import path from "node:path";
-import { promisify } from "node:util";
 import { connectDb } from "../config/db.js";
 import { env } from "../config/env.js";
 import Chapter from "../models/Chapter.js";
@@ -34,12 +29,11 @@ import { giftsForRecipient } from "../services/giftPreferenceService.js";
 import { joinPremium } from "../services/premiumMembershipService.js";
 import { purchaseWorld } from "../services/worldPurchaseService.js";
 import { getStarExchangeRate } from "../services/starExchangeService.js";
-import { uploadPublicationFile } from "../services/publicationMediaStorageService.js";
+import { uploadPublicationFile, uploadPublicationSoundtrack } from "../services/publicationMediaStorageService.js";
 
 const SOURCE = "client-showcase-v1";
 const PASSWORD = "12341234";
 const HOUR = 60 * 60_000;
-const execFileAsync = promisify(execFile);
 
 const creators = [
   { first: "Maya", last: "Senanayake", username: "mayamind", category: "Psychology", city: "Colombo", country: "Sri Lanka", color: "7c3aed", bio: "Psychologist translating emotional science into calmer, more connected everyday lives.", quote: "Name the feeling, then choose the next kind step.", seen: ["How to Stop Overthinking Tonight", "Boundaries Without Guilt"], world: "The Inner Room", worldSummary: "Weekly guided reflections, emotional tools, and honest conversations for a steadier mind." },
@@ -221,60 +215,36 @@ function seenVideoFor(creator, index) {
   return { sourceUrl: source.videos[index % source.videos.length], soundUrl: source.soundUrl };
 }
 
-let preparedVideoDirectory = null;
-const preparedVideoPaths = new Map();
+const uploadedSoundtracks = new Map();
 
-async function downloadShowcaseAsset(url, destination) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Unable to download showcase media (${response.status}): ${url}`);
-  await writeFile(destination, Buffer.from(await response.arrayBuffer()));
-}
-
-async function prepareShowcaseVideo(video) {
-  const cacheKey = `${video.sourceUrl}|${video.soundUrl}`;
-  if (preparedVideoPaths.has(cacheKey)) return preparedVideoPaths.get(cacheKey);
-  const preparation = (async () => {
-    preparedVideoDirectory ||= await mkdtemp(path.join(os.tmpdir(), "onlyme-showcase-videos-"));
-    const key = crypto.createHash("sha256").update(cacheKey).digest("hex").slice(0, 16);
-    const sourcePath = path.join(preparedVideoDirectory, `${key}-source.mp4`);
-    const soundPath = path.join(preparedVideoDirectory, `${key}-sound.mp3`);
-    const outputPath = path.join(preparedVideoDirectory, `${key}.mp4`);
-    await Promise.all([
-      downloadShowcaseAsset(video.sourceUrl, sourcePath),
-      downloadShowcaseAsset(video.soundUrl, soundPath),
-    ]);
-    await execFileAsync("ffmpeg", [
-      "-y", "-i", sourcePath, "-i", soundPath,
-      "-map", "0:v:0", "-map", "1:a:0", "-t", "12",
-      "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-      "-filter:a", "volume=0.2,afade=t=in:st=0:d=0.5,afade=t=out:st=11:d=1",
-      "-movflags", "+faststart", "-shortest", outputPath,
-    ]);
-    const { stdout: audioCodec } = await execFileAsync("ffprobe", [
-      "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name",
-      "-of", "default=noprint_wrappers=1:nokey=1", outputPath,
-    ]);
-    if (!audioCodec.trim()) throw new Error(`Prepared showcase video has no audio stream: ${video.sourceUrl}`);
-    return outputPath;
-  })();
-  preparedVideoPaths.set(cacheKey, preparation);
-  return preparation;
-}
-
-async function cleanupPreparedShowcaseVideos() {
-  if (preparedVideoDirectory) await rm(preparedVideoDirectory, { recursive: true, force: true });
+async function soundtrackFor(video) {
+  if (!uploadedSoundtracks.has(video.soundUrl)) {
+    const key = crypto.createHash("sha256").update(video.soundUrl).digest("hex").slice(0, 16);
+    uploadedSoundtracks.set(video.soundUrl, uploadPublicationSoundtrack({ key, sourceUrl: video.soundUrl }));
+  }
+  return uploadedSoundtracks.get(video.soundUrl);
 }
 
 async function uploadedSeenVideo(creator, publicationId, video) {
-  const preparedVideoPath = await prepareShowcaseVideo(video);
-  return uploadPublicationFile({
-    creatorId: creator.id,
-    publicationId,
-    chapterId: "root",
-    blockId: "cover",
-    mediaType: "VIDEO",
-    file: { path: preparedVideoPath, mimetype: "video/mp4" },
-  });
+  const soundtrackAssetId = await soundtrackFor(video);
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await uploadPublicationFile({
+        creatorId: creator.id,
+        publicationId,
+        chapterId: "root",
+        blockId: "cover",
+        mediaType: "VIDEO",
+        file: { path: video.sourceUrl, mimetype: "video/mp4" },
+        soundtrackAssetId,
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 2_000));
+    }
+  }
+  throw lastError;
 }
 
 function media(key, url, mediaType = "IMAGE") {
@@ -791,7 +761,4 @@ async function seedWithdrawalBalancesOnly() {
         ? seedWithdrawalBalancesOnly()
       : seed())
   .catch((error) => { console.error(error); process.exitCode = 1; })
-  .finally(async () => {
-    await cleanupPreparedShowcaseVideos();
-    await mongoose.disconnect();
-  });
+  .finally(async () => mongoose.disconnect());

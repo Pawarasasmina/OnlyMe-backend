@@ -8,6 +8,7 @@ import {
   createDraftPost,
   createFeedPost,
   createPostComment,
+  deletePostComment,
   updatePostCommentReaction,
   archiveFeedPost,
   deleteFeedPost,
@@ -58,6 +59,7 @@ router.put("/:id/block-author", protect, blockPostAuthor);
 router.post("/:id/comments", protect, requirePostingAccess, uploadVoiceMessage.single("voice"), createPostComment);
 router.post("/:id/comments/:commentId/report", protect, reportComment);
 router.put("/:id/comments/:commentId/reaction", protect, updatePostCommentReaction);
+router.delete("/:id/comments/:commentId", protect, deletePostComment);
 router.put("/:id/resolution", ...consumerOnly, setPostResolution);
 router.post("/:id/bump", ...consumerOnly, bumpFeedPost);
 router.put("/:id", ...consumerOnly, updateFeedPost);

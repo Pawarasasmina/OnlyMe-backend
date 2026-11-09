@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import FeedPost from "../models/FeedPost.js";
 import SavedItem from "../models/SavedItem.js";
-import { createPostComment, serializePost, updatePostCommentReaction } from "./postController.js";
+import { createPostComment, deletePostComment, serializePost, updatePostCommentReaction } from "./postController.js";
 
 const id = "507f1f77bcf86cd799439011";
 const viewer = "507f1f77bcf86cd799439012";
@@ -51,6 +51,30 @@ test("reply reactions replace a viewer's selection and removal is idempotent", a
     assert.equal(post.comments[0].reactions.length, reaction ? 1 : 0);
     assert.equal(res.body.data.post.comments[0].viewerReaction, reaction || null);
   }
+});
+
+test("comment owners can delete their thread while other users cannot", async t => {
+  const post = note();
+  const parent = post.comments[0]._id;
+  post.comments.push({ user: viewer, text: "Nested reply", parentCommentId: parent });
+  t.mock.method(FeedPost, "findOne", async () => post);
+  t.mock.method(post, "save", async () => post);
+  t.mock.method(post, "populate", async () => post);
+  t.mock.method(SavedItem, "find", () => ({ select: () => ({ lean: async () => [] }) }));
+
+  let forbidden;
+  await deletePostComment({ params: { id, commentId: String(parent) }, user: { _id: viewer } }, response(), (value) => { forbidden = value; });
+  assert.equal(forbidden.statusCode, 403);
+  assert.equal(post.comments[0].deletedAt, null);
+
+  let error;
+  const res = response();
+  await deletePostComment({ params: { id, commentId: String(parent) }, user: { _id: owner } }, res, (value) => { error = value; });
+  assert.ifError(error);
+  assert.equal(res.code, 200);
+  assert.equal(post.comments[0].deletedAt instanceof Date, true);
+  assert.equal(post.comments[1].deletedAt instanceof Date, true);
+  assert.equal(res.body.data.post.comments.length, 0);
 });
 
 test("resolved and expired notes still accept replies to existing comments", async t => {
