@@ -77,7 +77,7 @@ const summary = async (publication, viewerId) => {
     SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), actorAccountType: { $ne: "TEST" } } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
     SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), type: "REACTION", actorAccountType: { $ne: "TEST" } } }, { $group: { _id: { $ifNull: ["$reaction", "LIKE"] }, count: { $sum: 1 } } }]),
     viewerId ? SeenEngagement.find({ publication, user: viewerId, type: { $in: ["REACTION", "SHARE", "SAVE"] } }).lean() : [],
-    SeenEngagement.find({ publication, type: "COMMENT" }).sort({ createdAt: -1 }).limit(50).populate("user", "name username avatar").lean(),
+    SeenEngagement.find({ publication, type: "COMMENT" }).sort({ createdAt: -1, _id: -1 }).populate("user", "name username avatar").lean(),
     SeenEngagement.find({ publication, type: "REACTION" }).sort({ updatedAt: -1 }).limit(200).populate("user", "name username avatar").lean(),
     SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), type: "COMMENT_REACTION", actorAccountType: { $ne: "TEST" } } }, { $group: { _id: { comment: "$parentComment", reaction: { $ifNull: ["$reaction", "LIKE"] } }, count: { $sum: 1 } } }]),
     viewerId ? SeenEngagement.find({ publication, user: viewerId, type: "COMMENT_REACTION" }).select("parentComment reaction").lean() : [],

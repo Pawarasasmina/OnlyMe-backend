@@ -32,7 +32,7 @@ import { MAX_MODERATORS_PER_EXPERIENCE, PREMIUM_PRICE_PRESETS, PREMIUM_WORLD_DEF
 import { safeUserProfile } from "../services/publicationModeratorService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { sendResponse } from "../utils/response.js";
+import { sendCommentResponse as sendResponse } from "../services/commentBadgeService.js";
 import { getStarExchangeRate } from "../services/starExchangeService.js";
 import { getActiveRecommendationConfig, personalizeCandidates } from "../services/recommendationService.js";
 import { admitWorldWaitlist } from "../services/premiumMembershipService.js";
