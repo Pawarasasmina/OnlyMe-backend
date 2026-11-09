@@ -52,12 +52,19 @@ app.use(
   })
 );
 app.use(helmet());
-app.use(morgan("dev"));
+app.use(morgan(env.nodeEnv === "production" ? "combined" : "dev"));
 app.post("/api/identity/webhook", express.raw({ type: "application/json", limit: "1mb" }), stripeIdentityWebhook);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
-app.use("/uploads", express.static(path.resolve("uploads")));
+app.use("/uploads", express.static(path.resolve("uploads"), {
+  etag: true,
+  lastModified: true,
+  maxAge: env.nodeEnv === "production" ? "7d" : 0,
+  setHeaders(res) {
+    if (env.nodeEnv === "production") res.setHeader("Cache-Control", "public, max-age=604800, stale-while-revalidate=86400");
+  },
+}));
 const rateLimitResponse = (_req, res) => res.status(429).json({ success: false, message: "Too many requests. Please wait a moment and try again.", data: {}, code: "RATE_LIMITED" });
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: env.apiRateLimit, skip: (req) => ["/api/health", "/api/messages", "/api/calls"].some((path) => req.originalUrl.startsWith(path)), standardHeaders: true, legacyHeaders: false, handler: rateLimitResponse, passOnStoreError: true }));
 app.use(["/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/auth/forgot-password", "/api/auth/reset-password"], rateLimit({ windowMs: 15 * 60 * 1000, limit: env.authRateLimit, standardHeaders: true, legacyHeaders: false, handler: rateLimitResponse, passOnStoreError: true }));
