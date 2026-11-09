@@ -11,7 +11,7 @@ import SavedItem from "../models/SavedItem.js";
 import UserBlock from "../models/UserBlock.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { sendResponse } from "../utils/response.js";
+import { sendCommentResponse as sendResponse } from "../services/commentBadgeService.js";
 import {
   POST_CONTEXTS,
   POST_COMMENT_MAX_LENGTH,
