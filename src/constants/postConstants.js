@@ -36,6 +36,11 @@ export const POST_REACTIONS = [
   "phone",
   "strong",
   "pray",
+  "teary",
+  "admire",
+  "hug",
+  "hundred",
+  "sparkles",
 ];
 
 export const POST_TEXT_MAX_LENGTH = 2000;

@@ -251,7 +251,7 @@ export const listSeenReactors = asyncHandler(async (req, res) => {
   if (reaction && !SEEN_REACTIONS.includes(reaction)) throw new ApiError(400, "A valid reaction filter is required");
 
   const filter = { publication: req.params.id, type: "REACTION" };
-  if (reaction) filter.reaction = reaction;
+  if (reaction) filter.reaction = reaction === "FIRE" ? { $in: ["FIRE", "INSIGHTFUL"] } : reaction === "SEE_YOU" ? { $in: ["SEE_YOU", "PHONE"] } : reaction;
 
   let excludedUserIds = await User.distinct("_id", { $or: [{ status: { $ne: "active" } }, { deletionRequestedAt: { $ne: null } }] });
   if (req.user?._id) {
@@ -274,7 +274,7 @@ export const listSeenReactors = asyncHandler(async (req, res) => {
     .filter((item) => item.user)
     .map((item) => ({
       id: String(item._id),
-      reaction: item.reaction || "LIKE",
+      reaction: item.reaction === "INSIGHTFUL" ? "FIRE" : item.reaction === "PHONE" ? "SEE_YOU" : item.reaction || "LIKE",
       createdAt: item.createdAt,
       user: {
         id: String(item.user._id),
