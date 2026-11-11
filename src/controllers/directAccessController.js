@@ -27,7 +27,7 @@ export const getDirectAccessOffer = asyncHandler(async (req, res) => {
   const [wallet, membership, sellerVerification] = isConsumerAccount(req.user) ? await Promise.all([
     Wallet.findOne({ user: req.user._id }).select("balance testBalance").lean(),
     PremiumMembership.findOne({ user: req.user._id, creator: req.params.creatorId, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }).select("currentPeriodStart currentPeriodEnd directAccessAllowancePeriodStart directAccessAllowanceUsedAt").lean(),
-    CreatorVerification.findOne({ creator: req.params.creatorId }).select("status ageConfirmed dateOfBirth legalFullName country address").lean(),
+    CreatorVerification.findOne({ creator: req.params.creatorId, purpose: "IDENTITY" }).select("status ageConfirmed dateOfBirth").lean(),
   ]) : [null, null, null];
   const sellerAllowed = monetizationEligibility(sellerVerification).allowed;
   const allowanceAvailable = Boolean(membership && (

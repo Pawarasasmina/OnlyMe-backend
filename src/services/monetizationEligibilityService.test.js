@@ -9,10 +9,10 @@ test("money features calculate age at the exact birthday boundary", () => {
   assert.equal(ageOn("2008-10-30", new Date("2026-10-30T12:00:00Z")), 18);
 });
 
-test("Paid Seens and Worlds require approved adult seller information", () => {
+test("money features require an approved adult creator", () => {
   assert.deepEqual(monetizationEligibility(approved, new Date("2026-10-30T12:00:00Z")), { allowed: true });
   assert.equal(monetizationEligibility({ ...approved, status: "PENDING_REVIEW" }).code, "SELLER_VERIFICATION_REQUIRED");
   assert.equal(monetizationEligibility({ ...approved, dateOfBirth: "2012-01-01" }, new Date("2026-10-30T12:00:00Z")).code, "SELLER_MUST_BE_ADULT");
-  assert.equal(monetizationEligibility({ ...approved, address: "" }).code, "SELLER_INFORMATION_REQUIRED");
+  assert.deepEqual(monetizationEligibility({ ...approved, legalFullName: "", country: "", address: "" }, new Date("2026-10-30T12:00:00Z")), { allowed: true });
 });
 
