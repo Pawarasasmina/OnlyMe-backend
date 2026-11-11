@@ -8,7 +8,7 @@ import ApiError from "../utils/ApiError.js";
 import { executeFinancialCommand } from "./financialCommandService.js";
 import { transferStars, safeWallet } from "./walletLedgerService.js";
 import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
-import { giftAllowedForRecipient, giftsForRecipient, serializeGift } from "./giftPreferenceService.js";
+import { giftAllowedForRecipient, giftsForRecipient, giftAnimation, serializeGift } from "./giftPreferenceService.js";
 
 export async function activeDreamGifts(recipientId) {
   return (await giftsForRecipient(recipientId)).map(serializeGift);
@@ -72,9 +72,9 @@ export async function sendDreamGift({ user, dreamId, giftKey, privateSupport, ke
     const wasSupporter = await DreamGift.exists({ dream: dream._id, supporter: user._id }).session(session);
     const recordId = new mongoose.Types.ObjectId();
     const moved = await transferStars({ fromUser: user._id, toUser: dream.creator, amount: gift.stars, debitType: "DREAM_GIFT_DEBIT", creditType: "DREAM_CREATOR_EARNING", referenceType: "DREAM_GIFT", referenceId: recordId, creator: dream.creator, command, idempotencyKey: key, metadata: { dreamId: String(dream._id), giftKey: String(gift._id), giftName: gift.name, giftImageUrl: gift.image.url, giftSource: "DREAM" } }, session);
-    const [record] = await DreamGift.create([{ _id: recordId, dream: dream._id, supporter: user._id, creator: dream.creator, gift: gift._id, giftKey: String(gift._id), giftName: gift.name, giftImageUrl: gift.image.url, starsAmount: gift.stars, privateSupport: Boolean(privateSupport), debitLedgerEntry: moved.debit.entry._id, creditLedgerEntry: moved.credit.entry._id, idempotencyKey: key }], { session });
+    const [record] = await DreamGift.create([{ _id: recordId, dream: dream._id, supporter: user._id, creator: dream.creator, gift: gift._id, giftKey: String(gift._id), giftName: gift.name, giftImageUrl: gift.image.url, giftAnimation: giftAnimation(gift), starsAmount: gift.stars, privateSupport: Boolean(privateSupport), debitLedgerEntry: moved.debit.entry._id, creditLedgerEntry: moved.credit.entry._id, idempotencyKey: key }], { session });
     const updated = await Dream.findOneAndUpdate({ _id: dream._id, status: "ACTIVE" }, { $inc: { receivedStars: gift.stars, supporterCount: wasSupporter ? 0 : 1, version: 1 } }, { new: true, session });
     await Notification.create([{ user: dream.creator, type: "dream_gift", title: `${privateSupport ? "Someone" : user.name} sent ${gift.name} (✦${gift.stars}) toward your Dream`, dedupeKey: `dream-gift:${record._id}` }], { session });
-    return { resultReference: record._id, gift: { id: gift._id, name: gift.name, stars: gift.stars, imageUrl: gift.image.url, displayScale: gift.displayScale, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0 }, dream: serialize(updated), wallet: safeWallet(moved.debit.wallet, command.financialMode) };
+    return { resultReference: record._id, gift: { id: gift._id, name: gift.name, stars: gift.stars, imageUrl: gift.image.url, displayScale: gift.displayScale, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0, ...giftAnimation(gift) }, dream: serialize(updated), wallet: safeWallet(moved.debit.wallet, command.financialMode) };
   });
 }
