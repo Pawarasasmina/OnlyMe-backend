@@ -103,14 +103,6 @@ export const askDirectAccessQuestion = asyncHandler(async (req, res) => {
   validId(req.params.fanId);
   const body = String(req.body.body || "").trim();
   if (!body || body.length > 1000) throw new ApiError(400, "Question must be between 1 and 1,000 characters");
-  const previous = await DAWindow.findOne({
-    fan: req.params.fanId,
-    creator: req.user._id,
-    status: { $in: ["CLOSED", "EXPIRED"] },
-    settlementStatus: { $in: ["CAPTURED", "INCLUDED"] },
-    firstCreatorReplyAt: { $ne: null },
-  }).sort({ createdAt: -1 });
-  if (!previous) throw new ApiError(409, "A previous Direct Access conversation is required");
   const existing = await Message.findOne({ sender: req.user._id, clientMessageId: req.body.clientMessageId });
   if (existing) return sendResponse(res, 200, "Question already sent", {
     message: {
@@ -123,8 +115,22 @@ export const askDirectAccessQuestion = asyncHandler(async (req, res) => {
       directAccessWindowId: existing.directAccessWindow ? String(existing.directAccessWindow) : null,
       createdAt: existing.createdAt,
     },
-    previousWindowId: String(previous._id),
+    previousWindowId: existing.directAccessWindow ? String(existing.directAccessWindow) : null,
   });
+  if (await activeDirectAccessWindow(req.params.fanId, req.user._id)) throw new ApiError(409, "Wait until the current Direct Access window ends");
+  const previous = await DAWindow.findOne({
+    fan: req.params.fanId,
+    creator: req.user._id,
+    status: { $in: ["CLOSED", "EXPIRED"] },
+    settlementStatus: { $in: ["CAPTURED", "INCLUDED"] },
+    firstCreatorReplyAt: { $ne: null },
+  }).sort({ createdAt: -1 });
+  if (!previous) throw new ApiError(409, "A previous Direct Access conversation is required");
+  const unresolvedQuestion = await Message.findOne({ sender: req.user._id, recipient: req.params.fanId, messageKind: "CREATOR_ASK" }).sort({ createdAt: -1 }).lean();
+  if (unresolvedQuestion) {
+    const reopened = await DAWindow.exists({ creatorQuestionMessage: unresolvedQuestion._id, source: "CREATOR_REOPEN" });
+    if (!reopened) throw new ApiError(409, "Wait for the fan to answer your previous question");
+  }
   const message = await Message.create({ sender: req.user._id, recipient: req.params.fanId, clientMessageId: req.body.clientMessageId, body, mediaType: "text", messageKind: "CREATOR_ASK", messageChannel: "STANDARD", directAccessWindow: previous._id });
   const payload = { id: String(message._id), senderId: String(message.sender), recipientId: String(message.recipient), body: message.body, mediaType: "text", messageKind: "CREATOR_ASK", directAccessWindowId: String(previous._id), createdAt: message.createdAt };
   await Notification.create({

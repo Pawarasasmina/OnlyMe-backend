@@ -481,6 +481,7 @@ export const listMessages = asyncHandler(async (req, res) => {
   const requestedWindowId = req.query.directAccessWindowId || null;
   let requestedWindow = null;
   let threadWindowIds = [];
+  let viewingPurchasedDirectAccess = false;
   if (requestedWindowId) {
     validId(requestedWindowId);
     requestedWindow = await DAWindow.findOne({
@@ -491,6 +492,7 @@ export const listMessages = asyncHandler(async (req, res) => {
       ],
     });
     if (!requestedWindow) throw new ApiError(404, "Direct Access thread not found");
+    viewingPurchasedDirectAccess = String(requestedWindow.fan) === String(req.user._id);
     // A fan and creator have one visible Direct Access conversation. Individual
     // paid windows remain separate financial records, but the thread shows the
     // complete history for the pair regardless of how a window was opened.
@@ -522,6 +524,7 @@ export const listMessages = asyncHandler(async (req, res) => {
           $or: [
             { messageChannel: "DIRECT_ACCESS", directAccessWindow: { $in: threadWindowIds } },
             { messageKind: "CREATOR_ASK", directAccessWindow: { $in: threadWindowIds } },
+            ...(viewingPurchasedDirectAccess ? [{ messageChannel: { $in: ["STANDARD", null] }, directAccessWindow: null }] : []),
           ],
         }],
       }

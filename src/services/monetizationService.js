@@ -5,6 +5,7 @@ import Gift from "../models/Gift.js";
 import GiftPreference from "../models/GiftPreference.js";
 import GiftCategory from "../models/GiftCategory.js";
 import User from "../models/User.js";
+import CreatorProfile from "../models/CreatorProfile.js";
 import { profileAccountType } from "../constants/profileCategoryConstants.js";
 import ApiError from "../utils/ApiError.js";
 import { countriesMatch, countryCode } from "../utils/countryCode.js";
@@ -30,13 +31,14 @@ export function isAdult(dateOfBirth, now = new Date()) {
   return dob.getTime() <= Date.UTC(now.getUTCFullYear() - 18, now.getUTCMonth(), now.getUTCDate());
 }
 export async function monetizationSummary(user) {
-  const [policy, verification, gifts, preference, activeCategories, bank] = await Promise.all([
+  const [policy, verification, gifts, preference, activeCategories, bank, creatorProfile] = await Promise.all([
     getMonetizationPolicy(),
     CreatorVerification.findOne({ creator: user._id, purpose: "IDENTITY" }).select("dateOfBirth country status stateSyncPending").lean(),
     Gift.find({ isActive: true }).select("_id category").lean(),
     GiftPreference.findOne({ user: user._id }).select("enabledGifts").lean(),
     GiftCategory.distinct("_id", { isActive: true }),
     PayoutBankApplication.findOne({ user: user._id }).select("status country").lean(),
+    CreatorProfile.findOne({ user: user._id }).select("directAccessEnabled").lean(),
   ]);
   const approvedIdentity = verification?.status === "APPROVED" && !verification.stateSyncPending;
   const dob = (approvedIdentity ? verification.dateOfBirth : null) || user.monetization?.dateOfBirth;
@@ -47,18 +49,20 @@ export async function monetizationSummary(user) {
     : Boolean(bank?.status === "APPROVED" && bank.country && countriesMatch(bank.country, country));
   const terms = Boolean(user.monetization?.termsAcceptedAt && user.monetization?.termsVersion === policy.termsVersion);
   const standing = user.status === "active" && !(user.loginRestrictedUntil > new Date()) && !(user.messagingRestrictedUntil > new Date());
-  const enabled = policy.enabled && age && countryAllowed && terms && standing;
+  const enabled = policy.enabled && approvedIdentity && age && countryAllowed && terms && standing;
   const type = profileAccountType(user);
-  const seller = user.creatorApprovalStatus === "approved";
+  const seller = approvedIdentity && ["creator", "business"].includes(type);
   const verified = Boolean(approvedIdentity);
   const allowedCategories = new Set(activeCategories.map(String));
   const allowedGifts = preference ? new Set(preference.enabledGifts.map(String)) : null;
   const giftsAvailable = gifts.some(gift => (!gift.category || allowedCategories.has(String(gift.category))) && (!allowedGifts || allowedGifts.has(String(gift._id))));
-  return { enabled, policy, accountType: type, category: user.profileCategory || "", country, hasDateOfBirth: Boolean(dob), dateOfBirth: dob ? new Date(dob).toISOString().slice(0, 10) : "", eligibility: { age, country: countryAllowed, terms, standing }, verified, payoutsReady: Boolean(verified && bank?.status === "APPROVED"), tools: { gifts: enabled && giftsAvailable, dream: enabled && giftsAvailable, paidSeens: enabled && seller, directAccess: enabled && seller && type !== "personal", world: enabled && seller && type !== "personal", offers: enabled && type === "business" }, sellerReady: seller };
+  return { enabled, policy, accountType: type, category: user.profileCategory || "", country, hasDateOfBirth: Boolean(dob), dateOfBirth: dob ? new Date(dob).toISOString().slice(0, 10) : "", eligibility: { age, country: countryAllowed, terms, standing }, verified, payoutsReady: Boolean(verified && bank?.status === "APPROVED"), tools: { gifts: enabled && giftsAvailable, dream: enabled && giftsAvailable, paidSeens: enabled && seller, directAccess: enabled && seller && type !== "personal" && Boolean(creatorProfile?.directAccessEnabled), world: enabled && seller && type !== "personal", offers: enabled && type === "business" }, sellerReady: seller };
 }
 export async function completeMonetizationEligibility(user, payload) {
   const current = await monetizationSummary(user);
   const policy = current.policy;
+  if (!["creator", "business"].includes(current.accountType)) throw new ApiError(403, "Switch to a Creator or Business profile before enabling monetization", "PROFESSIONAL_PROFILE_REQUIRED");
+  if (!current.verified) throw new ApiError(403, "Complete admin verification before enabling monetization", "SELLER_VERIFICATION_REQUIRED");
   const country = policy.supportedCountries.length
     ? policy.supportedCountries.find(value => countriesMatch(value, payload.country))
     : countryCode(payload.country);

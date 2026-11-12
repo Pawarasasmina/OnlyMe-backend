@@ -1,4 +1,6 @@
 import CreatorVerification from "../models/CreatorVerification.js";
+import User from "../models/User.js";
+import { profileAccountType } from "../constants/profileCategoryConstants.js";
 import ApiError from "../utils/ApiError.js";
 
 export function ageOn(dateOfBirth, now = new Date()) {
@@ -16,7 +18,16 @@ export function monetizationEligibility(verification, now = new Date()) {
 }
 
 export async function assertCreatorCanMonetize(creatorId, now = new Date()) {
-  const verification = await CreatorVerification.findOne({ creator: creatorId, purpose: "IDENTITY" }).select("status ageConfirmed dateOfBirth").lean();
+  const [user, verification] = await Promise.all([
+    User.findById(creatorId).select("profileAccountType profileType creatorApprovalStatus").lean(),
+    CreatorVerification.findOne({ creator: creatorId, purpose: "IDENTITY" }).select("status ageConfirmed dateOfBirth stateSyncPending").lean(),
+  ]);
+  if (!user || !["creator", "business"].includes(profileAccountType(user))) {
+    throw new ApiError(403, "Switch to a Creator or Business profile before enabling money features", "PROFESSIONAL_PROFILE_REQUIRED");
+  }
+  if (verification?.stateSyncPending) {
+    throw new ApiError(403, "Verification approval is still being finalized", "SELLER_VERIFICATION_REQUIRED");
+  }
   const result = monetizationEligibility(verification, now);
   if (!result.allowed) throw new ApiError(403, result.message, result.code);
   return true;

@@ -2,7 +2,7 @@ export const CREATOR_PROFILE_CATEGORIES = ["Digital creator", "Coach", "Traveler
 export const BUSINESS_PROFILE_CATEGORIES = ["Shop", "Café & restaurant", "Studio & salon", "Fitness club", "Hotel & travel", "Media & news", "Services", "Brand"];
 export const PROFILE_ACCOUNT_TYPES = ["personal", "creator", "business"];
 export function profileAccountType(user) {
-  return user.profileAccountType || (user.creatorApprovalStatus === "approved" ? "creator" : "personal");
+  return user.profileAccountType || user.profileType || (user.creatorApprovalStatus === "approved" ? "creator" : "personal");
 }
 export function profileCategory(user, roleProfile = {}) {
   const type = profileAccountType(user);

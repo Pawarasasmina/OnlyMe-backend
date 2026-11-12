@@ -7,6 +7,7 @@ import { performVerificationSubmission } from "../services/verificationSubmissio
 import { sendResponse } from "../utils/response.js";
 import ApiError from "../utils/ApiError.js";
 import User from "../models/User.js";
+import { profileAccountType } from "../constants/profileCategoryConstants.js";
 import { ageOn } from "../services/monetizationEligibilityService.js";
 import {
   assertDocumentField,
@@ -26,6 +27,12 @@ import {
 } from "../services/verificationFileCleanupService.js";
 
 const documentFields = ["documentFront", "documentBack", "selfieWithDocument"];
+
+function assertProfessionalProfile(user) {
+  if (!["creator", "business"].includes(profileAccountType(user))) {
+    throw new ApiError(403, "Switch to a Creator or Business profile before verification", "PROFESSIONAL_PROFILE_REQUIRED");
+  }
+}
 
 function safeDocument(metadata) {
   if (!metadata) return null;
@@ -107,7 +114,8 @@ async function getOrCreateVerification(creatorId) {
 }
 
 export const completeSellerInformation = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user._id).select("dateOfBirth profileType").lean();
+  const user = await User.findById(req.user._id).select("dateOfBirth profileAccountType profileType creatorApprovalStatus").lean();
+  assertProfessionalProfile(user);
   if (!user?.dateOfBirth) throw new ApiError(409, "Add your birthday to your account before selling");
   if (ageOn(user.dateOfBirth) < 18) throw new ApiError(403, "Money features are available from age 18", "SELLER_MUST_BE_ADULT");
 
@@ -118,21 +126,18 @@ export const completeSellerInformation = asyncHandler(async (req, res) => {
   if (!legalFullName || !country || !address || !phoneNumber) throw new ApiError(400, "Complete name, country, address and phone");
   if (legalFullName.length > 150 || country.length > 80 || address.length > 300 || phoneNumber.length > 30) throw new ApiError(400, "Seller information is too long");
 
-  const now = new Date();
   const verification = await CreatorVerification.findOneAndUpdate(
-    { creator: req.user._id },
+    { creator: req.user._id, purpose: "IDENTITY", status: "APPROVED" },
     { $set: {
       legalFullName, country, address, phoneNumber,
       dateOfBirth: user.dateOfBirth,
       ageConfirmed: true,
       informationConfirmed: true,
-      status: "APPROVED",
-      submittedAt: now,
-      reviewedAt: now,
       creatorVisibleMessage: "Seller information complete",
     } },
-    { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
+    { new: true, runValidators: true }
   );
+  if (!verification) throw new ApiError(403, "Admin verification approval is required before completing seller information", "SELLER_VERIFICATION_REQUIRED");
   return sendResponse(res, 200, "Seller information saved", { verification: serializeCreatorVerification(verification) });
 });
 
@@ -147,6 +152,7 @@ async function addCreatorHistory(verification, action, previousStatus, newStatus
 }
 
 export const getMyVerification = asyncHandler(async (req, res) => {
+  assertProfessionalProfile(req.user);
   const verification = await getOrCreateVerification(req.user._id);
   return sendResponse(res, 200, "Creator verification fetched", {
     verification: serializeCreatorVerification(verification),
@@ -155,6 +161,7 @@ export const getMyVerification = asyncHandler(async (req, res) => {
 });
 
 export const saveVerificationDraft = asyncHandler(async (req, res) => {
+  assertProfessionalProfile(req.user);
   const verification = await getOrCreateVerification(req.user._id);
   if (req.verificationPurpose === "IDENTITY" && verification.purpose !== "IDENTITY" && verification.status === "APPROVED") verification.status = "DRAFT";
   const approvedNeedsSellerDetails = verification.status === "APPROVED" && (
@@ -177,6 +184,7 @@ export const saveVerificationDraft = asyncHandler(async (req, res) => {
 });
 
 export const uploadVerificationFile = asyncHandler(async (req, res) => {
+  assertProfessionalProfile(req.user);
   const documentType = assertDocumentField(req.params.documentType);
   if (!req.file) throw new ApiError(400, "Verification document is required");
   const verification = await getOrCreateVerification(req.user._id);
@@ -214,6 +222,7 @@ export const uploadVerificationFile = asyncHandler(async (req, res) => {
   }
 });
 export const deleteVerificationFile = asyncHandler(async (req, res) => {
+  assertProfessionalProfile(req.user);
   const documentType = assertDocumentField(req.params.documentType);
   const verification = await getOrCreateVerification(req.user._id);
   assertEditableStatus(verification.status);
@@ -237,6 +246,7 @@ export const deleteVerificationFile = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Verification document removed", { verification: serializeCreatorVerification(updated) });
 });
 export const submitVerification = asyncHandler(async (req, res) => {
+  assertProfessionalProfile(req.user);
   const verification = await performVerificationSubmission({
     creatorId: req.user._id,
     allowedStatuses: ["NOT_STARTED", "DRAFT"],
@@ -246,6 +256,7 @@ export const submitVerification = asyncHandler(async (req, res) => {
 });
 
 export const resubmitVerification = asyncHandler(async (req, res) => {
+  assertProfessionalProfile(req.user);
   const verification = await performVerificationSubmission({
     creatorId: req.user._id,
     allowedStatuses: ["CHANGES_REQUESTED", "REJECTED"],
