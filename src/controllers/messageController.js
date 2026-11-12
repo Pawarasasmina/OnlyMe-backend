@@ -61,6 +61,7 @@ const serializedSharedContent = (sharedContent, deletedAt = null) => {
     title: sharedContent.title || "",
     previewText: sharedContent.previewText || "",
     imageUrl: sharedContent.imageUrl || "",
+    ticket: sharedContent.contentType === "ticket" ? sharedContent.ticket : undefined,
     author: sharedContent.author?.id ? {
       id: String(sharedContent.author.id),
       name: sharedContent.author.name || "",
@@ -198,6 +199,7 @@ function contentLabel(contentType = "") {
   if (contentType === "world") return "World";
   if (contentType === "experience") return "experience";
   if (contentType === "invitation") return "invitation";
+  if (contentType === "ticket") return "ticket";
   if (contentType === "profile") return "profile";
   if (contentType === "story") return "story";
   return "content";
@@ -206,7 +208,7 @@ function contentLabel(contentType = "") {
 function normalizeShareContentInput(sharedContent = {}) {
   const contentType = String(sharedContent.contentType || "").trim();
   const contentId = String(sharedContent.contentId || "").trim();
-  const allowed = new Set(["feed_post", "seen", "world", "experience", "profile", "story", "invitation", "dream"]);
+  const allowed = new Set(["feed_post", "seen", "world", "experience", "profile", "story", "invitation", "dream", "ticket"]);
   if (!allowed.has(contentType)) throw new ApiError(400, "Unsupported shared content type");
   if (!mongoose.isValidObjectId(contentId)) throw new ApiError(400, "Invalid shared content id");
   return { contentType, contentId };
@@ -248,6 +250,21 @@ async function sharedContentSnapshot(input, viewer) {
     const blocked = await UserBlock.exists({ $or: [{ blocker: viewer._id, blocked: owner._id }, { blocker: owner._id, blocked: viewer._id }] });
     if (blocked) throw new ApiError(403, "This Dream cannot be shared");
     return { contentType, contentId: dream._id, route: `/profile/${encodeURIComponent(owner.username)}?dream=${dream._id}`, title: `${dream.emoji || ""} ${dream.title}`.trim(), previewText: dream.reason, imageUrl: dream.photo?.url || "", author: { id: owner._id, name: owner.name, username: owner.username, avatarUrl: owner.avatar || "" } };
+  }
+  if (contentType === "ticket") {
+    const owner = await User.findOne({ _id: contentId, status: "active" }).select("name username avatar memberNumber showMemberNumber createdAt role").lean();
+    if (!owner || owner.role === "admin" || owner.showMemberNumber === false || !Number.isSafeInteger(owner.memberNumber) || owner.memberNumber < 1 || owner.memberNumber > 10000) throw new ApiError(404, "Ticket not available");
+    const blocked = await UserBlock.exists({ $or: [{ blocker: viewer._id, blocked: owner._id }, { blocker: owner._id, blocked: viewer._id }] });
+    if (blocked) throw new ApiError(403, "This ticket cannot be shared");
+    const [creator, fan] = await Promise.all([CreatorProfile.findOne({ user: owner._id }).select("city").lean(), FanProfile.findOne({ user: owner._id }).select("city").lean()]);
+    const city = creator?.city || fan?.city || "";
+    return {
+      contentType, contentId: owner._id, route: `/profile/${encodeURIComponent(owner.username)}`,
+      title: `I\u2019m \u2116${owner.memberNumber.toLocaleString("en-US")} on @seen`,
+      previewText: `${city ? `One of the first in ${city}` : "One of the first on @seen"} \u2014 join me`,
+      ticket: { number: owner.memberNumber, city, joinedAt: owner.createdAt },
+      author: { id: owner._id, name: owner.name, username: owner.username, avatarUrl: owner.avatar || "" },
+    };
   }
   if (contentType === "invitation") {
     if (String(contentId) !== String(viewer._id)) throw new ApiError(403, "Only your own invitation can be sent");
