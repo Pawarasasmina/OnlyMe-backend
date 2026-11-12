@@ -9,9 +9,20 @@ import { sendResponse } from "../utils/response.js";
 import { deleteGiftImage, uploadGiftImage } from "../services/giftImageStorageService.js";
 
 const serializeCategory = (category) => category ? ({ id: category._id, name: category.name, slug: category.slug, sortOrder: category.sortOrder, isActive: category.isActive }) : null;
-const serialize = (gift) => ({ id: gift._id, name: gift.name, stars: gift.stars, imageUrl: gift.image.url, image: gift.image, isAnimated: Boolean(gift.image?.isAnimated), displayScale: gift.displayScale, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0, category: serializeCategory(gift.category), sortOrder: gift.sortOrder, isActive: gift.isActive, createdAt: gift.createdAt, updatedAt: gift.updatedAt });
+const animation = (gift) => ({ idleMotion: gift.idleMotion || "hover", motionDelay: gift.motionDelay || 0, showShine: Boolean(gift.showShine), showHalo: Boolean(gift.showHalo), celebrationTier: gift.celebrationTier || "AUTO", effectFamily: gift.effectFamily || "glass", objectEffect: gift.objectEffect || "none", animationConfigured: Boolean(gift.animationConfigured) });
+const serialize = (gift) => ({ id: gift._id, name: gift.name, stars: gift.stars, imageUrl: gift.image.url, image: gift.image, isAnimated: Boolean(gift.image?.isAnimated), displayScale: gift.displayScale, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0, ...animation(gift), category: serializeCategory(gift.category), sortOrder: gift.sortOrder, isActive: gift.isActive, createdAt: gift.createdAt, updatedAt: gift.updatedAt });
 const integer = (value, label, min, max) => { const result = Number(value); if (!Number.isSafeInteger(result) || result < min || result > max) throw new ApiError(400, `${label} must be a whole number from ${min} to ${max}`); return result; };
 const nameValue = (value) => { const name = String(value || "").trim(); if (!name || name.length > 80) throw new ApiError(400, "Gift name is required and must be at most 80 characters"); return name; };
+const choices = (value, label, allowed, fallback) => { const result = String(value || fallback); if (!allowed.includes(result)) throw new ApiError(400, `Choose a valid ${label}`); return result; };
+const animationValue = (body) => ({
+  idleMotion: choices(body.idleMotion, "idle motion", ["beat", "sway", "hover", "floaty", "glowp", "rev", "spin", "coin", "flick", "bob2", "pulse"], "hover"),
+  motionDelay: integer(body.motionDelay || 0, "Motion delay", 0, 8),
+  showShine: String(body.showShine) === "true",
+  showHalo: String(body.showHalo) === "true",
+  celebrationTier: choices(body.celebrationTier, "celebration tier", ["AUTO", "SMALL", "MID", "BIG", "LEGENDARY", "VAULT"], "AUTO"),
+  effectFamily: choices(body.effectFamily, "effect family", ["glass", "fash", "mech", "energy", "launch", "celebr", "lux", "royal", "soft"], "glass"),
+  objectEffect: choices(body.objectEffect, "object effect", ["none", "car", "moto", "boatx", "laptop", "guitar", "volt", "fire", "drone", "watch", "phones", "camera", "rocketx", "moon", "chessx", "trophy", "bottle", "heartglass", "neon", "ring", "lux", "royal", "jetx", "spin360"], "none"),
+});
 
 export const listGifts = asyncHandler(async (_req, res) => {
   const [gifts, categories] = await Promise.all([Gift.find().populate("category").sort({ sortOrder: 1, createdAt: 1 }).lean(), GiftCategory.find().sort({ sortOrder: 1, name: 1 }).lean()]);
@@ -29,7 +40,7 @@ export const createGift = asyncHandler(async (req, res) => {
   const image = await uploadGiftImage(req.file, req.user._id);
   try {
     const lastGift = await Gift.findOne().sort({ sortOrder: -1 }).select("sortOrder").lean();
-    const gift = await Gift.create({ name: nameValue(req.body.name), stars: integer(req.body.stars, "Star value", 1, 1000000), category: await categoryValue(req.body.categoryId), displayScale: integer(req.body.displayScale || 100, "Display scale", 40, 140), imagePositionX: integer(req.body.imagePositionX || 0, "Horizontal position", -50, 50), imagePositionY: integer(req.body.imagePositionY || 0, "Vertical position", -50, 50), sortOrder: Math.min((lastGift?.sortOrder || 0) + 1, 100000), isActive: String(req.body.isActive) !== "false", image, createdBy: req.user._id, updatedBy: req.user._id });
+    const gift = await Gift.create({ name: nameValue(req.body.name), stars: integer(req.body.stars, "Star value", 1, 1000000), category: await categoryValue(req.body.categoryId), displayScale: integer(req.body.displayScale || 100, "Display scale", 40, 140), imagePositionX: integer(req.body.imagePositionX || 0, "Horizontal position", -50, 50), imagePositionY: integer(req.body.imagePositionY || 0, "Vertical position", -50, 50), ...animationValue(req.body), animationConfigured: true, sortOrder: Math.min((lastGift?.sortOrder || 0) + 1, 100000), isActive: String(req.body.isActive) !== "false", image, createdBy: req.user._id, updatedBy: req.user._id });
     if (gift.isActive) await GiftPreference.updateMany({}, { $addToSet: { enabledGifts: gift._id } });
     return sendResponse(res, 201, "Gift created", { gift: serialize(gift) });
   } catch (error) { await deleteGiftImage(image.assetId).catch(() => {}); throw error; }
@@ -50,6 +61,8 @@ export const updateGift = asyncHandler(async (req, res) => {
     if (req.body.displayScale !== undefined) gift.displayScale = integer(req.body.displayScale, "Display scale", 40, 140);
     if (req.body.imagePositionX !== undefined) gift.imagePositionX = integer(req.body.imagePositionX, "Horizontal position", -50, 50);
     if (req.body.imagePositionY !== undefined) gift.imagePositionY = integer(req.body.imagePositionY, "Vertical position", -50, 50);
+    Object.assign(gift, animationValue({ ...animation(gift), ...req.body }));
+    gift.animationConfigured = true;
     if (req.body.sortOrder !== undefined) gift.sortOrder = integer(req.body.sortOrder, "Sort order", 0, 100000);
     if (req.body.isActive !== undefined) gift.isActive = String(req.body.isActive) === "true";
     if (uploaded) gift.image = uploaded;
@@ -61,7 +74,7 @@ export const updateGift = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Gift updated", { gift: serialize(gift) });
 });
 
-const categoryName = (value) => { const name = String(value || "").trim(); if (!name || name.length > 60) throw new ApiError(400, "Category name is required and must be at most 60 characters"); return name; };
+const categoryName = (value) => { const name = String(value || "").trim(); if (!name || name.length > 60) throw new ApiError(400, "Category name is required and must be at most 60 characters"); if (name.toLowerCase() === "most gifted") throw new ApiError(400, "Most Gifted is an automatic section and cannot be created as a category"); return name; };
 const categorySlug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || `category-${Date.now()}`;
 
 export const createGiftCategory = asyncHandler(async (req, res) => {
@@ -86,10 +99,21 @@ export const updateGiftCategory = asyncHandler(async (req, res) => {
 
 export const deleteGiftCategory = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid category ID");
-  if (await Gift.exists({ category: req.params.id })) throw new ApiError(409, "Move gifts out of this category before deleting it");
-  const category = await GiftCategory.findByIdAndDelete(req.params.id);
+  const category = await GiftCategory.findById(req.params.id);
   if (!category) throw new ApiError(404, "Gift category not found");
+  await Gift.updateMany({ category: category._id }, { $set: { category: null, updatedBy: req.user._id } });
+  await category.deleteOne();
   return sendResponse(res, 200, "Gift category deleted", { id: category._id });
+});
+
+export const reorderGiftCategories = asyncHandler(async (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? req.body.ids.map(String) : [];
+  if (!ids.length || new Set(ids).size !== ids.length || ids.some((id) => !mongoose.isValidObjectId(id))) throw new ApiError(400, "Provide a valid ordered category list");
+  const existing = await GiftCategory.find({ _id: { $in: ids } }).select("_id").lean();
+  if (existing.length !== ids.length || await GiftCategory.countDocuments() !== ids.length) throw new ApiError(409, "Gift categories changed. Refresh and arrange them again.");
+  await GiftCategory.bulkWrite(ids.map((id, index) => ({ updateOne: { filter: { _id: id }, update: { $set: { sortOrder: index + 1, updatedBy: req.user._id } } } })));
+  const categories = await GiftCategory.find().sort({ sortOrder: 1, name: 1 }).lean();
+  return sendResponse(res, 200, "Gift category order updated", { categories: categories.map(serializeCategory) });
 });
 
 export const deleteGift = asyncHandler(async (req, res) => {

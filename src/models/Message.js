@@ -16,6 +16,13 @@ const messageSchema = new mongoose.Schema(
       displayScale: { type: Number, min: 40, max: 140, default: undefined },
       imagePositionX: { type: Number, min: -50, max: 50, default: 0 },
       imagePositionY: { type: Number, min: -50, max: 50, default: 0 },
+      idleMotion: { type: String, default: "hover" },
+      motionDelay: { type: Number, default: 0 },
+      showShine: { type: Boolean, default: false },
+      showHalo: { type: Boolean, default: false },
+      celebrationTier: { type: String, default: "AUTO" },
+      effectFamily: { type: String, default: "glass" },
+      objectEffect: { type: String, default: "none" },
     },
     image: {
       assetId: { type: String, default: "" },

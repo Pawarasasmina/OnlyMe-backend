@@ -16,7 +16,7 @@ import {
 } from "../controllers/adminController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
-import { createGift, createGiftCategory, deleteGift, deleteGiftCategory, listGifts, reorderGifts, updateGift, updateGiftCategory } from "../controllers/adminGiftController.js";
+import { createGift, createGiftCategory, deleteGift, deleteGiftCategory, listGifts, reorderGiftCategories, reorderGifts, updateGift, updateGiftCategory } from "../controllers/adminGiftController.js";
 import { uploadGiftImage } from "../middleware/uploadMiddleware.js";
 import { getWelcomeEmailTemplate, updateWelcomeEmailTemplate } from "../controllers/adminEmailTemplateController.js";
 import { activateRecommendationConfig, createRecommendationDraft, getRecommendationSettings, resetRecommendationConfig } from "../controllers/adminRecommendationController.js";
@@ -43,6 +43,7 @@ router.get("/email-templates/welcome", requireAdminRole("MAIN_ADMIN"), getWelcom
 router.patch("/email-templates/welcome", requireAdminRole("MAIN_ADMIN"), uploadGiftImage.single("logo"), updateWelcomeEmailTemplate);
 router.get("/gifts", requireAdminRole("MAIN_ADMIN"), listGifts);
 router.post("/gift-categories", requireAdminRole("MAIN_ADMIN"), createGiftCategory);
+router.patch("/gift-categories/reorder", requireAdminRole("MAIN_ADMIN"), reorderGiftCategories);
 router.patch("/gift-categories/:id", requireAdminRole("MAIN_ADMIN"), updateGiftCategory);
 router.delete("/gift-categories/:id", requireAdminRole("MAIN_ADMIN"), deleteGiftCategory);
 router.post("/gifts", requireAdminRole("MAIN_ADMIN"), uploadGiftImage.single("image"), createGift);

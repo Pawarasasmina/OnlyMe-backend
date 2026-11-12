@@ -17,6 +17,11 @@ const sender = (user, hidden = false) => hidden ? { name: "Private supporter", u
 };
 
 const REPORT_REASONS = new Set(["SPAM", "FALSE_INFORMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "OTHER"]);
+const THANK_YOU_MESSAGES = [
+  name => `Thank you, ${name} — this genuinely made my day.`,
+  () => "You didn’t have to. Thank you — I saw it right away.",
+  () => "This means more than you think. Thank you.",
+];
 
 function receivedGiftConfig(value) {
   const [kind, giftId] = String(value || "").split("-");
@@ -27,11 +32,19 @@ function receivedGiftConfig(value) {
 }
 
 function serializeGift(gift, kind, senderUser, hiddenSender = false) {
+  const catalog = gift.gift && typeof gift.gift === "object" ? gift.gift : null;
   return {
     id: `${kind}-${gift._id}`,
     name: gift.giftName,
     imageUrl: gift.giftImageUrl,
     stars: gift.starsAmount,
+    idleMotion: gift.giftAnimation?.idleMotion || catalog?.idleMotion || "hover",
+    motionDelay: gift.giftAnimation?.motionDelay || catalog?.motionDelay || 0,
+    showShine: gift.giftAnimation?.showShine ?? Boolean(catalog?.showShine),
+    showHalo: gift.giftAnimation?.showHalo ?? Boolean(catalog?.showHalo),
+    celebrationTier: gift.giftAnimation?.celebrationTier || catalog?.celebrationTier || "AUTO",
+    effectFamily: gift.giftAnimation?.effectFamily || catalog?.effectFamily || "glass",
+    objectEffect: gift.giftAnimation?.objectEffect || catalog?.objectEffect || "none",
     source: kind === "chat" ? (gift.sourceType === "STORY" ? "Story" : "Direct") : "Dream",
     message: gift.messageText || "",
     visibility: kind === "chat" ? (gift.visibility || "EVERYONE") : (gift.privateSupport ? "RECIPIENT_ONLY" : "EVERYONE"),
@@ -47,8 +60,8 @@ export const getMyReceivedGifts = asyncHandler(async (req, res) => {
   const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 60));
   const activeGiftIds = await Gift.find({ isActive: true }).distinct("_id");
   const [chatGifts, dreamGifts] = await Promise.all([
-    ChatGift.find({ recipient: req.user._id, gift: { $in: activeGiftIds } }).sort({ createdAt: -1 }).limit(limit).populate("sender", "name username avatar").lean(),
-    DreamGift.find({ creator: req.user._id, gift: { $in: activeGiftIds } }).sort({ createdAt: -1 }).limit(limit).populate("supporter", "name username avatar").lean(),
+    ChatGift.find({ recipient: req.user._id, gift: { $in: activeGiftIds } }).sort({ createdAt: -1 }).limit(limit).populate("sender", "name username avatar").populate("gift").lean(),
+    DreamGift.find({ creator: req.user._id, gift: { $in: activeGiftIds } }).sort({ createdAt: -1 }).limit(limit).populate("supporter", "name username avatar").populate("gift").lean(),
   ]);
   const gifts = [
     ...chatGifts.map((gift) => serializeGift(gift, "chat", gift.sender)),
@@ -68,11 +81,17 @@ export const thankReceivedGift = asyncHandler(async (req, res) => {
   ).lean();
   if (!gift) throw new ApiError(404, "Received gift not found");
 
+  const senderUser = await User.findById(gift[config.senderField]).select("name username").lean();
+  const senderName = String(senderUser?.name || senderUser?.username || "there").split(" ")[0];
+  const messageFactory = THANK_YOU_MESSAGES[Number.parseInt(String(config.giftId).slice(-2), 16) % THANK_YOU_MESSAGES.length];
+  const thankYouMessage = messageFactory(senderName);
+
   await Notification.updateOne(
     { dedupeKey: `gift-thanks:${config.kind}:${config.giftId}` },
-    { $setOnInsert: { user: gift[config.senderField], type: "gift_thanks", title: `${req.user.name || req.user.username || "Someone"} thanked you for ${gift.giftName}`, dedupeKey: `gift-thanks:${config.kind}:${config.giftId}` } },
+    { $setOnInsert: { user: gift[config.senderField], actor: req.user._id, type: "gift_thanks", title: `${req.user.name || req.user.username || "Someone"} thanked you for ${gift.giftName}`, message: thankYouMessage, metadata: { giftName: gift.giftName, giftImageUrl: gift.giftImageUrl }, dedupeKey: `gift-thanks:${config.kind}:${config.giftId}` } },
     { upsert: true },
   );
+  req.app.get("io")?.to(`user:${gift[config.senderField]}`).emit("activity:updated");
   return sendResponse(res, 200, "Gift sender thanked", { thankedAt: gift.thankedAt });
 });
 
@@ -134,8 +153,8 @@ export const getPublicReceivedGifts = asyncHandler(async (req, res) => {
   const limit = Math.min(12, Math.max(1, Number(req.query.limit) || 12));
   const activeGiftIds = await Gift.find({ isActive: true }).distinct("_id");
   const [chatGifts, dreamGifts] = await Promise.all([
-    ChatGift.find({ recipient: owner._id, gift: { $in: activeGiftIds }, visibility: "EVERYONE", hiddenFromProfile: { $ne: true } }).sort({ featuredOnProfile: -1, createdAt: -1 }).limit(limit).populate("sender", "name username avatar").lean(),
-    DreamGift.find({ creator: owner._id, gift: { $in: activeGiftIds }, privateSupport: false, hiddenFromProfile: { $ne: true } }).sort({ featuredOnProfile: -1, createdAt: -1 }).limit(limit).populate("supporter", "name username avatar").lean(),
+    ChatGift.find({ recipient: owner._id, gift: { $in: activeGiftIds }, visibility: "EVERYONE", hiddenFromProfile: { $ne: true } }).sort({ featuredOnProfile: -1, createdAt: -1 }).limit(limit).populate("sender", "name username avatar").populate("gift").lean(),
+    DreamGift.find({ creator: owner._id, gift: { $in: activeGiftIds }, privateSupport: false, hiddenFromProfile: { $ne: true } }).sort({ featuredOnProfile: -1, createdAt: -1 }).limit(limit).populate("supporter", "name username avatar").populate("gift").lean(),
   ]);
   const gifts = [
     ...chatGifts.map((gift) => serializeGift(gift, "chat", gift.sender)),
