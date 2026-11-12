@@ -5,6 +5,7 @@ import { MongoMemoryServer } from "mongodb-memory-server";
 import User from "../models/User.js";
 import Referral from "../models/Referral.js";
 import Message from "../models/Message.js";
+import Conversation from "../models/Conversation.js";
 import { attributeReferral, referralCodes, resolveReferral } from "./referralService.js";
 import { awardReferralEarnings } from "./referralFinancialService.js";
 import { getMyInvitations } from "../controllers/profileController.js";
@@ -107,4 +108,25 @@ test("chat invitations use the sender's real code and reject spoofing another in
   assert.equal(message.sharedContent.title, "Max invited you to @seen");
   assert.equal(message.body, "\u21aa Link \u2014 Max invited you to @seen");
   await assert.rejects(call(sendSharedContent, request(recipient)), /Only your own invitation/);
+});
+
+test("ticket shares use server-owned member data and respect ticket privacy", async () => {
+  const sender = await person("Ticket owner"), recipient = await person("Ticket recipient");
+  const request = owner => ({ user: sender, app: { get: () => null }, body: { recipientIds: [String(recipient._id)], sharedContent: { contentType: "ticket", contentId: String(owner._id), ticket: { number: 9999, city: "Fake city" } } } });
+  const data = await call(sendSharedContent, request(sender));
+  assert.equal(data.failed.length, 0);
+  const message = await Message.findOne({ sender: sender._id, recipient: recipient._id });
+  assert.equal(message.sharedContent.contentType, "ticket");
+  assert.equal(message.sharedContent.ticket.number, sender.memberNumber);
+  assert.equal(message.sharedContent.ticket.city, "");
+  assert.equal(message.sharedContent.ticket.joinedAt.toISOString(), sender.createdAt.toISOString());
+  assert.equal(message.sharedContent.title, `I’m №${sender.memberNumber.toLocaleString("en-US")} on @seen`);
+  assert.equal(data.sent[0].message.sharedContent.ticket.number, sender.memberNumber);
+  await Conversation.updateMany({ participants: sender._id }, { $set: { status: "ACTIVE", acceptedByCreator: true } });
+  const reshared = await call(sendSharedContent, { ...request(sender), user: recipient, body: { recipientIds: [String(sender._id)], sharedContent: { contentType: "ticket", contentId: String(sender._id) } } });
+  assert.equal(reshared.sent[0].message.sharedContent.ticket.number, sender.memberNumber);
+  await UserBlock.create({ blocker: sender._id, blocked: recipient._id });
+  await assert.rejects(call(sendSharedContent, request(recipient)), /This ticket cannot be shared/);
+  await User.updateOne({ _id: sender._id }, { $set: { showMemberNumber: false } });
+  await assert.rejects(call(sendSharedContent, request(sender)), /Ticket not available/);
 });
