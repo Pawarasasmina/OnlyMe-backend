@@ -89,5 +89,8 @@ export async function grantAiSeenPublishBonus(userId, publicationId, now = new D
     { $addToSet: { bonusPublicationIds: publicationId }, $inc: { publishedBonusCount: 1 }, $set: { "sessions.$[session].completedAt": now } },
     { new: true, arrayFilters: [{ "session.publication": publicationId }] },
   ).lean();
-  return usage ? statusPayload(usage, usage.baseLimit, now) : null;
+  if (!usage) return null;
+  const beforeLimit = Math.min(AI_SEEN_MAX_DAILY, usage.baseLimit + Math.max(0, Number(usage.publishedBonusCount || 0) - 1));
+  const status = statusPayload(usage, usage.baseLimit, now);
+  return { ...status, bonusGranted: status.dailyLimit > beforeLimit };
 }
