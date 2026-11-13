@@ -57,6 +57,7 @@ export const env = {
   keepAliveTimeoutMs: Math.max(1000, Number(process.env.HTTP_KEEP_ALIVE_TIMEOUT_MS) || 5000),
   shutdownTimeoutMs: Math.max(5000, Number(process.env.SHUTDOWN_TIMEOUT_MS) || 30000),
   maintenanceWorkersEnabled: process.env.MAINTENANCE_WORKERS_ENABLED !== "false",
+  uptimeAlertWebhook: process.env.UPTIME_ALERT_WEBHOOK || "",
 };
 
 export function validateProductionEnv() {

@@ -61,7 +61,16 @@ export function serializeDAWindow(window) {
 
 async function assertOpenPair(fan, creatorId, membershipIncluded = false) {
   if (!["fan", "creator"].includes(fan.role)) throw new ApiError(403, "This account cannot open Direct Access windows");
-  const creator = await User.findOne({ _id: creatorId, role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved", status: "active" }).select("_id name username avatar role creatorApprovalStatus");
+  const creator = await User.findOne({
+    _id: creatorId,
+    role: { $in: ["fan", "creator"] },
+    status: "active",
+    $or: [
+      { creatorApprovalStatus: "approved" },
+      { profileAccountType: { $in: ["creator", "business"] } },
+      { profileType: { $in: ["creator", "business"] } },
+    ],
+  }).select("_id name username avatar role creatorApprovalStatus profileAccountType profileType");
   if (!creator) throw new ApiError(404, "Creator not found");
   if (String(fan._id) === String(creator._id)) throw new ApiError(400, "You cannot open Direct Access with yourself");
   const [profile, blocked] = await Promise.all([
@@ -85,6 +94,9 @@ export async function openDirectAccessWindow({ fan, creatorId, key, source = "PA
     if (!creatorQuestion) throw new ApiError(404, "Creator question not found");
     questionedWindow = await DAWindow.findOne({ _id: creatorQuestion.directAccessWindow, fan: fan._id, creator: creator._id }).lean();
     if (!questionedWindow) throw new ApiError(404, "Questioned Direct Access thread not found");
+    if (!["CLOSED", "EXPIRED"].includes(questionedWindow.status)) {
+      throw new ApiError(409, "The previous Direct Access window has not ended");
+    }
   }
   if (source === "FAN_FOLLOWUP") {
     if (fanFollowupMessageId) creatorQuestion = await Message.findOne({ _id: fanFollowupMessageId, sender: fan._id, recipient: creator._id, messageKind: "FAN_FREE_ASK" }).lean();
@@ -97,6 +109,13 @@ export async function openDirectAccessWindow({ fan, creatorId, key, source = "PA
     idempotencyKey: key,
     requestFingerprint: fingerprint({ creatorId: String(creator._id), source, creatorQuestionMessageId, fanFollowupMessageId, previousWindowId, priceStars: source === "PREMIUM_INCLUDED" ? 0 : priceStars }),
   }, async (session, command) => {
+    if (source === "CREATOR_REOPEN") {
+      const alreadyReopened = await DAWindow.exists({
+        creatorQuestionMessage: creatorQuestion._id,
+        source: "CREATOR_REOPEN",
+      }).session(session);
+      if (alreadyReopened) throw new ApiError(409, "This Direct Access question has already opened a new window", FINANCIAL_ERROR_CODES.DA_WINDOW_ALREADY_OPEN);
+    }
     const activeWindowKey = `${fan._id}:${creator._id}`;
     const existing = await DAWindow.findOne({ activeWindowKey }).session(session);
     if (existing) throw new ApiError(409, "A Direct Access window is already open", FINANCIAL_ERROR_CODES.DA_WINDOW_ALREADY_OPEN);

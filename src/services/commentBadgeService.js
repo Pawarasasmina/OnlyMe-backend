@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import Publication from "../models/Publication.js";
+import User from "../models/User.js";
 import FanProfile from "../models/FanProfile.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import { sendResponse } from "../utils/response.js";
@@ -24,18 +24,21 @@ export async function attachCommentBadges(data, viewerId) {
   visit(data);
   const ids = [...new Set(authors.map(author => String(author.id || author._id || "")).filter(id => mongoose.isValidObjectId(id)))];
   if (!ids.length) return data;
-  const [worlds, fans, creators] = await Promise.all([
-    Publication.find({ creator: { $in: ids }, kind: "PREMIUM_WORLD", publishedSnapshot: { $exists: true }, status: { $in: ["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED"] } })
-      .select("creator kind publishedSnapshot planet").sort({ "planet.slot": 1, _id: 1 }).lean(),
+  const [users, fans, creators] = await Promise.all([
+    User.find({ _id: { $in: ids }, "activeStatus.isActive": true })
+      .select("activeStatus").lean(),
     FanProfile.find({ user: { $in: ids } }).select("user privacySettings.showMemberBadge").lean(),
     CreatorProfile.find({ user: { $in: ids } }).select("user privacySettings.showMemberBadge").lean(),
   ]);
   const badgesByUser = new Map();
-  for (const world of worlds) {
-    const id = String(world.creator);
-    if (badgesByUser.has(id)) continue;
-    const emoji = world.publishedSnapshot?.metadata?.planet?.emoji || "??";
-    badgesByUser.set(id, [{ worldId: String(world._id), creatorId: id, emoji }]);
+  for (const user of users) {
+    const emoji = String(user.activeStatus?.emoji || "").trim();
+    if (!emoji) continue;
+    badgesByUser.set(String(user._id), {
+      emoji,
+      label: String(user.activeStatus?.label || "").trim(),
+      color: String(user.activeStatus?.color || "#9CCBFF"),
+    });
   }
   const profiles = new Map();
   for (const profile of [...fans, ...creators]) {
@@ -45,7 +48,8 @@ export async function attachCommentBadges(data, viewerId) {
   for (const author of authors) {
     const id = String(author.id || author._id || "");
     delete author.memberBadge;
-    author.memberBadges = visibleMemberBadge({ _id: id }, profiles.get(id), viewerId) ? (badgesByUser.get(id) || []) : [];
+    delete author.memberBadges;
+    author.statusBadge = visibleMemberBadge({ _id: id }, profiles.get(id), viewerId) ? (badgesByUser.get(id) || null) : null;
   }
   return data;
 }

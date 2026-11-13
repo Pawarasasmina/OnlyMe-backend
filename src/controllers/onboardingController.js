@@ -11,6 +11,7 @@ import {
   saveInstincts,
   saveInterests,
   saveProfileType,
+  saveFaceStep,
   saveSuggestedPeople,
   saveWelcome,
   skipOnboarding,
@@ -53,6 +54,10 @@ export const putPeople = asyncHandler(async (req, res) => {
 
 export const putProfileType = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Account type saved", await saveProfileType(req.user, validateProfileType(req.body)));
+});
+
+export const putFace = asyncHandler(async (req, res) => {
+  return sendResponse(res, 200, "Onboarding face step saved", await saveFaceStep(req.user));
 });
 
 export const putTicket = asyncHandler(async (req, res) => {

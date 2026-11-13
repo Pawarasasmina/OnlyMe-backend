@@ -960,11 +960,10 @@ export const getPublishedPublication = asyncHandler(async (req, res) => {
   if (publication.kind === "PREMIUM_WORLD") {
     const activeFilter = { premiumPublication: publication._id, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } };
     const viewerMembershipQuery = req.user?._id ? PremiumMembership.findOne({ ...activeFilter, user: req.user._id }).select("status currentPeriodEnd memberNumber starsPerPeriod firstPeriodStars").lean() : null;
-    const [memberCount, previewMembers, viewerMembership, totalMemberships, circles, includedExperiences] = await Promise.all([
+    const [memberCount, previewMembers, viewerMembership, circles, includedExperiences] = await Promise.all([
       PremiumMembership.countDocuments(activeFilter),
       PremiumMembership.find(activeFilter).sort({ createdAt: 1 }).limit(4).populate("user", "name username avatar").lean(),
       viewerMembershipQuery,
-      PremiumMembership.countDocuments({ premiumPublication: publication._id }),
       GroupConversation.find({ premiumWorld: publication._id, isWorldCircle: true, deletedAt: null }).select("name description members").populate("members", "name username avatar").sort({ createdAt: 1 }).lean(),
       publication.includedExperienceIds?.length ? Publication.find({ _id: { $in: publication.includedExperienceIds }, creator: publication.creator?._id || publication.creator, kind: "SEEN", "pricing.mode": "ONE_TIME", status: { $ne: "REMOVED" } }).select("title summary coverMedia pricing publishedSnapshot.metadata.title publishedSnapshot.metadata.summary publishedSnapshot.metadata.coverMedia publishedSnapshot.metadata.pricing").lean() : [],
     ]);
@@ -987,7 +986,7 @@ export const getPublishedPublication = asyncHandler(async (req, res) => {
       enabled: Boolean(regularPrice),
       firstMonthOfferEnabled: introEnabled,
       introPrice: introEnabled && regularPrice ? Math.max(1, Math.ceil(regularPrice / 2)) : null,
-      nextMemberNumber: totalMemberships + 1,
+      nextMemberNumber: memberCount + 1,
       regularPrice,
     };
     serialized.members = {

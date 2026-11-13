@@ -766,7 +766,15 @@ function giftActivity(gift, direction, source) {
     starsChange: (received ? 1 : -1) * Number(gift.starsAmount || 0),
     event: `${source.toUpperCase()}_GIFT`,
     reference: { type: source === "Dream" ? "DREAM_GIFT" : "CHAT_GIFT", id: String(gift._id) },
-    metadata: { giftName, giftSource: source, giftImageUrl: gift.giftImageUrl || "" },
+    metadata: {
+      giftName,
+      giftSource: source,
+      giftImageUrl: gift.giftImageUrl || "",
+      giftReceiptId: `${source === "Dream" ? "dream" : "chat"}-${gift._id}`,
+      giftMessage: gift.messageText || "",
+      thankedAt: gift.thankedAt || null,
+      ...(gift.giftAnimation || {}),
+    },
     dedupeKey: `${source.toLowerCase()}-gift:${gift._id}`,
     canAcknowledge: received,
   });
@@ -1168,7 +1176,7 @@ export const getFanActivity = asyncHandler(async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   // Bound each source query, but keep the combined candidates until after the
   // direction/category filter. Otherwise newer unrelated events hide Saves.
-  const queryLimit = 100;
+  const queryLimit = Math.min(60, Math.max(30, requestedLimit * page * 2));
   const allActivity = await applyAcknowledgements(await getActivity(req.user._id, wallet, queryLimit, { truncate: false }));
   const filteredActivity = filterActivityItems(allActivity, { direction, filter });
   const activity = filteredActivity.slice(0, requestedLimit * page);

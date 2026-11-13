@@ -14,6 +14,7 @@ import { errorHandler } from "./middleware/errorMiddleware.js";
 import { notFoundHandler } from "./middleware/notFoundMiddleware.js";
 import { assertPrivateStorageConfiguration } from "./services/privateDocumentStorageService.js";
 import mongoose from "mongoose";
+import { uptimeAlertMiddleware } from "./middleware/uptimeAlertMiddleware.js";
 
 assertPrivateStorageConfiguration();
 
@@ -55,6 +56,7 @@ app.use(
 );
 app.use(helmet());
 app.use(morgan(env.nodeEnv === "production" ? "combined" : "dev"));
+app.use(uptimeAlertMiddleware);
 app.get("/api/health/live", (_req, res) => res.status(200).json({ success: true, message: "OnlyMe API process is alive", data: {} }));
 app.get("/api/health/ready", (_req, res) => {
   const ready = !app.get("shuttingDown") && mongoose.connection.readyState === 1;

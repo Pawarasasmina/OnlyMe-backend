@@ -12,6 +12,7 @@ import {
   putInterests,
   putPeople,
   putProfileType,
+  putFace,
   putTicket,
   putWelcome,
 } from "../controllers/onboardingController.js";
@@ -26,6 +27,7 @@ router.get("/", getOnboarding);
 router.put("/welcome", putWelcome);
 router.put("/interests", putInterests);
 router.put("/account-type", putProfileType);
+router.put("/show-your-face", putFace);
 router.put("/instincts", putInstincts);
 router.get("/suggestions", getSuggestions);
 router.get("/suggested-people", getSuggestions);

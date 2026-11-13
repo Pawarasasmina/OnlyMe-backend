@@ -20,6 +20,8 @@ test("pending and rejected applicants remain consumers without creator access", 
 test("Creator and Business profile types expose professional tools without changing financial account type", () => {
   assert.equal(hasCreatorAccess({ role: "fan", profileType: "creator", accountType: "SEED" }), true);
   assert.equal(hasCreatorAccess({ role: "fan", profileType: "business", accountType: "TEST" }), true);
+  assert.equal(hasCreatorAccess({ role: "fan", profileAccountType: "creator", accountType: "REAL" }), true);
+  assert.equal(hasCreatorAccess({ role: "fan", profileAccountType: "business", accountType: "REAL" }), true);
   assert.equal(hasCreatorAccess({ role: "fan", profileType: "personal", accountType: "REAL" }), false);
 });
 
