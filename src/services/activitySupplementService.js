@@ -64,7 +64,8 @@ export async function supplementalActivity(userId, limit = 100) {
     for (const [emoji, rows] of groups) {
       rows.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       const names = rows.slice(0, 2).map(row => row.user.name || row.user.username).join(", ");
-      output.push(base({ id: `photo-reaction-${photo._id}-${emoji}`, type: "photo_reaction_group", filter: "support", title: `${names}${rows.length > 2 ? ` and ${rows.length - 2} others` : ""} reacted ${emoji} to your photo`, createdAt: rows[0].createdAt, actor: actor(rows[0].user), target: { type: "PHOTO", id: id(photo._id), imageUrl: photo.thumbnailUrl || photo.url }, actionPath: `/profile?photo=${photo._id}`, metadata: { reaction: emoji }, aggregate: { count: rows.length } }));
+      const remaining = rows.length - 2;
+      output.push(base({ id: `photo-reaction-${photo._id}-${emoji}`, type: "photo_reaction_group", filter: "support", title: `${names}${remaining > 0 ? ` and ${remaining} ${remaining === 1 ? "other" : "others"}` : ""} reacted ${emoji} to your photo`, createdAt: rows[0].createdAt, actor: actor(rows[0].user), target: { type: "PHOTO", id: id(photo._id), imageUrl: photo.thumbnailUrl || photo.url }, actionPath: `/profile?photo=${photo._id}`, metadata: { reaction: emoji }, aggregate: { count: rows.length } }));
     }
   }
   const reposts = await Repost.find({ $or: [{ originalAuthor: userId }, { user: userId }] }).sort({ createdAt: -1 }).limit(limit).populate("user originalAuthor", "name username avatar status").lean();

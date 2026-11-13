@@ -25,12 +25,13 @@ const defaultPreferences = {
 export function initialOnboardingState() {
   return {
     status: "not_started",
-    version: 2,
+    version: 3,
     currentStep: "welcome",
     startedAt: null,
     welcomeCompleted: false,
     interestsCompleted: false,
     accountTypeCompleted: false,
+    faceAsked: false,
     fillFeedCompleted: false,
     ticketViewed: false,
     instinctsCompleted: false,
@@ -47,6 +48,7 @@ function recoverCurrentStep(state) {
   if (!state.welcomeCompleted) return "welcome";
   if (!state.interestsCompleted) return "interests";
   if (!state.accountTypeCompleted) return "account-type";
+  if ((state.version || 1) >= 3 && !state.faceAsked) return "show-your-face";
   if (!state.fillFeedCompleted) return "fill-feed";
   if (!state.ticketViewed) return "ticket";
   return "complete";
@@ -64,6 +66,7 @@ function normalizedOnboarding(user) {
       welcomeCompleted: Boolean(state.welcomeCompleted),
       interestsCompleted: Boolean(state.interestsCompleted),
       accountTypeCompleted: Boolean(state.accountTypeCompleted),
+      faceAsked: Boolean(state.faceAsked),
       fillFeedCompleted: Boolean(state.fillFeedCompleted),
       ticketViewed: Boolean(state.ticketViewed),
       instinctsCompleted: Boolean(state.instinctsCompleted),
@@ -213,7 +216,7 @@ export async function saveWelcome(user) {
   requireConsumerRole(user);
   const updated = await patchOnboarding(user._id, {
     "onboarding.status": "in_progress",
-    "onboarding.version": 2,
+    "onboarding.version": 3,
     "onboarding.currentStep": "interests",
     ...startFields(user),
     "onboarding.welcomeCompleted": true,
@@ -234,7 +237,7 @@ export async function saveInterests(user, interests) {
 
   const updated = await patchOnboarding(user._id, {
     "onboarding.status": "in_progress",
-    "onboarding.version": 1,
+    "onboarding.version": (user.onboarding?.version || 1) >= 3 ? 3 : 2,
     "onboarding.currentStep": "account-type",
     ...startFields(user),
     "onboarding.welcomeCompleted": true,
@@ -246,13 +249,14 @@ export async function saveInterests(user, interests) {
 export async function saveProfileType(user, selection) {
   requireConsumerRole(user);
   const { category, contactButtons = [], profileType } = typeof selection === "string" ? { category: "", contactButtons: [], profileType: selection } : selection;
+  const usesFaceStep = (user.onboarding?.version || 1) >= 3;
   const updated = await patchOnboarding(user._id, {
     profileType,
     businessContactButtons: profileType === "business" ? contactButtons : [],
     businessContactButtonsConfigured: profileType === "business",
     "onboarding.status": "in_progress",
-    "onboarding.version": 2,
-    "onboarding.currentStep": "fill-feed",
+    "onboarding.version": usesFaceStep ? 3 : 2,
+    "onboarding.currentStep": usesFaceStep ? "show-your-face" : "fill-feed",
     "onboarding.accountTypeCompleted": true,
     ...startFields(user),
   });
@@ -263,6 +267,18 @@ export async function saveProfileType(user, selection) {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
   }
+  return getOnboardingState(updated);
+}
+
+export async function saveFaceStep(user) {
+  requireConsumerRole(user);
+  const updated = await patchOnboarding(user._id, {
+    "onboarding.status": "in_progress",
+    "onboarding.version": 3,
+    "onboarding.currentStep": "fill-feed",
+    "onboarding.faceAsked": true,
+    ...startFields(user),
+  });
   return getOnboardingState(updated);
 }
 
