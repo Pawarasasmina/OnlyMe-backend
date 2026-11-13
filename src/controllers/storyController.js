@@ -30,6 +30,7 @@ import { isPermanentTestStory, storyExpiresAt } from "../services/storyExpirySer
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
+import { recordPrivateShare } from "../services/contentShareService.js";
 
 const activeStory = async (id) => {
   if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid story ID");
@@ -477,6 +478,9 @@ export const createStory = asyncHandler(async (req, res) => {
   }
   await archiveStory(story);
   await notifyMentions(req, story);
+  const sharedRoute = editorMetadata.sharedCard?.destinationRoute || "";
+  const sharedMatch = /^\/(seen|posts)\/([a-f0-9]{24})$/i.exec(sharedRoute) || /^\/wall\?note=([a-f0-9]{24})$/i.exec(sharedRoute);
+  if (sharedMatch) await recordPrivateShare({ user: req.user, contentType: sharedRoute.startsWith("/seen/") ? "seen" : "feed_post", contentId: sharedMatch[2] || sharedMatch[1], route: "STORY" }).catch(() => {});
   await story.populate("creator", "name username avatar isVerified");
   return sendResponse(res, 201, isPermanentTestStory(req.user.accountType) ? "Test story is live without expiry" : "Story is live for 24 hours", { story: serialize(story, req.user._id) });
 });
@@ -598,6 +602,7 @@ export const shareSeenAsStory = asyncHandler(async (req, res) => {
     ...options,
     expiresAt: storyExpiresAt(req.user.accountType),
   });
+  await recordPrivateShare({ user: req.user, contentType: "seen", contentId: publication._id, route: "STORY" }).catch(() => {});
   await archiveStory(story);
   await story.populate("creator", "name username avatar isVerified");
   await story.populate({ path: "sourceSeen", populate: [{ path: "creator", select: "name username avatar isVerified" }, { path: "series", select: "name" }] });

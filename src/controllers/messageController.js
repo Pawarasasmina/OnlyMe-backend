@@ -35,6 +35,7 @@ import { executeFinancialCommand } from "../services/financialCommandService.js"
 import { safeWallet, transferStars } from "../services/walletLedgerService.js";
 import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
 import { giftAllowedForRecipient, giftsForRecipient, giftAnimation, serializeGift } from "../services/giftPreferenceService.js";
+import { recordPrivateShare } from "../services/contentShareService.js";
 
 const userFields = "name username avatar role creatorApprovalStatus isVerified status lastSeenAt";
 const isApprovedCreator = (user) => user?.creatorApprovalStatus === "approved";
@@ -1238,7 +1239,11 @@ export const sendSharedContent = asyncHandler(async (req, res) => {
   }
 
   if (!sent.length) throw new ApiError(400, failed[0]?.message || "Could not share this content");
-  return sendResponse(res, failed.length ? 207 : 201, failed.length ? "Some shares could not be sent" : "Shared content sent", { sent, failed });
+  let privateShareCount;
+  if (["feed_post", "seen"].includes(snapshot.contentType)) {
+    try { ({ privateShareCount } = await recordPrivateShare({ user: req.user, contentType: snapshot.contentType, contentId: snapshot.contentId, route: "CHAT" })); } catch { privateShareCount = undefined; }
+  }
+  return sendResponse(res, failed.length ? 207 : 201, failed.length ? "Some shares could not be sent" : "Shared content sent", { sent, failed, privateShareCount });
 });
 
 export const searchMessagePeople = asyncHandler(async (req, res) => {

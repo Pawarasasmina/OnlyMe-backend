@@ -123,6 +123,8 @@ const userSchema = new mongoose.Schema(
     sellingRestrictedUntil: { type: Date, default: null, index: true },
     sellingRestrictionReason: { type: String, trim: true, maxlength: 2000, default: "" },
     profileModerationHiddenAt: { type: Date, default: null, index: true },
+    shareCountingRestrictedAt: { type: Date, default: null, index: true },
+    shareCountingRestrictionReason: { type: String, trim: true, maxlength: 120, default: "" },
     lastSeenAt: { type: Date, default: null },
     pinnedMessageGroup: { type: mongoose.Schema.Types.ObjectId, ref: "GroupConversation", default: null },
     activeStatus: {

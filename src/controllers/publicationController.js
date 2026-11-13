@@ -748,7 +748,7 @@ export const getSeenInsights = asyncHandler(async (req, res) => {
       views: engagementViews,
       uniqueViewers: uniqueViewers.length,
       saves: engagement.SAVE || 0,
-      shares: engagement.SHARE || 0,
+      shares: Number(publication.privateShareCount || 0),
       comments: engagement.COMMENT || 0,
       reactions: engagement.REACTION || 0,
       walked: engagement.WALKED || 0,
@@ -898,6 +898,7 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
         location: [profile.city, profile.country].filter(Boolean).join(", "),
       },
       engagement: {
+        privateShareCount: Number(serialized.privateShareCount || 0),
         reactionCount: counts.REACTION || 0,
         reactionBreakdown: reactionSummary.reactionBreakdown,
         topReactions: reactionSummary.topReactions.slice(0, 3),

@@ -48,7 +48,7 @@ const schema = new mongoose.Schema({
   pricingLastChangedAt: { type: Date, default: null },
   priceHistory: { type: [priceHistorySchema], default: [] },
   previewPolicy: { type: String, enum: ["ALL_FREE", "ONE_CHAPTER", "ONE_OR_TWO_CHAPTERS"], required: true },
-  status: { type: String, enum: PUBLICATION_STATUSES, default: "DRAFT", index: true }, draftVersion: { type: Number, default: 1, min: 1 }, submittedVersion: { type: Number, default: null }, publishedVersion: { type: Number, default: null }, statusVersion: { type: Number, default: 0, min: 0 },
+  status: { type: String, enum: PUBLICATION_STATUSES, default: "DRAFT", index: true }, privateShareCount: { type: Number, min: 0, default: 0 }, draftVersion: { type: Number, default: 1, min: 1 }, submittedVersion: { type: Number, default: null }, publishedVersion: { type: Number, default: null }, statusVersion: { type: Number, default: 0, min: 0 },
   submittedSnapshot: { type: snapshotSchema, default: undefined, select: false }, publishedSnapshot: { type: snapshotSchema, default: undefined },
   submittedAt: Date, reviewedAt: Date, reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }, creatorVisibleFeedback: { type: String, default: "", maxlength: 2000 }, internalModerationNote: { type: String, default: "", maxlength: 2000, select: false }, publishedAt: Date, archivedAt: Date, lastTransitionId: { type: String, default: "" },
   seedSource: { type: String, trim: true, default: "", index: true },

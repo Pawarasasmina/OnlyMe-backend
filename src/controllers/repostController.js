@@ -7,6 +7,9 @@ import WallEngagement from "../models/WallEngagement.js";
 import WallShareEngagement from "../models/WallShareEngagement.js";
 import ProfileMedia from "../models/ProfileMedia.js";
 import Repost from "../models/Repost.js";
+import Notification from "../models/Notification.js";
+import CreatorProfile from "../models/CreatorProfile.js";
+import FanProfile from "../models/FanProfile.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
@@ -39,10 +42,25 @@ async function resolveTarget(kind, id, requestedModel) {
 export const toggleRepost = asyncHandler(async (req, res) => {
   const target = await resolveTarget(req.params.kind, req.params.id, req.body.targetModel);
   if (!target) throw new ApiError(404, "Repost target not found");
-  if (String(target.author) === String(req.user._id)) throw new ApiError(409, "You cannot repost your own content");
+  if (String(target.author) === String(req.user._id)) throw new ApiError(409, "It's already on your profile");
   const filter = { user: req.user._id, kind: req.params.kind, targetId: target.item._id };
   const existing = await Repost.findOne(filter);
   if (existing) await existing.deleteOne();
   else await Repost.create({ ...filter, targetModel: target.model, originalAuthor: target.author });
-  return sendResponse(res, 200, existing ? "Repost removed" : "Reposted to your profile", { reposted: !existing });
+  const repostCount = await Repost.countDocuments({ kind: req.params.kind, targetId: target.item._id, targetModel: target.model });
+  const dedupeKey = `repost:${req.params.kind}:${target.model}:${target.item._id}:${req.user._id}`;
+  if (existing) await Notification.deleteOne({ dedupeKey });
+  else {
+    const [creatorProfile, fanProfile] = await Promise.all([
+      CreatorProfile.findOne({ user: target.author }).select("notificationPreferences").lean(),
+      FanProfile.findOne({ user: target.author }).select("notificationPreferences").lean(),
+    ]);
+    const preferences = creatorProfile?.notificationPreferences || fanProfile?.notificationPreferences || {};
+    if (preferences.inApp !== false && preferences.reposts !== false) {
+      const label = req.params.kind === "cm" ? "comment" : req.params.kind === "photo" ? "photo" : req.params.kind === "seen" ? "Seen" : "note";
+      await Notification.findOneAndUpdate({ dedupeKey }, { $set: { user: target.author, actor: req.user._id, type: "content_repost", title: `${req.user.name || req.user.username || "Someone"} reposted your ${label}`, message: "", target: { type: target.model, id: target.item._id }, dedupeKey } }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    }
+  }
+  req.app.get("io")?.to(`user:${target.author}`).emit("activity:updated");
+  return sendResponse(res, 200, existing ? "Repost removed" : "Reposted to your profile", { reposted: !existing, repostCount });
 });

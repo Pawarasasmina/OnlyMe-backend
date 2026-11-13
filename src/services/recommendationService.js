@@ -105,11 +105,16 @@ function candidateData(item, surface) {
   const topics = normalized([item.category, item.creator?.category, ...(item.categories || []), ...(item.creator?.categories || []), ...(item.tags || []), ...(item.creator?.tags || []), item.context]);
   const date = item.publishedAt || item.feedCreatedAt || item.createdAt || item.updatedAt;
   const engagement = item.engagement || {};
+  const views = Number(item.viewCount || engagement.viewCount || 0);
+  const privateShares = Number(item.privateShareCount || engagement.privateShareCount || 0);
+  const shareRateSignal = privateShares > 0 ? (privateShares / Math.max(10, views)) * 120 : 0;
   const quality = Number(item.qualityScore || 0)
-    + Number(item.viewCount || engagement.viewCount || 0)
+    + views
     + Number(item.reactionCount || engagement.reactionCount || item.supportCount || 0) * 2
     + Number(item.saveCount || engagement.saveCount || 0) * 5
     + Number(item.shareCount || engagement.shareCount || 0) * 4
+    + privateShares * 8
+    + shareRateSignal
     + Number(item.commentCount || engagement.commentCount || 0) * 2
     + Number(item.followers || 0);
   const creatorLocation = item.creator?.location;

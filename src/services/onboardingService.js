@@ -252,6 +252,7 @@ export async function saveProfileType(user, selection) {
   const usesFaceStep = (user.onboarding?.version || 1) >= 3;
   const updated = await patchOnboarding(user._id, {
     profileType,
+    ...(profileType === "personal" ? {} : { profileCategory: category }),
     businessContactButtons: profileType === "business" ? contactButtons : [],
     businessContactButtonsConfigured: profileType === "business",
     "onboarding.status": "in_progress",
@@ -263,7 +264,7 @@ export async function saveProfileType(user, selection) {
   if (["creator", "business"].includes(profileType)) {
     await CreatorProfile.findOneAndUpdate(
       { user: user._id },
-      { $set: { category, categories: [category] }, $setOnInsert: { user: user._id, verificationStatus: "pending" } },
+      { $set: { category, categories: [category], profileCategory: category }, $setOnInsert: { user: user._id, verificationStatus: "pending" } },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
   }
