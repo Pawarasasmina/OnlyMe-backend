@@ -14,6 +14,7 @@ import { validateProfileAccountType } from "../validators/profileAccountTypeVali
 import UserBlock from "../models/UserBlock.js";
 import Content from "../models/Content.js";
 import Gift from "../models/Gift.js";
+import GiftCategory from "../models/GiftCategory.js";
 import GiftPreference from "../models/GiftPreference.js";
 import { serializeGift } from "../services/giftPreferenceService.js";
 import { serializeContent } from "../services/contentAccessService.js";
@@ -441,6 +442,7 @@ export const updateMyNotificationSettings = asyncHandler(async (req, res) => {
     { upsert: true, runValidators: true }
   );
   const profile = await ensureRoleProfile(req.user);
+  req.app.get("io")?.to(`user:${req.user._id}`).emit("activity:updated", { preferencesChanged: true });
   return sendResponse(res, 200, "Notification settings updated", {
     role,
     notificationPreferences: normalizeNotificationPreferences(role, profile.notificationPreferences || {}),
@@ -448,10 +450,15 @@ export const updateMyNotificationSettings = asyncHandler(async (req, res) => {
 });
 
 export const getMyGiftSettings = asyncHandler(async (req, res) => {
-  const [gifts, preference] = await Promise.all([
-    Gift.find({ isActive: true }).sort({ sortOrder: 1, createdAt: 1 }).lean(),
+  const [activeCategoryIds, preference] = await Promise.all([
+    GiftCategory.find({ isActive: true }).distinct("_id"),
     GiftPreference.findOne({ user: req.user._id }).select("enabledGifts").lean(),
   ]);
+  const gifts = await Gift.find({ isActive: true, category: { $in: activeCategoryIds } })
+    .populate({ path: "category", match: { isActive: true } })
+    .sort({ sortOrder: 1, createdAt: 1 })
+    .lean();
+  gifts.sort((left, right) => Number(left.category?.sortOrder || 100000) - Number(right.category?.sortOrder || 100000) || Number(left.sortOrder || 0) - Number(right.sortOrder || 0));
   const enabled = preference ? new Set(preference.enabledGifts.map(String)) : null;
   return sendResponse(res, 200, "Gift settings fetched", { gifts: gifts.map((gift) => ({ ...serializeGift(gift), enabled: enabled ? enabled.has(String(gift._id)) : true })) });
 });
@@ -463,7 +470,12 @@ export const updateMyGiftSettings = asyncHandler(async (req, res) => {
   const activeIds = await Gift.distinct("_id", { _id: { $in: ids }, isActive: true });
   if (activeIds.length !== ids.length) throw new ApiError(400, "Gift selection contains an unavailable gift");
   await GiftPreference.findOneAndUpdate({ user: req.user._id }, { $set: { enabledGifts: activeIds } }, { upsert: true, new: true, runValidators: true });
-  const gifts = await Gift.find({ isActive: true }).sort({ sortOrder: 1, createdAt: 1 }).lean();
+  const activeCategoryIds = await GiftCategory.find({ isActive: true }).distinct("_id");
+  const gifts = await Gift.find({ isActive: true, category: { $in: activeCategoryIds } })
+    .populate({ path: "category", match: { isActive: true } })
+    .sort({ sortOrder: 1, createdAt: 1 })
+    .lean();
+  gifts.sort((left, right) => Number(left.category?.sortOrder || 100000) - Number(right.category?.sortOrder || 100000) || Number(left.sortOrder || 0) - Number(right.sortOrder || 0));
   const enabled = new Set(activeIds.map(String));
   return sendResponse(res, 200, "Gift settings updated", { gifts: gifts.map((gift) => ({ ...serializeGift(gift), enabled: enabled.has(String(gift._id)) })) });
 });
