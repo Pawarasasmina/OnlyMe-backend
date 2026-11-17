@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 const schema = new mongoose.Schema({
   author: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   key: { type: String, required: true },
+  postId: { type: mongoose.Schema.Types.ObjectId, ref: "FeedPost", default: null },
   postType: { type: String, default: "" },
   textHash: { type: String, default: "" },
   normalizedText: { type: String, default: "" },

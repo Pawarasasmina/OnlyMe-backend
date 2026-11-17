@@ -17,6 +17,9 @@ test("Wall hints are read and atomically dismissed only for the authenticated ac
   await dismissWallHint("one", "need_help");
   await dismissWallHint("one", "need_help");
   assert.deepEqual(await getWallHintDismissals("one"), ["need_help"]);
+  assert.deepEqual(accounts.get("one"), ["tip:wk:help"]);
+  accounts.set("one", ["need_help", "tip:wk:rec"]);
+  assert.deepEqual(await getWallHintDismissals("one"), ["need_help", "recommendation"]);
   assert.deepEqual(await getWallHintDismissals("two"), []);
   await assert.rejects(dismissWallHint("one", "__proto__"), { statusCode: 400 });
   assert.ok(User.schema.path("wallHintDismissals"));
