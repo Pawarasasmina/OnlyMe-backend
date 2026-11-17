@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import PlatformSetting from "./PlatformSetting.js";
 
 const messageReportSchema = new mongoose.Schema({
-  reporter: { type: mongoose.Schema.Types.ObjectId, ref: "User", required() { return this.source !== "UPLOAD_SCAN"; }, default: null, index: true },
+  reporter: { type: mongoose.Schema.Types.ObjectId, ref: "User", required() { const source = this.source || this.getUpdate?.()?.$setOnInsert?.source || this.getUpdate?.()?.$set?.source; return !["UPLOAD_SCAN", "AUTOMATED_DUPLICATE"].includes(source); }, default: null, index: true },
   reportedUser: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   scope: { type: String, enum: ["MESSAGE", "GROUP_MESSAGE", "CONVERSATION", "FEED_POST", "COMMENT", "PROFILE", "PROFILE_MEDIA", "SEEN", "CHAPTER", "WORLD", "STORY", "GIFT", "DIRECT_ACCESS"], required: true },
   message: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
@@ -24,7 +24,8 @@ const messageReportSchema = new mongoose.Schema({
   details: { type: String, trim: true, maxlength: 1000, default: "" },
   snapshot: { type: mongoose.Schema.Types.Mixed, required: true, select: false },
   status: { type: String, enum: ["RECEIVED", "REVIEWING", "RESOLVED", "CLOSED"], default: "RECEIVED", index: true },
-  source: { type: String, enum: ["USER_REPORT", "UPLOAD_SCAN", "DIRECT_ACCESS_DISPUTE"], default: "USER_REPORT", index: true },
+  source: { type: String, enum: ["USER_REPORT", "UPLOAD_SCAN", "DIRECT_ACCESS_DISPUTE", "AUTOMATED_DUPLICATE"], default: "USER_REPORT", index: true },
+  qualifiesForWallAutoHide: { type: Boolean, default: false },
   priority: { type: String, enum: ["URGENT", "STANDARD"], default: "STANDARD", index: true },
   priorityRank: { type: Number, default: 1, index: true },
   dueAt: { type: Date, default: null, index: true },
@@ -33,6 +34,7 @@ const messageReportSchema = new mongoose.Schema({
   reviewingAt: { type: Date, default: null },
   resolvedAt: { type: Date, default: null },
   resolution: {
+    falseReport: { type: Boolean, default: false },
     action: { type: String, enum: ["NO_ACTION", "HIDDEN", "REMOVED", "WARNING", "POSTING_RESTRICTED", "SELLING_RESTRICTED", "MESSAGING_RESTRICTED", "ACCOUNT_RESTRICTED", "SUSPENDED", "BANNED", "RESTRICTION_LIFTED"], default: null },
     note: { type: String, trim: true, maxlength: 2000, default: "" },
     restrictionUntil: { type: Date, default: null },
@@ -61,8 +63,11 @@ messageReportSchema.pre("validate", async function applySla() {
   this.$locals.autoHide = (settings?.value?.autoHideCategories || ["CHILD_SAFETY", "SELF_HARM", "DEFAMATION"]).includes(this.reason);
 });
 messageReportSchema.post("save", async function autoHideUrgent(doc) {
+  // Wall user reports use the three-qualified-report policy. Urgent reports
+  // retain their priority/SLA and scans retain their separate safety handling.
+  if (doc.scope === "FEED_POST" && doc.source === "USER_REPORT") return;
   if (!doc.$locals.wasNew || !doc.$locals.autoHide || doc.autoHiddenAt) return;
-  if (doc.feedPost) { const { default: FeedPost } = await import("./FeedPost.js"); await FeedPost.updateOne({ _id: doc.feedPost }, { $set: { status: "archived", archivedAt: new Date() } }); }
+  if (doc.feedPost && doc.scope === "FEED_POST") { const { default: FeedPost } = await import("./FeedPost.js"); await FeedPost.updateOne({ _id: doc.feedPost }, { $set: { moderationHiddenAt: new Date() } }); }
   if (doc.publication) { const { default: Publication } = await import("./Publication.js"); await Publication.updateOne({ _id: doc.publication }, { $set: { status: "ARCHIVED", archivedAt: new Date() } }); }
   if (doc.story) { const { default: Story } = await import("./Story.js"); await Story.updateOne({ _id: doc.story }, { $set: { audience: "only_me" } }); }
   if (doc.message) { const { default: Message } = await import("./Message.js"); await Message.updateOne({ _id: doc.message }, { $set: { deletedAt: new Date() } }); }
@@ -71,6 +76,13 @@ messageReportSchema.post("save", async function autoHideUrgent(doc) {
   if (doc.scope === "PROFILE" && doc.reportedUser) { const { default: User } = await import("./User.js"); await User.updateOne({ _id: doc.reportedUser }, { $set: { profileModerationHiddenAt: new Date() } }); }
   await mongoose.model("MessageReport").updateOne({ _id: doc._id }, { $set: { autoHiddenAt: new Date() } });
 });
+messageReportSchema.post("save", async function updateWallReportState(doc) {
+  if (doc.scope !== "FEED_POST") return;
+  const { applyWallReportOutcome } = await import("../services/wallReportService.js");
+  await applyWallReportOutcome(doc);
+});
+messageReportSchema.index({ scope: 1, reportedUser: 1, status: 1, feedPost: 1 });
+messageReportSchema.index({ scope: 1, reporter: 1, status: 1, "resolution.falseReport": 1 });
 messageReportSchema.index({ reporter: 1, groupMessage: 1 }, { unique: true, partialFilterExpression: { scope: "GROUP_MESSAGE" } });
 messageReportSchema.index({ reporter: 1, feedPost: 1 }, { unique: true, partialFilterExpression: { scope: "FEED_POST" } });
 messageReportSchema.index({ reporter: 1, commentId: 1 }, { unique: true, partialFilterExpression: { scope: "COMMENT" } });

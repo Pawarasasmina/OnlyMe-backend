@@ -1,3 +1,4 @@
+import { publicWallModerationFilter } from "../services/wallModerationAccess.js";
 import Content from "../models/Content.js";
 import Publication from "../models/Publication.js";
 import CallSession from "../models/CallSession.js";
@@ -835,7 +836,7 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
     WallShareEngagement.find({ user: { $ne: fanId }, type: { $in: ["REACTION", "COMMENT", "SAVE"] } }).sort({ updatedAt: -1, createdAt: -1 }).limit(limit * 6).populate("user", "name username avatar role status").populate({ path: "share", match: { user: fanId, type: "SHARE" }, select: "post user text createdAt updatedAt", populate: { path: "post", match: { status: "PUBLISHED" }, select: "text creator" } }).lean(),
     FeedPost.find({
       author: fanId,
-      status: "published",
+      status: "published", visibility: "public", ...publicWallModerationFilter,
       deletedAt: null,
       $or: [
         { reactions: { $elemMatch: { user: { $ne: fanId } } } },
@@ -844,7 +845,7 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
       ],
     }).sort({ updatedAt: -1, createdAt: -1 }).limit(limit * 4).populate("author", "name username avatar role status").populate("reactions.user", "name username avatar role status").populate("comments.user", "name username avatar role status").populate("saves.user", "name username avatar role status").lean(),
     FeedPost.find({
-      status: "published",
+      status: "published", visibility: "public", ...publicWallModerationFilter,
       deletedAt: null,
       author: { $ne: fanId },
       $or: [

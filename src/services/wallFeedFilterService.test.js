@@ -40,13 +40,13 @@ test("popularity uses public activity and pagination counts original and shared 
 });
 
 
-test("every Wall sort keeps solved posts below active posts without excluding them", () => {
+test("every Wall sort excludes closed posts before pagination", () => {
   for (const sort of ["recent", "popular", "nearby"]) {
     const pipeline = wallFeedPipeline({ status: "published" }, { sort, near: "Dubai" }, [], 1, 20);
     const order = pipeline.find((stage) => stage.$sort).$sort;
     assert.equal(Object.keys(order)[0], "__solved");
     assert.equal(order.__solved, 1);
-    assert.equal(pipeline[0].$match.resolvedAt, undefined);
+    assert.deepEqual(pipeline[0].$match.$expr.$and[0], { $eq: [{ $ifNull: ["$resolvedAt", null] }, null] });
     const rank = pipeline.find((stage) => stage.$set?.__solved).$set.__solved;
     assert.deepEqual(rank.$cond[0].$and[0].$eq[0], { $ifNull: ["$resolvedAt", null] });
     assert.deepEqual(rank.$cond.slice(1), [0, 1]);
@@ -68,4 +68,19 @@ test("Right now intersects with the selected type, topic and area", () => {
   assert.equal(match.$and[3].$or[0].topic, "Meet people");
   assert.equal(match.$and[4].location.$regex, "Dubai");
   assert.deepEqual(readWallFeedFilters({ rightNow: "false" }).match, {});
+});
+
+test("final icon filtering unions every selected type, topic and active Right now", () => {
+  const { match } = readWallFeedFilters({ matchMode: "any", type: "need_help,buy_sell", topic: "meet_people,food", rightNow: "true", location: "Dubai" });
+  const choices = match.$and[0].$or;
+  assert.equal(choices.length, 5);
+  assert.equal(choices[0].$or[0].postType, "Need Help");
+  assert.equal(choices[1].$or[0].postType, "Buy & Sell");
+  assert.equal(choices[2].$or[0].topic, "Meet people");
+  assert.equal(choices[3].$or[0].topic, "Food");
+  assert.equal(choices[4].$and[0].$or[0].rightNow, true);
+  assert.ok(choices[4].$and[1].$expr);
+  assert.equal(match.$and[1].location.$regex, "Dubai");
+  assert.throws(() => readWallFeedFilters({ matchMode: "any", type: "need_help,bad" }), { statusCode: 400 });
+  assert.throws(() => readWallFeedFilters({ matchMode: "bad" }), { statusCode: 400 });
 });

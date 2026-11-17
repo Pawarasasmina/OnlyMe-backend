@@ -1,4 +1,5 @@
 import { wallActiveExpression } from "./wallLifecycleService.js";
+import { WALL_UPHELD_ACTIONS } from "./wallReportService.js";
 import ApiError from "../utils/ApiError.js";
 
 export const WALL_TYPES = {
@@ -28,7 +29,7 @@ export const WALL_TOPICS = {
 };
 const clean = (value, max = 120) => String(value || "").trim().slice(0, max);
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const key = (value) => clean(value).toLowerCase().replace(/[\s/-]+/g, "_");
+const key = (value) => clean(value, 500).toLowerCase().replace(/[\s/-]+/g, "_");
 
 function categoryMatch(field, option) {
   return { $or: [
@@ -40,10 +41,13 @@ function categoryMatch(field, option) {
 export function readWallFeedFilters(query = {}) {
   const type = key(query.type || "all");
   const topic = key(query.topic || "all");
+  const types = [...new Set(type.split(",").filter(value => value !== "all"))];
+  const topics = [...new Set(topic.split(",").filter(value => value !== "all"))];
   const scope = key(query.scope || "worldwide");
   const sort = key(query.sort || "recent");
-  if (type !== "all" && !Object.hasOwn(WALL_TYPES, type)) throw new ApiError(400, "Unsupported Wall type");
-  if (topic !== "all" && !Object.hasOwn(WALL_TOPICS, topic)) throw new ApiError(400, "Unsupported Wall topic");
+  if (types.some(value => !Object.hasOwn(WALL_TYPES, value))) throw new ApiError(400, "Unsupported Wall type");
+  if (topics.some(value => !Object.hasOwn(WALL_TOPICS, value))) throw new ApiError(400, "Unsupported Wall topic");
+  if (query.matchMode && !["any", "all"].includes(query.matchMode)) throw new ApiError(400, "Unsupported Wall match mode");
   if (!["worldwide", "nearby", "city", "country", "custom"].includes(scope)) throw new ApiError(400, "Unsupported Wall location scope");
   if (!["recent", "popular", "nearby"].includes(sort)) throw new ApiError(400, "Unsupported Wall sort");
   const location = clean(query.location || query.city);
@@ -51,11 +55,21 @@ export function readWallFeedFilters(query = {}) {
   if (scope !== "worldwide" && !location && !(scope === "nearby" && near)) throw new ApiError(400, "Choose a location for this filter");
   if ((scope === "nearby" || sort === "nearby") && !near) throw new ApiError(400, "Choose a city to use Nearby");
   const and = [];
-  if (type !== "all") and.push(type === "right_now" ? { $or: [{ rightNow: true }, categoryMatch("postType", WALL_TYPES[type])] } : categoryMatch("postType", WALL_TYPES[type]));
-  const rightNow = type === "right_now" || query.rightNow === true || ["true", "1"].includes(query.rightNow);
-  if (rightNow && type !== "right_now") and.push({ $or: [{ rightNow: true }, categoryMatch("postType", WALL_TYPES.right_now)] });
-  if (rightNow) and.push({ $expr: wallActiveExpression() });
-  if (topic !== "all") and.push(categoryMatch("topic", WALL_TOPICS[topic]));
+  const rightNow = types.includes("right_now") || query.rightNow === true || ["true", "1"].includes(query.rightNow);
+  const live = { $or: [{ rightNow: true }, categoryMatch("postType", WALL_TYPES.right_now)] };
+  if (query.matchMode === "any") {
+    const choices = [
+      ...types.filter(value => value !== "right_now").map(value => categoryMatch("postType", WALL_TYPES[value])),
+      ...topics.map(value => categoryMatch("topic", WALL_TOPICS[value])),
+      ...(rightNow ? [{ $and: [live, { $expr: wallActiveExpression() }] }] : []),
+    ];
+    if (choices.length) and.push({ $or: choices });
+  } else {
+    if (types.length) and.push(types.length === 1 ? (type === "right_now" ? live : categoryMatch("postType", WALL_TYPES[type])) : { $or: types.map(value => value === "right_now" ? live : categoryMatch("postType", WALL_TYPES[value])) });
+    if (rightNow && !types.includes("right_now")) and.push(live);
+    if (rightNow) and.push({ $expr: wallActiveExpression() });
+    if (topics.length) and.push(topics.length === 1 ? categoryMatch("topic", WALL_TOPICS[topic]) : { $or: topics.map(value => categoryMatch("topic", WALL_TOPICS[value])) });
+  }
   const matchLocation = scope === "nearby" ? near : location;
   // A legacy location parameter is still supported even without a scope.
   if (matchLocation) and.push({ location: { $regex: escapeRegex(matchLocation), $options: "i" } });
@@ -66,11 +80,22 @@ export function readWallFeedFilters(query = {}) {
 
 export function wallFeedPipeline(match, { sort, near }, blockedIds, page, limit) {
   const recent = { "__activity.createdAt": -1, _id: -1, "__activity.shareId": -1 };
-  const order = { __solved: 1, ...(sort === "popular" ? { __popularity: -1, ...recent } : sort === "nearby" ? { __nearby: 1, ...recent } : recent) };
+  const order = { __solved: 1, ...(sort === "popular" ? { __trustPenalty: 1, __popularity: -1, ...recent } : sort === "nearby" ? { __trustPenalty: 1, __nearby: 1, ...recent } : recent) };
   const publicCount = (field, extra = {}) => ({ $size: { $filter: { input: { $ifNull: [`$${field}`, []] }, as: "entry", cond: { $and: [{ $ne: ["$$entry.actorAccountType", "TEST"] }, ...Object.entries(extra).map(([name, value]) => ({ $eq: [{ $ifNull: [`$$entry.${name}`, null] }, value] }))] } } } });
   return [
-    { $match: match },
+    { $match: { ...match, moderationHiddenAt: null, moderationStatus: { $nin: ["PENDING_REVIEW", "REJECTED"] }, $expr: match.$expr ? { $and: [match.$expr, wallActiveExpression()] } : wallActiveExpression() } },
+    { $lookup: { from: "users", localField: "author", foreignField: "_id", as: "__authors" } },
+    { $lookup: { from: "messagereports", let: { author: "$author" }, pipeline: [
+      { $match: { scope: "FEED_POST", status: "RESOLVED", resolvedAt: { $gte: new Date(Date.now() - 90 * 86400000) }, "resolution.action": { $in: WALL_UPHELD_ACTIONS }, $expr: { $eq: ["$reportedUser", "$$author"] } } },
+      { $group: { _id: "$feedPost" } }, { $count: "count" },
+    ], as: "__upheldReports" } },
     { $set: {
+      __trustPenalty: { $add: [
+        { $cond: [{ $gte: [{ $size: { $ifNull: ["$outdatedVoters", []] } }, 3] }, 2, 0] },
+        { $cond: [{ $regexMatch: { input: { $ifNull: [{ $arrayElemAt: ["$__authors.avatar", 0] }, ""] }, regex: "^(?:$|data:image/svg|.*(?:default-avatar|placeholder-avatar))", options: "i" } }, 1, 0] },
+        { $multiply: [2, { $min: [3, { $ifNull: [{ $arrayElemAt: ["$__upheldReports.count", 0] }, 0] }] }] },
+        { $min: [2, { $ifNull: ["$qualifyingReportCount", 0] }] },
+      ] },
       __solved: { $cond: [wallActiveExpression(), 0, 1] },
       __popularity: { $add: [publicCount("reactions"), publicCount("comments", { deletedAt: null }), publicCount("shares")] },
       __nearby: { $cond: [{ $regexMatch: { input: { $ifNull: ["$location", ""] }, regex: escapeRegex(near), options: "i" } }, 0, 1] },
@@ -84,10 +109,10 @@ export function wallFeedPipeline(match, { sort, near }, blockedIds, page, limit)
     { $lookup: { from: "users", localField: "__activity.user", foreignField: "_id", as: "__sharers" } },
     { $set: { __sharer: { $arrayElemAt: ["$__sharers", 0] } } },
     { $match: { $or: [{ "__activity.shareId": null }, { "__sharer._id": { $exists: true }, "__sharer.status": { $in: ["active", null] } }] } },
-    { $project: { _id: 1, __activity: 1, __solved: 1, __popularity: 1, __nearby: 1, "__sharer._id": 1, "__sharer.name": 1, "__sharer.username": 1, "__sharer.avatar": 1, "__sharer.isVerified": 1 } },
+    { $project: { _id: 1, __activity: 1, __solved: 1, __popularity: 1, __nearby: 1, __trustPenalty: 1, "__sharer._id": 1, "__sharer.name": 1, "__sharer.username": 1, "__sharer.avatar": 1, "__sharer.isVerified": 1 } },
     { $sort: order },
     { $facet: {
-      items: [{ $skip: (page - 1) * limit }, { $limit: limit }, { $project: { _id: 1, __activity: 1, "__sharer._id": 1, "__sharer.name": 1, "__sharer.username": 1, "__sharer.avatar": 1, "__sharer.isVerified": 1 } }],
+      items: [{ $skip: (page - 1) * limit }, { $limit: limit }, { $project: { _id: 1, __activity: 1, __trustPenalty: 1, "__sharer._id": 1, "__sharer.name": 1, "__sharer.username": 1, "__sharer.avatar": 1, "__sharer.isVerified": 1 } }],
       total: [{ $count: "count" }],
     } },
   ];

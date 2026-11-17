@@ -1,4 +1,5 @@
 import { restoreFeedPost } from "../controllers/postController.js";
+import { flagRecommendationOutdated } from "../controllers/wallFreshnessController.js";
 import { getWallContentLanguage, translateWallPostContent, wallTranslationLimiter } from "../controllers/wallTranslationController.js";
 import { Router } from "express";
 import {
@@ -53,6 +54,7 @@ router.put("/:id/save", protect, togglePostSave);
 router.put("/:id/share", protect, togglePostShare);
 router.post("/:id/hide", protect, hideFeedPost);
 router.post("/:id/report", protect, reportFeedPost);
+router.post("/:id/outdated", ...consumerOnly, flagRecommendationOutdated);
 router.post("/:id/archive", ...consumerOnly, archiveFeedPost);
 router.post("/:id/restore", ...consumerOnly, restoreFeedPost);
 router.put("/:id/block-author", protect, blockPostAuthor);
@@ -62,7 +64,7 @@ router.put("/:id/comments/:commentId/reaction", protect, updatePostCommentReacti
 router.delete("/:id/comments/:commentId", protect, deletePostComment);
 router.put("/:id/resolution", ...consumerOnly, setPostResolution);
 router.post("/:id/bump", ...consumerOnly, bumpFeedPost);
-router.put("/:id", ...consumerOnly, updateFeedPost);
+router.put("/:id", ...consumerOnly, uploadFeedPostMedia.fields([{ name: "media", maxCount: 4 }, { name: "voice", maxCount: 1 }]), updateFeedPost);
 router.delete("/:id", ...consumerOnly, requireNoContentHold, deleteFeedPost);
 
 export default router;

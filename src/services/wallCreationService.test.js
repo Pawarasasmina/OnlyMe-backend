@@ -31,6 +31,6 @@ test("closure boundaries agree for independent Right now, legacy notes, events a
     assert.equal(wallClosedReason({...p,publishedAt:new Date(now-DAY_MS)},now),"expired");
   }
   assert.equal(wallClosedReason({postType:"Event",publishedAt:new Date(now-7*DAY_MS)},now),"ended");
-  assert.equal(wallClosedReason({postType:"Offering",publishedAt:new Date(now-50*DAY_MS)},now),"");
+  assert.equal(wallClosedReason({postType:"Offering",publishedAt:new Date(now-50*DAY_MS)},now),"expired");
   assert.equal(wallClosedReason({resolvedAt:new Date()},now),"resolved");
 });

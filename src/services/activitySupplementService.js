@@ -1,3 +1,4 @@
+import { publicWallModerationFilter } from "./wallModerationAccess.js";
 import FeedPost from "../models/FeedPost.js";
 import mongoose from "mongoose";
 import Repost from "../models/Repost.js";
@@ -14,7 +15,7 @@ const base = item => ({ direction: "received", canAcknowledge: false, ...item, f
 // Resolve current content rather than keeping a stale copy after deletion.
 export async function supplementalActivity(userId, limit = 100) {
   const [posts, seen, wall, shares, photos] = await Promise.all([
-    FeedPost.find({ status: "published", deletedAt: null, "comments.user": userId }).sort({ updatedAt: -1 }).limit(limit).populate("comments.user", "name username avatar").lean(),
+    FeedPost.find({ status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null, "comments.user": userId }).sort({ updatedAt: -1 }).limit(limit).populate("comments.user", "name username avatar").lean(),
     SeenEngagement.find({ user: userId, type: "COMMENT" }).sort({ createdAt: -1 }).limit(limit).populate({ path: "publication", match: { status: "PUBLISHED" }, select: "creator visibility title kind publishedSnapshot" }).lean(),
     WallEngagement.find({ user: userId, type: "COMMENT" }).sort({ createdAt: -1 }).limit(limit).populate({ path: "post", match: { status: "PUBLISHED" }, select: "creator text" }).lean(),
     WallShareEngagement.find({ user: userId, type: "COMMENT" }).sort({ createdAt: -1 }).limit(limit).populate({ path: "share", populate: { path: "post", match: { status: "PUBLISHED" } } }).lean(),
