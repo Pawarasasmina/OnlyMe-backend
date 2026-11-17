@@ -34,8 +34,9 @@ test("confirmation is owner-only and excludes expired and sold notes", () => {
 });
 test("conditional bump retains publication date, content, comments and reactions", async t => {
   const publishedAt = new Date(Date.now() - 15 * day);
-  const post = new FeedPost({ _id: id, author: owner, text: "Bicycle, 200 AED", postType: "Buy & Sell", status: "published", publishedAt, comments: [{ user: other, text: "Can I collect tomorrow?" }], reactions: [{ user: other, reaction: "love" }] });
+  const post = { _id: id, author: owner, text: "Bicycle, 200 AED", postType: "Buy & Sell", status: "published", publishedAt, comments: [{ user: other, text: "Can I collect tomorrow?" }], reactions: [{ user: other, reaction: "love" }], populate: async () => post };
   let write;
+  t.mock.method(FeedPost, "findOne", () => ({ lean: async () => post }));
   t.mock.method(FeedPost, "findOneAndUpdate", async (filter, update, options) => { write = { filter, update, options }; post.bumpedAt = update.$set.bumpedAt; return post; });
   t.mock.method(post, "populate", async () => post);
   t.mock.method(SavedItem, "find", () => ({ select: () => ({ lean: async () => [] }) }));
@@ -46,8 +47,9 @@ test("conditional bump retains publication date, content, comments and reactions
   assert.equal(write.filter.author, owner);
   assert.equal(write.filter.status, "published");
   assert.equal(write.filter.deletedAt, null);
-  assert.equal(write.filter.$and.length, 3);
-  assert.deepEqual(Object.keys(write.update.$set), ["bumpedAt"]);
+  assert.equal(write.filter.$expr.$and.length, 4);
+  assert.deepEqual(write.update.$inc, { bumpCount: 1 });
+  assert.deepEqual(Object.keys(write.update.$set), ["bumpedAt", "outdatedVoters"]);
   assert.equal(post.publishedAt.getTime(), publishedAt.getTime());
   assert.equal(response.body.data.post.comments.length, 1);
   assert.equal(response.body.data.post.supportCount, 1);
@@ -55,11 +57,12 @@ test("conditional bump retains publication date, content, comments and reactions
   assert.deepEqual(response.body.data.post.feedCreatedAt, post.bumpedAt);
 });
 test("unavailable/repeated bump fails and feed ranks original activity by bump time", async t => {
+  t.mock.method(FeedPost, "findOne", () => ({ lean: async () => null }));
   t.mock.method(FeedPost, "findOneAndUpdate", async () => null);
   let error;
   await bumpFeedPost({ params: { id }, user: { _id: other } }, res(), value => { error = value; });
   assert.equal(error.statusCode, 409);
   const pipeline = wallFeedPipeline({}, { sort: "recent", near: "" }, [], 1, 20);
-  const activity = pipeline[1].$set.__activities.$concatArrays[0][0];
+  const activity = pipeline.find(stage => stage.$set?.__activities).$set.__activities.$concatArrays[0][0];
   assert.deepEqual(activity.createdAt, { $ifNull: ["$bumpedAt", { $ifNull: ["$publishedAt", "$createdAt"] }] });
 });

@@ -244,11 +244,14 @@ export const resolveMessageReport = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.reportId)) throw new ApiError(400, "Invalid report ID");
   const action = String(req.body.action || "").toUpperCase();
   const note = String(req.body.note || "").trim();
-  if (!["NO_ACTION", "WARNING", "MESSAGING_RESTRICTED", "ACCOUNT_RESTRICTED", "RESTRICTION_LIFTED"].includes(action)) throw new ApiError(400, "Select a valid moderation action");
+  if (!["NO_ACTION", "HIDDEN", "REMOVED", "WARNING", "MESSAGING_RESTRICTED", "ACCOUNT_RESTRICTED", "RESTRICTION_LIFTED"].includes(action)) throw new ApiError(400, "Select a valid moderation action");
   if (!note || note.length > 2000) throw new ApiError(400, "A moderation note between 1 and 2,000 characters is required");
   const report = await MessageReport.findById(req.params.reportId);
   if (!report) throw new ApiError(404, "Report not found");
   if (req.reportScopes?.length && !req.reportScopes.includes(report.scope)) throw new ApiError(404, "Report not found");
+  if (req.body.falseReport != null && typeof req.body.falseReport !== "boolean") throw new ApiError(400, "False report must be true or false");
+  if (req.body.falseReport && (action !== "NO_ACTION" || report.scope !== "FEED_POST" || report.source !== "USER_REPORT")) throw new ApiError(400, "Only a reviewed Wall user report dismissed with no action can be confirmed false");
+  if (["HIDDEN", "REMOVED"].includes(action) && report.scope !== "FEED_POST") throw new ApiError(400, "This action is available for Wall notes");
   const isUserReport = ["FEED_POST", "PROFILE", "SEEN", "WORLD"].includes(report.scope);
   if (action === "ACCOUNT_RESTRICTED" && !isUserReport) throw new ApiError(400, "Account restrictions must be applied from User reports");
   if (action === "MESSAGING_RESTRICTED" && isUserReport) throw new ApiError(400, "Messaging restrictions must be applied from Message reports");
@@ -287,7 +290,11 @@ export const resolveMessageReport = asyncHandler(async (req, res) => {
   report.reviewedBy = req.user._id;
   report.reviewingAt ||= new Date();
   report.resolvedAt = new Date();
-  report.resolution = { action, note, restrictionUntil };
+  report.resolution = { action, note, restrictionUntil, falseReport: Boolean(req.body.falseReport) };
+  if (["HIDDEN", "REMOVED"].includes(action)) {
+    const { default: FeedPost } = await import("../models/FeedPost.js");
+    await FeedPost.updateOne({ _id: report.feedPost }, { $set: { status: action === "REMOVED" ? "deleted" : "archived", ...(report.source !== "AUTOMATED_DUPLICATE" ? { moderationStatus: "REJECTED" } : {}), ...(action === "REMOVED" ? { deletedAt: new Date() } : { archivedAt: new Date() }) } });
+  }
   await report.save();
   if (action === "WARNING") {
     await Notification.updateOne(

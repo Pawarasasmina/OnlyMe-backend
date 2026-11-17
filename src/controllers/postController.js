@@ -1,12 +1,16 @@
+import { assertWallEditAllowed, canEditWallNote, wallEditDeadline, wallNoteVersion } from "../services/wallEditService.js";
+import { canReadWallNote, publicWallModerationFilter } from "../services/wallModerationAccess.js";
 import { wallViewCount } from "../services/wallViewCount.js";
-import { cleanupWallFiles, creationKey, reserveWallCreation, validateWallCreation, wallFingerprint } from "../services/wallCreationService.js";
-import { wallActiveExpression, wallClosedReason } from "../services/wallLifecycleService.js";
+import { assertNotExactWallCopy, cleanupWallFiles, creationKey, reserveWallCreation, validateWallCreation, validateWallPublishingText, findRecentWallCopy, queueWallCopyReview, registerWallEdit, wallFingerprint } from "../services/wallCreationService.js";
+import { wallActiveExpression, wallClosedReason, wallBumpExpression, wallCanBump, wallExpiresAt, wallLifetimeDays, wallNeedsExpiryPrompt, wallPromptKind, wallLifecycleStatus } from "../services/wallLifecycleService.js";
 import { prepareWallVoiceTranscript } from "../services/transcriptionService.js";
-import { isRequestWallPost, needsAvailabilityConfirmation, WALL_AVAILABILITY_DAYS, wallResolutionTarget } from "../services/wallResolutionService.js";
+import { isRequestWallPost, wallResolutionTarget } from "../services/wallResolutionService.js";
 import { readWallFeedFilters, wallFeedPipeline } from "../services/wallFeedFilterService.js";
+import { readWallPrice } from "../services/wallPriceService.js";
 import mongoose from "mongoose";
 import FeedPost from "../models/FeedPost.js";
 import MessageReport from "../models/MessageReport.js";
+import { wallReporterQualification } from "../services/wallReportService.js";
 import SavedItem from "../models/SavedItem.js";
 import UserBlock from "../models/UserBlock.js";
 import ApiError from "../utils/ApiError.js";
@@ -105,6 +109,11 @@ function feedFilterQuery(query = {}) {
   return extra;
 }
 
+export function preserveWallTrustOrder(items, rows) {
+  const penalties = new Map(rows.map(row => [String(row.__activity?.shareId ? `share-${row.__activity.shareId}` : row._id), Number(row.__trustPenalty) || 0]));
+  return [...items].sort((a, b) => (penalties.get(String(a.id)) || 0) - (penalties.get(String(b.id)) || 0));
+}
+
 export const postControllerTestUtils = { feedFilterQuery, personalizeCandidates };
 
 async function trackPostEvent(req, eventType, postId, extra = {}) {
@@ -178,7 +187,7 @@ export function serializePost(post, viewer = null, activity = {}) {
 }
 
 export const listPostReactors = asyncHandler(async (req, res) => {
-  const post = await findPublishedPost(req.params.id);
+  const post = await findPublishedPost(req.params.id, req.user);
   await post.populate("reactions.user", "name username avatar isVerified status");
 
   const reactions = (post.reactions || [])
@@ -228,7 +237,19 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
     shareCaption: activity.shareCaption || "",
     feedCreatedAt: activity.feedCreatedAt || post.bumpedAt || post.publishedAt || post.createdAt,
     bumpedAt: post.bumpedAt || null,
-    canBump: authorId === viewerId && post.status === "published" && !post.deletedAt && !wallClosedReason(post) && needsAvailabilityConfirmation(post),
+    editedAt: post.editedAt || null,
+    editUntil: wallEditDeadline(post),
+    editVersion: post.__v || 0,
+    canEdit: Boolean(authorId === viewerId && canEditWallNote(post)),
+    bumpCount: post.bumpCount || 0,
+    outdatedConcern: (post.outdatedVoters || []).length >= 3,
+    viewerFlaggedOutdated: (post.outdatedVoters || []).some(id => String(id) === viewerId),
+    expiresAt: wallExpiresAt(post),
+    expectedLifetimeDays: wallLifetimeDays(post),
+    needsExpiryPrompt: Boolean(authorId === viewerId && post.status === "published" && !post.deletedAt && wallNeedsExpiryPrompt(post)),
+    expiryPromptKind: wallPromptKind(post),
+    lifecycleStatus: wallLifecycleStatus(post),
+    canBump: authorId === viewerId && post.status === "published" && !post.deletedAt && wallCanBump(post),
     author: authorPayload(author),
     text: post.text || "",
     resolvedAt: post.resolvedAt || null,
@@ -240,6 +261,9 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
     topic: post.topic || "",
     context: post.context || "",
     location: post.location || "",
+    countryCode: post.countryCode || "",
+    price: post.price ?? null,
+    currency: post.currency || "",
     attachedEntities: post.attachedEntities || [],
     entityRefs: (post.entityRefs || []).map((ref) => ({
       entityId: String(ref.entityId),
@@ -283,6 +307,7 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
     saveCount: saves.length || post.saveCount || 0,
     viewCount: wallViewCount(post),
     shareCount: shares.length || post.shareCount || 0,
+    ...(authorId === viewerId ? { moderationStatus: post.moderationStatus || "CLEAR", moderationHiddenAt: post.moderationHiddenAt || null } : {}),
     reportCount: (post.reports || []).length,
     createdAt: post.createdAt,
     updatedAt: post.updatedAt,
@@ -291,13 +316,13 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
   };
 }
 
-async function findPublishedPost(postId) {
+async function findPublishedPost(postId, viewer) {
   if (!mongoose.isValidObjectId(postId)) {
     throw new ApiError(400, "Invalid post ID");
   }
 
   const post = await FeedPost.findOne({ _id: postId, status: "published", deletedAt: null });
-  if (!post) {
+  if (!post || !canReadWallNote(post, viewer)) {
     throw new ApiError(404, "Post not found");
   }
   return post;
@@ -389,11 +414,12 @@ async function uploadPostMedia({ imageFiles = [], post, req, userId, voiceFile =
       uploaded.push(await uploadFeedPostImage({ file, postId: post._id, userId, sortOrder: index }));
     }
     if (voiceFile) {
-      const { transcript, transcriptLanguage } = await prepareWallVoiceTranscript({
+      const { transcript, transcriptLanguage } = req.wallPreparedVoice || await prepareWallVoiceTranscript({
         file: voiceFile,
         transcript: cleanString(req.body.voiceTranscript, POST_TEXT_MAX_LENGTH),
         transcriptLanguage: normalizeVoiceLanguageCode(req.body.voiceTranscriptLanguage),
       });
+      if (post.status === "published") validateWallPublishingText(`${post.text || ""} ${transcript || ""}`, req.user);
 
       uploaded.push(await uploadFeedPostVoice({
         file: voiceFile,
@@ -424,16 +450,21 @@ async function createPostRecord({ imageFiles = [], req, status, voiceFile = null
     author: req.user._id,
     creationKey: status === "published" ? req.wallCreationKey : undefined,
     creationFingerprint: status === "published" ? req.wallFingerprint : undefined,
+    moderationStatus: req.wallCopyEvidence ? "PENDING_REVIEW" : "CLEAR",
+    moderationReason: req.wallCopyEvidence ? "RECENT_COPY" : "",
+    moderationEvidence: req.wallCopyEvidence || null,
     rightNow: req.body.rightNow === true || req.body.rightNow === "true",
     postType: cleanString(req.body.postType, 40),
     topic: cleanString(req.body.topic, 40),
     text,
     context,
     location,
+    countryCode: cleanString(req.body.countryCode, 2).toUpperCase(),
+    ...readWallPrice(req.body.price, req.body.postType, location, req.body.countryCode),
     entityRefs,
     media: [],
     status,
-    visibility: status === "draft" ? "private" : "public",
+    visibility: status === "draft" || req.wallCopyEvidence ? "private" : "public",
     publishedAt: status === "published" ? new Date() : null,
   });
 
@@ -491,7 +522,7 @@ export const getWallNeedCounts = asyncHandler(async (req, res) => {
   }
   facets.right_now = [{ $match: previewMatches.right_now }, { $count: "count" }];
   const [result = {}] = await FeedPost.aggregate([
-    { $match: { status: "published", visibility: "public", deletedAt: null, resolvedAt: null, $expr: wallActiveExpression(), author: { $nin: blockedIds }, "hiddenBy.user": { $ne: req.user._id }, ...options.match } },
+    { $match: { status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null, resolvedAt: null, $expr: wallActiveExpression(), author: { $nin: blockedIds }, "hiddenBy.user": { $ne: req.user._id }, ...options.match } },
     { $facet: facets },
   ]);
   const counts = Object.fromEntries([...categories, "right_now"].map((category) => [category, result[category]?.[0]?.count || 0]));
@@ -516,7 +547,7 @@ export const listFeedPosts = asyncHandler(async (req, res) => {
   const [result] = await FeedPost.aggregate(wallFeedPipeline(filter, options, blockedAuthorIds, page, limit)).allowDiskUse(true);
   const rows = result?.items || [];
   const total = result?.total?.[0]?.count || 0;
-  const items = rows.length ? await FeedPost.find({ _id: { $in: rows.map((row) => row._id) } })
+  const items = rows.length ? await FeedPost.find({ _id: { $in: rows.map((row) => row._id) }, visibility: "public", ...publicWallModerationFilter })
     .populate([
       { path: "author", select: "name username avatar isVerified" },
       { path: "comments.user", select: "name username avatar isVerified" },
@@ -543,14 +574,14 @@ export const listFeedPosts = asyncHandler(async (req, res) => {
     ? { items: feed, recommendation: null }
     : await postControllerTestUtils.personalizeCandidates({ exposureLimit: limit, items: feed, req, surface: "WALL" });
   return sendResponse(res, 200, "Feed posts fetched", {
-    items: personalized.items,
+    items: options.sort === "recent" ? personalized.items : preserveWallTrustOrder(personalized.items, rows),
     recommendation: personalized.recommendation,
     pagination: { page, limit, total, pages: Math.ceil(total / limit) },
   });
 });
 
 export const getFeedPost = asyncHandler(async (req, res) => {
-  const post = await findPublishedPost(req.params.id);
+  const post = await findPublishedPost(req.params.id, req.user);
   const authorId = post.author?._id || post.author;
   const blocked = await UserBlock.exists({ $or: [{ blocker: req.user._id, blocked: authorId }, { blocker: authorId, blocked: req.user._id }] });
   if (blocked || post.hiddenBy.some((item) => String(item.user) === String(req.user._id))) {
@@ -563,7 +594,7 @@ export const getFeedPost = asyncHandler(async (req, res) => {
 });
 
 export const markFeedPostViewed = asyncHandler(async (req, res) => {
-  const post = await findPublishedPost(req.params.id);
+  const post = await findPublishedPost(req.params.id, req.user);
   const authorId = post.author?._id || post.author;
   const viewerId = req.user._id;
   const currentCount = wallViewCount(post);
@@ -627,22 +658,29 @@ export const createFeedPost = asyncHandler(async (req, res) => {
   let release;
   let published = false;
   try {
-    const text = validateWallCreation(req.body, files);
+    const text = validateWallCreation(req.body, files, req.user);
     req.wallCreationKey = creationKey(req);
     req.wallFingerprint = await wallFingerprint(req);
-    const previous = await FeedPost.findOne({ author: req.user._id, creationKey: req.wallCreationKey });
+    const previous = await FeedPost.findOne({ author: req.user._id, creationKey: req.wallCreationKey }).select("+moderationEvidence");
     if (previous) {
       if (previous.creationFingerprint !== req.wallFingerprint) throw new ApiError(409, "This request key was used for a different note");
       if (previous.deletedAt || previous.status !== "published") throw new ApiError(409, "This note was already published and later removed");
+      if (previous.moderationStatus === "PENDING_REVIEW") await queueWallCopyReview(previous, previous.moderationEvidence);
       await populatePostForResponse(previous);
       return sendResponse(res, 200, "Note already published", { post: serializePost(previous, req.user) });
     }
-    release = await reserveWallCreation(req.user._id, text, req.wallCreationKey);
+    if (files.voice?.[0]) req.wallPreparedVoice = await prepareWallVoiceTranscript({ file: files.voice[0], transcript: cleanString(req.body.voiceTranscript, POST_TEXT_MAX_LENGTH), transcriptLanguage: normalizeVoiceLanguageCode(req.body.voiceTranscriptLanguage) });
+    const content = [text, req.wallPreparedVoice?.transcript || ""].filter(Boolean).join(" ");
+    validateWallPublishingText(content, req.user);
+    release = await reserveWallCreation(req.user._id, content, req.wallCreationKey, new Date(), { user: req.user, postType: req.body.postType });
+    req.wallCopyEvidence = await findRecentWallCopy(req.user._id, content);
+    assertNotExactWallCopy(req.wallCopyEvidence);
     const post = await createPostRecord({ imageFiles: files.media || [], req, status: "published", voiceFile: files.voice?.[0] || null });
     published = true;
+    if (req.wallCopyEvidence) await queueWallCopyReview(post, req.wallCopyEvidence);
     await recordChecklistEvent(req.user._id, "createdFirstPost").catch(() => {});
     await attachEntityMetadata(post, req.user || null);
-    return sendResponse(res, 201, "Post published", { post: serializePost(post, req.user) });
+    return sendResponse(res, req.wallCopyEvidence ? 202 : 201, req.wallCopyEvidence ? "Note submitted for review" : "Post published", { post: serializePost(post, req.user) });
   } finally {
     if (release && !published) {
       const saved = await FeedPost.exists({ author: req.user._id, creationKey: req.wallCreationKey });
@@ -677,38 +715,49 @@ export const setPostResolution = asyncHandler(async (req, res) => {
 export const bumpFeedPost = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid post ID");
   const now = new Date();
-  // Owner-only, active listings; the same conditional write prevents repeated bumps.
+  const current = await FeedPost.findOne({ _id: req.params.id, author: req.user._id, status: "published", deletedAt: null }).lean();
+  if (current?.bumpCount >= 3) throw new ApiError(409, "Bumped 3 times \u2014 post it fresh if it's still on", "WALL_BUMP_LIMIT");
+  if (current?.bumpedAt && now - new Date(current.bumpedAt) < 7 * 86400000) {
+    const days = Math.ceil((7 * 86400000 - (now - new Date(current.bumpedAt))) / 86400000);
+    throw new ApiError(409, `You can bump again in ${days} days`, "WALL_BUMP_COOLDOWN");
+  }
+  // Eligibility, limits and the write share one predicate to reject concurrent renewals.
   const post = await FeedPost.findOneAndUpdate({
     _id: req.params.id, author: req.user._id, status: "published", deletedAt: null,
-    $and: [
-      { $or: [{ postType: { $in: ["Buy & Sell", "Offering"] } }, { postType: { $in: ["", null] }, context: { $in: ["Buy/Sell", "Shopping"] } }] },
-      { $expr: wallActiveExpression(now) },
-      { $expr: { $lte: [{ $ifNull: ["$bumpedAt", { $ifNull: ["$publishedAt", "$createdAt"] }] }, new Date(now.getTime() - WALL_AVAILABILITY_DAYS * 86400000)] } },
-    ],
-  }, { $set: { bumpedAt: now } }, { new: true, runValidators: true });
-  if (!post) throw new ApiError(409, "Only your active Buy & Sell or Offering notes older than 14 days can be bumped");
+    visibility: "public", ...publicWallModerationFilter,
+    $expr: { $and: [
+      wallActiveExpression(now), wallBumpExpression(now),
+      { $lt: [{ $ifNull: ["$bumpCount", 0] }, 3] },
+      { $or: [{ $eq: [{ $ifNull: ["$bumpedAt", null] }, null] }, { $lte: ["$bumpedAt", new Date(now.getTime() - 7 * 86400000)] }] },
+    ] },
+  }, { $set: { bumpedAt: now, outdatedVoters: [] }, $inc: { bumpCount: 1 } }, { new: true, runValidators: true });
+  if (!post) throw new ApiError(409, "This note is not eligible to keep or bump. Notes can be bumped at most 3 times, once per 7 days, before expiry.");
   await populatePostForResponse(post);
   await attachSavedCommentState(post, req.user._id);
   await attachEntityMetadata(post, req.user || null);
   return sendResponse(res, 200, "Bumped — back in front of people nearby", { post: serializePost(post, req.user) });
 });
 
-export const updateFeedPost = asyncHandler(async (req, res) => {
+const updateFeedPostInternal = async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) {
     throw new ApiError(400, "Invalid post ID");
   }
 
-  const post = await FeedPost.findOne({ _id: req.params.id, author: req.user._id, deletedAt: null });
+  const post = await FeedPost.findOne({ _id: req.params.id, author: req.user._id, deletedAt: null }).select("+noteVersions");
   if (!post) {
     throw new ApiError(404, "Post not found");
   }
 
-  const text = cleanString(req.body.text, POST_TEXT_MAX_LENGTH);
-  const context = readContext(req.body.context);
-  const entityRefs = await validateEntityRefs(req.body.entityRefs);
-  const location = readLocation(req.body.location);
+  if (post.status !== "draft") assertWallEditAllowed(post);
+  if (req.body.editVersion != null && Number(req.body.editVersion) !== (post.__v || 0)) throw new ApiError(409, "This note changed. Reopen it before saving.", "WALL_EDIT_CONFLICT");
+  const previousPost = post.toObject();
+  if (req.body.text != null && (typeof req.body.text !== "string" || req.body.text.trim().length > POST_TEXT_MAX_LENGTH)) throw new ApiError(400, "Notes must contain at most 2,000 characters");
+  const text = Object.hasOwn(req.body, "text") ? cleanString(req.body.text, POST_TEXT_MAX_LENGTH) : post.text;
+  const context = Object.hasOwn(req.body, "context") ? readContext(req.body.context) : post.context;
+  const entityRefs = Object.hasOwn(req.body, "entityRefs") ? await validateEntityRefs(req.body.entityRefs) : post.entityRefs;
+  const location = Object.hasOwn(req.body, "location") ? readLocation(req.body.location) : post.location;
 
-  if (post.status === "published" && !text) {
+  if (post.status === "published" && !text && !(post.media || []).some(item => item.type === "audio")) {
     throw new ApiError(400, "Post text is required");
   }
 
@@ -719,29 +768,80 @@ export const updateFeedPost = asyncHandler(async (req, res) => {
   post.context = context;
   post.entityRefs = entityRefs;
   post.location = location;
+  if (Object.hasOwn(req.body, "countryCode")) post.countryCode = cleanString(req.body.countryCode, 2).toUpperCase();
+  else if (Object.hasOwn(req.body, "location")) post.countryCode = "";
+  Object.assign(post, readWallPrice(post.postType === "Buy & Sell" ? (Object.hasOwn(req.body, "price") ? req.body.price : post.price) : null, post.postType, location, post.countryCode));
 
+  if (req.body.retainedMedia != null || Object.keys(req.files || {}).length) {
+    let ids;
+    try { ids = JSON.parse(req.body.retainedMedia || "[]"); } catch { throw new ApiError(400, "Invalid retained media"); }
+    if (!Array.isArray(ids) || ids.some(id => typeof id !== "string")) throw new ApiError(400, "Invalid retained media");
+    const originalMedia = previousPost.media || [];
+    if (ids.some(id => !originalMedia.some(item => String(item._id || item.id || item.assetId) === id))) throw new ApiError(400, "Media must belong to this note");
+    const retained = originalMedia.filter(item => ids.includes(String(item._id || item.id || item.assetId)));
+    if (retained.filter(item => item.type === "image").length + (req.files?.media?.length || 0) > 3 || retained.filter(item => item.type === "audio").length + (req.files?.voice?.length || 0) > 1) throw new ApiError(400, "Attach at most three photos and one voice note");
+    const added = req.files?.media?.length || req.files?.voice?.length ? await uploadPostMedia({ imageFiles: req.files?.media || [], post, req, userId: req.user._id, voiceFile: req.files?.voice?.[0] || null }) : [];
+    req.wallNewEditMedia = added;
+    post.media = [...retained, ...added];
+  }
   let release;
-  if (post.status === "draft" && req.body.publish === "true") {
+  const publishing = post.status === "draft" && req.body.publish === "true";
+  const content = [text, ...(post.media || []).filter(item => item.type === "audio").map(item => item.transcript || "")].filter(Boolean).join(" ");
+  let copyEvidence;
+  if (post.status === "published" || publishing) {
     const media = post.media || [];
-    validateWallCreation({ ...req.body, postType: post.postType, rightNow: post.rightNow }, { media: media.filter((item) => item.type === "image"), voice: media.filter((item) => item.type === "audio") });
+    validateWallCreation({ ...req.body, text, postType: post.postType, location: post.location, countryCode: post.countryCode, price: post.price, rightNow: post.rightNow, voiceTranscript: media.filter(item => item.type === "audio").map(item => item.transcript || "").join(" ") }, { media: media.filter(item => item.type === "image"), voice: media.filter(item => item.type === "audio") }, req.user);
+    if (publishing || previousPost.text !== text || req.body.retainedMedia != null || req.files?.voice?.length) copyEvidence = await findRecentWallCopy(req.user._id, content);
+    assertNotExactWallCopy(copyEvidence);
+    if (copyEvidence) { post.moderationStatus = "PENDING_REVIEW"; post.moderationReason = "RECENT_COPY"; post.moderationEvidence = copyEvidence; post.visibility = "private"; }
+  }
+  if (publishing) {
+    const media = post.media || [];
     if (media.some((item) => item.type === "audio" && item.duration > 30)) throw new ApiError(400, "Wall voice notes must be 30 seconds or shorter");
     post.creationKey = post.creationKey || creationKey(req);
     await post.validate();
-    release = await reserveWallCreation(req.user._id, text, post.creationKey);
+    release = await reserveWallCreation(req.user._id, content, post.creationKey, new Date(), { user: req.user, postType: post.postType });
     post.status = "published";
-    post.visibility = "public";
+    post.visibility = copyEvidence ? "private" : "public";
     post.publishedAt = new Date();
   }
 
-  try { await post.save(); } catch (error) { if (release) await release(); throw error; }
+  if (previousPost.status === "published" && (previousPost.text !== text || previousPost.postType !== post.postType)) {
+    await post.validate();
+    await registerWallEdit(previousPost, content, new Date(), { user: req.user, postType: post.postType });
+  }
+
+  if (previousPost.status === "published") {
+    assertWallEditAllowed(previousPost);
+    const before = wallNoteVersion(previousPost), after = wallNoteVersion(post.toObject());
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+      post.editedAt = new Date();
+      post.noteVersions.push( { ...before, replacedAt: post.editedAt, editedBy: req.user._id, version: previousPost.__v || 0 });
+    }
+    post.$where = { __v: previousPost.__v || 0, status: "published", deletedAt: null, resolvedAt: null, moderationHiddenAt: null, moderationStatus: { $nin: ["PENDING_REVIEW", "REJECTED"] }, $expr: { $gt: [{ $add: [{ $ifNull: ["$publishedAt", "$createdAt"] }, 900000] }, "$$NOW"] } };
+    post.increment();
+  }
+  try { await post.save(); req.wallEditSaved = true; } catch (error) { if (release) await release(); throw error; }
+  if (copyEvidence) await queueWallCopyReview(post, copyEvidence);
   if (post.status === "published") await recordChecklistEvent(req.user._id, "createdFirstPost");
   await populatePostForResponse(post);
   await attachEntityMetadata(post, req.user || null);
   return sendResponse(res, 200, post.status === "published" ? "Post updated" : "Draft updated", { post: serializePost(post, req.user) });
+};
+export const updateFeedPost = asyncHandler(async (req, res) => {
+  try { return await updateFeedPostInternal(req, res); }
+  catch (error) {
+    if (["VersionError", "DocumentNotFoundError"].includes(error.name)) throw new ApiError(409, "This note changed or its edit window ended. Reopen the note.", "WALL_EDIT_CONFLICT");
+    throw error;
+  }
+  finally {
+    await cleanupWallFiles(req.files || {});
+    if (!req.wallEditSaved && req.wallNewEditMedia?.length) await deleteFeedPostMedia(req.wallNewEditMedia);
+  }
 });
 
 export const updatePostReaction = asyncHandler(async (req, res) => {
-  const post = await findPublishedPost(req.params.id);
+  const post = await findPublishedPost(req.params.id, req.user);
   const reaction = readReaction(req.body.reaction);
   const userId = String(req.user._id);
   const existing = post.reactions.find((item) => String(item.user) === userId);
@@ -764,7 +864,7 @@ export const updatePostReaction = asyncHandler(async (req, res) => {
 });
 
 export const togglePostSave = asyncHandler(async (req, res) => {
-  const post = await findPublishedPost(req.params.id);
+  const post = await findPublishedPost(req.params.id, req.user);
   const userId = String(req.user._id);
   const existing = post.saves.find((item) => String(item.user) === userId);
 
@@ -784,7 +884,7 @@ export const togglePostSave = asyncHandler(async (req, res) => {
 });
 
 export const togglePostShare = asyncHandler(async (req, res) => {
-  const post = await findPublishedPost(req.params.id);
+  const post = await findPublishedPost(req.params.id, req.user);
   const userId = String(req.user._id);
   const existing = post.shares.find((item) => String(item.user) === userId);
 
@@ -806,7 +906,7 @@ export const togglePostShare = asyncHandler(async (req, res) => {
 });
 
 export const hideFeedPost = asyncHandler(async (req, res) => {
-  const post = await findPublishedPost(req.params.id);
+  const post = await findPublishedPost(req.params.id, req.user);
   const userId = String(req.user._id);
   if (!post.hiddenBy.some((item) => String(item.user) === userId)) {
     post.hiddenBy.push({ user: req.user._id, reason: cleanString(req.body.reason || "NOT_USEFUL", 80) || "NOT_USEFUL" });
@@ -816,7 +916,7 @@ export const hideFeedPost = asyncHandler(async (req, res) => {
 });
 
 export const reportFeedPost = asyncHandler(async (req, res) => {
-  const post = await findPublishedPost(req.params.id);
+  const post = await findPublishedPost(req.params.id, req.user);
   if (String(post.author) === String(req.user._id)) throw new ApiError(400, "You cannot report your own post");
   const reason = cleanString(req.body.reason || "OTHER", 80).toUpperCase().replaceAll(/[^A-Z0-9]+/g, "_");
     const allowed = new Set(["SPAM", "FALSE_INFORMATION", "DEFAMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "IMPERSONATION", "CHILD_SAFETY", "OTHER"]);
@@ -826,6 +926,7 @@ export const reportFeedPost = asyncHandler(async (req, res) => {
       reporter: req.user._id,
       reportedUser: post.author,
       scope: "FEED_POST",
+      qualifiesForWallAutoHide: await wallReporterQualification(req.user._id),
       feedPost: post._id,
       reason,
       details: cleanString(req.body.details, 1000),
@@ -846,7 +947,7 @@ export const reportFeedPost = asyncHandler(async (req, res) => {
 });
 
 export const blockPostAuthor = asyncHandler(async (req, res) => {
-  const post = await findPublishedPost(req.params.id);
+  const post = await findPublishedPost(req.params.id, req.user);
   const authorId = post.author?._id || post.author;
   if (String(authorId) === String(req.user._id)) {
     throw new ApiError(400, "You cannot block yourself");
@@ -860,7 +961,7 @@ export const blockPostAuthor = asyncHandler(async (req, res) => {
 });
 
 export const createPostComment = asyncHandler(async (req, res) => {
-  const post = await findPublishedPost(req.params.id);
+  const post = await findPublishedPost(req.params.id, req.user);
   const parentCommentId = req.body.parentCommentId || null;
   if (parentCommentId && !post.comments.some(comment => String(comment._id) === String(parentCommentId) && !comment.deletedAt)) {
     throw new ApiError(400, "Reply target is no longer available on this note");
@@ -883,7 +984,7 @@ export const createPostComment = asyncHandler(async (req, res) => {
 });
 
 export const updatePostCommentReaction = asyncHandler(async (req, res) => {
-  const post = await findPublishedPost(req.params.id);
+  const post = await findPublishedPost(req.params.id, req.user);
   const comment = post.comments.find(item => String(item._id) === req.params.commentId && !item.deletedAt);
   if (!comment) throw new ApiError(404, "Reply not found");
   const reaction = req.body.reaction;
@@ -898,7 +999,7 @@ export const updatePostCommentReaction = asyncHandler(async (req, res) => {
 });
 
 export const deletePostComment = asyncHandler(async (req, res) => {
-  const post = await findPublishedPost(req.params.id);
+  const post = await findPublishedPost(req.params.id, req.user);
   const comment = post.comments.find((item) => String(item._id) === req.params.commentId && !item.deletedAt);
   if (!comment) throw new ApiError(404, "Comment not found");
   if (String(comment.user?._id || comment.user) !== String(req.user._id)) throw new ApiError(403, "You can only delete your own comment");
@@ -952,7 +1053,7 @@ export const archiveFeedPost = asyncHandler(async (req, res) => {
 
 export const restoreFeedPost = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid post ID");
-  const post = await FeedPost.findOneAndUpdate({ _id: req.params.id, author: req.user._id, status: "archived", deletedAt: null }, { $set: { status: "published" }, $unset: { archivedAt: 1 } }, { new: true });
+  const post = await FeedPost.findOneAndUpdate({ _id: req.params.id, author: req.user._id, status: "archived", moderationStatus: { $nin: ["PENDING_REVIEW", "REJECTED"] }, moderationHiddenAt: null, deletedAt: null }, { $set: { status: "published" }, $unset: { archivedAt: 1 } }, { new: true });
   if (!post) throw new ApiError(404, "Archived post not found");
   return sendResponse(res, 200, "Post restored", { postId: String(post._id), restored: true });
 });

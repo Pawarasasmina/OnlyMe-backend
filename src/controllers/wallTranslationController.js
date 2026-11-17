@@ -1,3 +1,4 @@
+import { canReadWallNote } from "../services/wallModerationAccess.js";
 import { wallPostCaption } from "../services/wallPostDisplayService.js";
 import mongoose from "mongoose";
 import rateLimit from "express-rate-limit";
@@ -16,8 +17,7 @@ export async function readWallTranslationContent(req) {
   if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid post ID");
   const post = await FeedPost.findOne({ _id: req.params.id, status: "published", deletedAt: null });
   if (!post) throw new ApiError(404, "Post not found");
-  const owner = String(post.author) === String(req.user._id);
-  if ((!owner && post.visibility !== "public") || (post.hiddenBy || []).some((entry) => String(entry.user) === String(req.user._id))) throw new ApiError(404, "Post not found");
+  if (!canReadWallNote(post, req.user) || (post.hiddenBy || []).some((entry) => String(entry.user) === String(req.user._id))) throw new ApiError(404, "Post not found");
   if (await UserBlock.exists({ $or: [{ blocker: req.user._id, blocked: post.author }, { blocker: post.author, blocked: req.user._id }] })) throw new ApiError(404, "Post not found");
   const mediaId = String(req.query.mediaId || req.body?.mediaId || "");
   const media = mediaId ? post.media.find((item) => item.type === "audio" && [String(item._id), item.assetId].includes(mediaId)) : null;

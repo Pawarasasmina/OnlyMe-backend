@@ -1,3 +1,4 @@
+import { publicWallModerationFilter } from "../services/wallModerationAccess.js";
 import mongoose from "mongoose";
 import FeedPost from "../models/FeedPost.js";
 import Publication from "../models/Publication.js";
@@ -131,7 +132,7 @@ async function savedOverview(userId) {
   const [publicationCounts, feedPostCount, wallPostCount, unlocked, peopleCount, placesCount, journeysCount, booksCount, commentsCount] = await Promise.all([
     countVisibleSavedPublications(userId, context),
     FeedPost.countDocuments({
-      status: "published",
+      status: "published", visibility: "public", ...publicWallModerationFilter,
       deletedAt: null,
       "saves.user": userId,
       "hiddenBy.user": { $ne: userId },
@@ -211,7 +212,7 @@ async function listSavedPostsPage(user, paging) {
   const [seenRows, feedPosts, wallSaves, wallShareSaves, totals] = await Promise.all([
     loadSavedPublications({ context, kinds: ["SEEN"], limit: fetchLimit, user }),
     FeedPost.find({
-      status: "published",
+      status: "published", visibility: "public", ...publicWallModerationFilter,
       deletedAt: null,
       "saves.user": user._id,
       "hiddenBy.user": { $ne: user._id },

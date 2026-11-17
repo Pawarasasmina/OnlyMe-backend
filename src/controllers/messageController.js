@@ -1,3 +1,4 @@
+import { publicWallModerationFilter } from "../services/wallModerationAccess.js";
 import Dream from "../models/Dream.js";
 import { referralCodes } from "../services/referralService.js";
 import mongoose from "mongoose";
@@ -274,7 +275,7 @@ async function sharedContentSnapshot(input, viewer) {
     return { contentType, contentId: owner._id, route: `/invite/${referralCodes(owner).friend}`, title: `${first} invited you to @seen`, previewText: "Real stories from real people. Join me there.", imageUrl: owner.avatar || "", author: { id: owner._id, name: owner.name, username: owner.username, avatarUrl: owner.avatar || "" } };
   }
   if (contentType === "feed_post") {
-    const post = await FeedPost.findOne({ _id: contentId, status: "published", visibility: "public", deletedAt: null })
+    const post = await FeedPost.findOne({ _id: contentId, status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null })
       .populate("author", "name username avatar isVerified role status")
       .lean();
     if (!post || post.author?.status !== "active") throw new ApiError(404, "This content is no longer available");

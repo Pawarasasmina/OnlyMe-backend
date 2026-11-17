@@ -1,3 +1,5 @@
+import { publicWallModerationFilter } from "./wallModerationAccess.js";
+import { wallClosedReason, wallExpiresAt, wallLifecycleStatus } from "./wallLifecycleService.js";
 import mongoose from "mongoose";
 import Content from "../models/Content.js";
 import CreatorProfile from "../models/CreatorProfile.js";
@@ -437,6 +439,10 @@ export function serializePostSearchResult(post, query, viewerId = "", legacy = f
       isOwn: Boolean(viewerId && String(author._id || "") === String(viewerId)),
       postType: post.postType || "",
       resolvedAt: post.resolvedAt || null,
+      closedReason: wallClosedReason(post),
+      isClosed: Boolean(wallClosedReason(post)),
+      lifecycleStatus: wallLifecycleStatus(post),
+      expiresAt: wallExpiresAt(post),
       reactionCount: (post.reactions || []).length || post.supportCount || 0,
       commentCount: (post.comments || []).filter((comment) => !comment.deletedAt).length || post.commentCount || 0,
       saveCount: post.saveCount || 0,
@@ -542,7 +548,7 @@ async function searchPlaces({ blockedIds, category, cursor = 0, limit, location,
       "privacySettings.showLocation": { $ne: false },
       city: { $ne: "" },
     }).populate({ path: "user", match: { _id: { $nin: blockedObjectIds }, role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified" }).limit(200).lean(),
-    FeedPost.find({ status: "published", visibility: "public", deletedAt: null, location: { $ne: "" } }).select("location").limit(200).lean(),
+    FeedPost.find({ status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null, location: { $ne: "" } }).select("location").limit(200).lean(),
   ]);
 
   const savedRows = user?._id && cities.length

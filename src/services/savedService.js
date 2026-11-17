@@ -1,3 +1,4 @@
+import { publicWallModerationFilter } from "./wallModerationAccess.js";
 import mongoose from "mongoose";
 import Content from "../models/Content.js";
 import FeedPost from "../models/FeedPost.js";
@@ -121,7 +122,7 @@ async function findCommentTarget(commentId) {
   requireObjectId(commentId, "comment ID");
   const objectId = new mongoose.Types.ObjectId(commentId);
   const [feedPost, seenComment, wallComment, wallShareComment] = await Promise.all([
-    FeedPost.findOne({ status: "published", deletedAt: null, comments: { $elemMatch: { _id: objectId, deletedAt: null } } }).select("_id comments.$").lean(),
+    FeedPost.findOne({ status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null, comments: { $elemMatch: { _id: objectId, deletedAt: null } } }).select("_id comments.$").lean(),
     SeenEngagement.findOne({ _id: objectId, type: "COMMENT" }).select("_id").lean(),
     WallEngagement.findOne({ _id: objectId, type: "COMMENT" }).select("_id").lean(),
     WallShareEngagement.findOne({ _id: objectId, type: "COMMENT" }).select("_id").lean(),
@@ -177,7 +178,7 @@ export async function countSavedItems(userId, targetType, targetModel) {
   }, new Map());
   const feedCommentIds = idsByModel.get("FeedPostComment") || [];
   const [feedPosts, seenCount, wallCount, wallShareCount] = await Promise.all([
-    feedCommentIds.length ? FeedPost.find({ status: "published", deletedAt: null, "comments._id": { $in: feedCommentIds } }).select("comments._id comments.deletedAt").lean() : [],
+    feedCommentIds.length ? FeedPost.find({ status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null, "comments._id": { $in: feedCommentIds } }).select("comments._id comments.deletedAt").lean() : [],
     idsByModel.has("SeenEngagement") ? SeenEngagement.countDocuments({ _id: { $in: idsByModel.get("SeenEngagement") }, type: "COMMENT" }) : 0,
     idsByModel.has("WallEngagement") ? WallEngagement.countDocuments({ _id: { $in: idsByModel.get("WallEngagement") }, type: "COMMENT" }) : 0,
     idsByModel.has("WallShareEngagement") ? WallShareEngagement.countDocuments({ _id: { $in: idsByModel.get("WallShareEngagement") }, type: "COMMENT" }) : 0,
@@ -332,7 +333,7 @@ export async function listSavedComments(userId, paging) {
     return map;
   }, new Map());
   const [feedPosts, seenComments, wallComments, wallShareComments] = await Promise.all([
-    idsByModel.has("FeedPostComment") ? FeedPost.find({ status: "published", deletedAt: null, "comments._id": { $in: idsByModel.get("FeedPostComment") } }).populate("author", "name username avatar isVerified").populate("comments.user", "name username avatar isVerified").lean() : [],
+    idsByModel.has("FeedPostComment") ? FeedPost.find({ status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null, "comments._id": { $in: idsByModel.get("FeedPostComment") } }).populate("author", "name username avatar isVerified").populate("comments.user", "name username avatar isVerified").lean() : [],
     idsByModel.has("SeenEngagement") ? SeenEngagement.find({ _id: { $in: idsByModel.get("SeenEngagement") }, type: "COMMENT" }).populate("user", "name username avatar isVerified").populate({ path: "publication", select: "title kind creator status", populate: { path: "creator", select: "name username avatar isVerified" } }).lean() : [],
     idsByModel.has("WallEngagement") ? WallEngagement.find({ _id: { $in: idsByModel.get("WallEngagement") }, type: "COMMENT" }).populate("user", "name username avatar isVerified").populate({ path: "post", match: { status: "PUBLISHED" }, populate: { path: "creator", select: "name username avatar isVerified" } }).lean() : [],
     idsByModel.has("WallShareEngagement") ? WallShareEngagement.find({ _id: { $in: idsByModel.get("WallShareEngagement") }, type: "COMMENT" }).populate("user", "name username avatar isVerified").populate({ path: "share", match: { type: "SHARE" }, populate: [{ path: "user", select: "name username avatar isVerified" }, { path: "post", match: { status: "PUBLISHED" }, populate: { path: "creator", select: "name username avatar isVerified" } }] }).lean() : [],
