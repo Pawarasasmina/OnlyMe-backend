@@ -229,6 +229,38 @@ test("activity helpers count only unread received acknowledgable rows", () => {
   assert.equal(fanDashboardTestUtils.unreadActivityCount(rows), 1);
 });
 
+test("notification preferences filter every received Activity category but preserve sent and system history", () => {
+  const rows = [
+    { id: "reaction", type: "seen_reaction", direction: "received", metadata: { reaction: "LOVE" } },
+    { id: "comment", type: "note_reply", direction: "received", filter: "comments" },
+    { id: "follow", type: "follow", direction: "received" },
+    { id: "message", type: "message", direction: "received", filter: "comments" },
+    { id: "direct", type: "direct_access", direction: "received", filter: "support" },
+    { id: "gift", type: "gift", direction: "received", reference: { type: "CHAT_GIFT" } },
+    { id: "save", type: "wall_save_group", direction: "received" },
+    { id: "repost", type: "content_repost", direction: "received" },
+    { id: "sent-comment", type: "seen_comment", direction: "sent", filter: "comments" },
+    { id: "system", type: "moderation_warning", direction: "received", filter: "moderation" },
+  ];
+  const hidden = fanDashboardTestUtils.filterActivityByPreferences(rows, {
+    comments: false, directAccess: false, followers: false, gifts: false,
+    messages: false, reactions: false, reposts: false, saves: false,
+  });
+  assert.deepEqual(hidden.map((item) => item.id), ["sent-comment", "system"]);
+});
+
+test("the in-app master preference keeps mandatory system items and sent history only", () => {
+  const rows = [
+    { id: "received-comment", type: "seen_comment", direction: "received", filter: "comments" },
+    { id: "sent-comment", type: "seen_comment", direction: "sent", filter: "comments" },
+    { id: "system", type: "verification_approved", direction: "received", filter: "system" },
+  ];
+  assert.deepEqual(
+    fanDashboardTestUtils.filterActivityByPreferences(rows, { inApp: false }).map((item) => item.id),
+    ["sent-comment", "system"],
+  );
+});
+
 test("gift activity keeps Direct, Story, and Dream sources out of chat semantics", () => {
   const base = {
     _id: "gift1",

@@ -4,6 +4,7 @@ import Publication from "../models/Publication.js";
 import CallSession from "../models/CallSession.js";
 import DAWindow from "../models/DAWindow.js";
 import FanProfile from "../models/FanProfile.js";
+import CreatorProfile from "../models/CreatorProfile.js";
 import FeedPost from "../models/FeedPost.js";
 import Message from "../models/Message.js";
 import Notification from "../models/Notification.js";
@@ -156,6 +157,32 @@ function activityBase(input) {
     dedupeKey: input.dedupeKey || null,
     metadata: input.metadata || {},
   };
+}
+
+export function activityPreferenceKey(item = {}) {
+  if (item.direction && item.direction !== "received") return null;
+  const type = String(item.type || "").toLowerCase();
+  const event = String(item.event || "").toLowerCase();
+  const reference = String(item.reference?.type || "").toLowerCase();
+  if (type.includes("direct_access") || type === "paid_call") return "directAccess";
+  if (type === "message") return "messages";
+  if (type.includes("gift") || event.includes("gift") || reference.includes("gift")) return "gifts";
+  if (type === "follow") return "followers";
+  if (type.includes("save")) return "saves";
+  if (type.includes("repost") || type.includes("share")) return "reposts";
+  if (type.includes("reaction") || item.metadata?.reaction) return "reactions";
+  if (type.includes("comment") || type.includes("reply") || item.filter === "comments") return "comments";
+  return null;
+}
+
+export function filterActivityByPreferences(items = [], preferences = {}) {
+  if (preferences.inApp === false) {
+    return items.filter((item) => (item.direction && item.direction !== "received") || activityPreferenceKey(item) === null);
+  }
+  return items.filter((item) => {
+    const key = activityPreferenceKey(item);
+    return !key || preferences[key] !== false;
+  });
 }
 
 function notificationActivity(notification, giftThanksByKey = new Map()) {
@@ -796,6 +823,11 @@ async function applyAcknowledgements(items) {
 }
 
 async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivity, { truncate = true } = {}) {
+  const [fanPreferenceProfile, creatorPreferenceProfile] = await Promise.all([
+    FanProfile.findOne({ user: fanId }).select("notificationPreferences").lean(),
+    CreatorProfile.findOne({ user: fanId }).select("notificationPreferences").lean(),
+  ]);
+  const notificationPreferences = creatorPreferenceProfile?.notificationPreferences || fanPreferenceProfile?.notificationPreferences || {};
   const [
     subscriptions,
     notifications,
@@ -1008,7 +1040,7 @@ async function getActivity(fanId, wallet, limit = DEFAULT_LIMITS.dashboardActivi
     const current = byDedupeKey.get(key);
     if (!current || richness(item) > richness(current)) byDedupeKey.set(key, item);
   });
-  const ordered = [...byDedupeKey.values()]
+  const ordered = filterActivityByPreferences([...byDedupeKey.values()], notificationPreferences)
     .sort((left, right) => (new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()) || (Number(right.priority) - Number(left.priority)));
   return (truncate ? ordered.slice(0, limit) : ordered).map(serializeActivityItem);
 }
@@ -1305,6 +1337,7 @@ export const getFanContentAccess = asyncHandler(async (req, res) => {
 });
 
 export const fanDashboardTestUtils = {
+  activityPreferenceKey,
   activityBase,
   directAccessActivity,
   engagementActivity,
@@ -1313,6 +1346,7 @@ export const fanDashboardTestUtils = {
   filterSubscriptions,
   followActivity,
   filterActivityItems,
+  filterActivityByPreferences,
   giftActivity,
   groupedSaveActivities,
   isExpiringSoon,
