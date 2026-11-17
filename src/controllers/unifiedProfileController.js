@@ -1,3 +1,4 @@
+import { publicWallModerationFilter, wallProfileModerationFilter } from "../services/wallModerationAccess.js";
 import Content from "../models/Content.js";
 import { synchronizeIdentityBadge } from "../services/verifiedCreatorService.js";
 import { storyAudiencesFor } from "../services/storyAudienceService.js";
@@ -58,11 +59,11 @@ async function loadProfile(owner, viewer) {
     PublicationSeries.find({ creator: owner._id, archivedAt: null }).sort({ isPinned: -1, sortOrder: 1, updatedAt: -1, name: 1 }).lean(),
     Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
     Publication.find({ creator: owner._id, kind: "EXPERIENCE", status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ publishedAt: -1, updatedAt: -1 }).limit(3).populate("creator", "name username avatar").lean(),
-    FeedPost.find({ author: owner._id, status: "published", visibility: "public", deletedAt: null }).sort({ publishedAt: -1, createdAt: -1 }).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }]).lean(),
+    FeedPost.find({ author: owner._id, status: "published", ...wallProfileModerationFilter(owner._id, viewer), deletedAt: null }).sort({ publishedAt: -1, createdAt: -1 }).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }]).lean(),
     WallPost.find({ creator: owner._id, status: "PUBLISHED" }).sort({ createdAt: -1 }).populate("creator", "name username avatar isVerified").lean(),
     SeenEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("publication text createdAt").lean(),
     WallEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("post text createdAt").lean(),
-    FeedPost.find({ status: "published", deletedAt: null, "shares.user": owner._id }).sort({ "shares.createdAt": -1 }).limit(30).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }, { path: "shares.user", select: "name username avatar isVerified role status" }]).lean(),
+    FeedPost.find({ status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null, "shares.user": owner._id }).sort({ "shares.createdAt": -1 }).limit(30).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }, { path: "shares.user", select: "name username avatar isVerified role status" }]).lean(),
     ProfileRelationship.countDocuments({ target: owner._id, type: "FOLLOW" }),
     ProfileRelationship.countDocuments({ actor: owner._id, type: "FOLLOW" }),
     OrbitSignal.countDocuments({ targetUser: owner._id, type: "SEE_YOU", status: "active" }),
@@ -254,12 +255,12 @@ async function loadProfile(owner, viewer) {
   const [repostSeens, repostNotes, repostFeedNotes, repostPhotos, seenComments, wallComments, shareComments, feedCommentPosts] = await Promise.all([
     Publication.find({ _id: { $in: idsFor("seen") }, kind: "SEEN", status: "PUBLISHED", ...seenAudienceFilter }).select("title coverMedia creator").lean(),
     WallPost.find({ _id: { $in: wallNoteIds }, status: "PUBLISHED" }).select("text media creator").lean(),
-    FeedPost.find({ _id: { $in: feedNoteIds }, status: "published", deletedAt: null }).select("text images author").lean(),
+    FeedPost.find({ _id: { $in: feedNoteIds }, status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null }).select("text images author").lean(),
     ProfileMedia.find({ _id: { $in: idsFor("photo") }, type: "image" }).select("url thumbnailUrl caption user").lean(),
     SeenEngagement.find({ _id: { $in: repostRows.filter((row) => row.kind === "cm" && row.targetModel === "SeenEngagement").map((row) => row.targetId) }, type: "COMMENT" }).select("text publication user").lean(),
     WallEngagement.find({ _id: { $in: repostRows.filter((row) => row.kind === "cm" && row.targetModel === "WallEngagement").map((row) => row.targetId) }, type: "COMMENT" }).select("text post user").lean(),
     WallShareEngagement.find({ _id: { $in: repostRows.filter((row) => row.kind === "cm" && row.targetModel === "WallShareEngagement").map((row) => row.targetId) }, type: "COMMENT" }).select("text share user").lean(),
-    FeedPost.find({ "comments._id": { $in: feedCommentIds }, status: "published", deletedAt: null }).select("comments").lean(),
+    FeedPost.find({ "comments._id": { $in: feedCommentIds }, status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null }).select("comments").lean(),
   ]);
   const sources = new Map([...repostSeens, ...repostNotes, ...repostFeedNotes, ...repostPhotos, ...seenComments, ...wallComments, ...shareComments].map((item) => [String(item._id), item]));
   feedCommentPosts.forEach((post) => (post.comments || []).forEach((comment) => { if (feedCommentIds.some((id) => String(id) === String(comment._id))) sources.set(String(comment._id), { ...comment, post: post._id }); }));

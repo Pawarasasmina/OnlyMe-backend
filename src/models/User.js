@@ -2,9 +2,12 @@ import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 import { ACCOUNT_TYPES, DEFAULT_ACCOUNT_TYPE } from "../constants/accountTypeConstants.js";
 import { nextMemberNumber } from "../services/memberTicketService.js";
+import { WALL_NEED_HINT_IDS } from "../constants/wallNeedHintConstants.js";
 
 const userSchema = new mongoose.Schema(
   {
+    wallHintDismissals: [{ type: String, enum: WALL_NEED_HINT_IDS }],
+    wallViewPreference: { type: String, enum: ["feed", "grid"], default: "feed" },
     friendInviteRingEarnedAt: { type: Date, default: null },
     memberNumber: { type: Number, min: 1, immutable: true },
     showMemberNumber: { type: Boolean, default: true },

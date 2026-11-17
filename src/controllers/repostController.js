@@ -1,3 +1,4 @@
+import { publicWallModerationFilter } from "../services/wallModerationAccess.js";
 import mongoose from "mongoose";
 import Publication from "../models/Publication.js";
 import WallPost from "../models/WallPost.js";
@@ -21,13 +22,13 @@ async function resolveTarget(kind, id, requestedModel) {
   if (kind === "seen") { const item = await Publication.findOne({ _id: id, kind: "SEEN", status: "PUBLISHED" }); return item && { item, model: "Publication", author: item.creator }; }
   if (kind === "note") {
     const WallModel = requestedModel === "FeedPost" ? FeedPost : WallPost;
-    const item = await WallModel.findOne({ _id: id, status: requestedModel === "FeedPost" ? "published" : "PUBLISHED", ...(requestedModel === "FeedPost" ? { deletedAt: null } : {}) });
+    const item = await WallModel.findOne({ _id: id, status: requestedModel === "FeedPost" ? "published" : "PUBLISHED", ...(requestedModel === "FeedPost" ? { deletedAt: null, visibility: "public", ...publicWallModerationFilter } : {}) });
     return item && { item, model: requestedModel === "FeedPost" ? "FeedPost" : "WallPost", author: item.author || item.creator };
   }
   if (kind === "photo") { const item = await ProfileMedia.findOne({ _id: id, type: "image" }); return item && { item, model: "ProfileMedia", author: item.user }; }
   if (kind === "cm") {
     if (requestedModel === "FeedPost") {
-      const post = await FeedPost.findOne({ "comments._id": id, status: "published", deletedAt: null }).select("comments");
+      const post = await FeedPost.findOne({ "comments._id": id, status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null }).select("comments");
       const item = post?.comments?.id(id);
       return item && { item, model: "FeedPost", author: item.user };
     }

@@ -1,3 +1,4 @@
+import { publicWallModerationFilter } from "../services/wallModerationAccess.js";
 import mongoose from "mongoose";
 import { filterStoryAccess } from "../services/storySourceService.js";
 import CreatorProfile from "../models/CreatorProfile.js";
@@ -870,7 +871,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
       .populate({ path: "creator", match: { role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified role status creatorApprovalStatus" })
       .populate("series", "name")
       .lean(),
-    FeedPost.find({ author: { $in: creatorIds }, status: "published", visibility: "public", deletedAt: null })
+    FeedPost.find({ author: { $in: creatorIds }, status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null })
       .sort({ publishedAt: -1, createdAt: -1 })
       .limit(80)
       .select("author media")

@@ -1,0 +1,68 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import mongoose from "mongoose";
+import { MongoMemoryServer } from "mongodb-memory-server";
+import FeedPost from "../models/FeedPost.js";
+import WallCreationLedger from "../models/WallCreationLedger.js";
+import WallPublicationLog from "../models/WallPublicationLog.js";
+import User from "../models/User.js";
+import MessageReport from "../models/MessageReport.js";
+import { reserveWallCreation, validateWallCreation, findRecentWallCopy, queueWallCopyReview } from "./wallCreationService.js";
+import { createFeedPost, getFeedPost, preserveWallTrustOrder } from "../controllers/postController.js";
+import { canReadWallNote } from "./wallModerationAccess.js";
+const oid = () => new mongoose.Types.ObjectId();
+const res = () => ({ status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
+
+test("real storage enforces publishing quotas, deleted duplicates, holds and reporter credibility", { skip: process.env.WALL_MONGO_INTEGRATION !== "1", timeout: 120000 }, async () => {
+  const server = await MongoMemoryServer.create();
+  try {
+    await mongoose.connect(server.getUri());
+    await Promise.all([FeedPost.init(), WallCreationLedger.init(), WallPublicationLog.init(), MessageReport.init()]);
+    const now = new Date();
+    const fresh = { _id: oid(), createdAt: now, profileType: "personal" };
+    const attempts = await Promise.allSettled(Array.from({ length: 5 }, (_, i) => reserveWallCreation(fresh._id, `new account note ${i}`, `new_${i}`, now, { user: fresh, postType: "Question" })));
+    assert.equal(attempts.filter(r => r.status === "fulfilled").length, 2);
+    assert.throws(() => validateWallCreation({ postType: "Question", text: "See example.com" }, {}, fresh), { code: "WALL_NEW_ACCOUNT_LINK" });
+    const business = { _id: oid(), profileType: "business", createdAt: new Date(now - 8 * 86400000) };
+    const offers = await Promise.allSettled([0, 1, 2].map(i => reserveWallCreation(business._id, `offer ${i}`, `offer_${i}`, now, { user: business, postType: "Offering" })));
+    assert.equal(offers.filter(r => r.status === "fulfilled").length, 1);
+    const author = oid();
+    const text = "Offering a spacious desk in the central neighbourhood with collection available this weekend";
+    await reserveWallCreation(author, text, "deleted_note", now);
+    await FeedPost.create({ author, text, postType: "Offering", publishedAt: now, deletedAt: now, status: "deleted" });
+    await assert.rejects(reserveWallCreation(author, text.toUpperCase() + "!!!", "repeat_note", now), { code: "WALL_DUPLICATE_TEXT" });
+    const evidence = await findRecentWallCopy(oid(), text + " please");
+    assert.ok(evidence?.similarity >= 0.85);
+    assert.equal(await findRecentWallCopy(oid(), "A completely different question about gardening lessons"), null);
+    const owner = oid();
+    const held = await FeedPost.create({ author: owner, postType: "Offering", text, publishedAt: now, visibility: "private", moderationStatus: "PENDING_REVIEW" });
+    await queueWallCopyReview(held, evidence);
+    assert.equal(await MessageReport.countDocuments({ feedPost: held._id, source: "AUTOMATED_DUPLICATE" }), 1);
+    assert.equal(canReadWallNote(held, { _id: oid() }), false);
+    assert.equal(canReadWallNote(held, { _id: owner }), true);
+    let error;
+    await getFeedPost({ params: { id: String(held._id) }, user: { _id: oid() } }, res(), value => { error = value; });
+    assert.equal(error?.statusCode, 404);
+    const review = await MessageReport.findOne({ feedPost: held._id }).select("+snapshot");
+    review.status = "RESOLVED"; review.resolution = { action: "NO_ACTION", note: "Independent listing verified" }; review.resolvedAt = now;
+    await review.save();
+    assert.equal((await FeedPost.findById(held._id)).moderationStatus, "APPROVED");
+    assert.equal((await FeedPost.findById(held._id)).visibility, "public");
+    const reporters = await User.create([0, 1, 2].map(i => ({ name: `Reporter ${i}`, username: `reporter${i}`, email: `r${i}@example.test`, password: "fixture-password", role: "fan", status: "active", createdAt: new Date(now - 8 * 86400000) })));
+    for (const reporter of reporters) await MessageReport.create({ reporter: reporter._id, reportedUser: owner, scope: "FEED_POST", feedPost: held._id, reason: "SPAM", snapshot: { text } });
+    assert.ok((await FeedPost.findById(held._id)).moderationHiddenAt);
+    const dismissed = await MessageReport.findOne({ reporter: reporters[0]._id, feedPost: held._id });
+    dismissed.status = "RESOLVED"; dismissed.resolution = { action: "NO_ACTION", note: "No violation found", falseReport: true }; dismissed.resolvedAt = now;
+    await dismissed.save();
+    assert.equal((await FeedPost.findById(held._id)).moderationHiddenAt, null);
+    // Copies submitted through the real publication endpoint remain private.
+    const publisher = await User.create({ name: "Publisher", username: "publisher", email: "publisher@example.test", password: "fixture-password", role: "fan", createdAt: new Date(now - 8 * 86400000) });
+    const req = { user: publisher, body: { postType: "Question", text: text + " please" }, files: {}, get: () => "copy_fixture_key" };
+    const response = res(); error = null;
+    await createFeedPost(req, response, value => { error = value; });
+    assert.ifError(error); assert.equal(response.code, 202); assert.equal(response.body.data.post.moderationStatus, "PENDING_REVIEW");
+    assert.equal(response.body.data.post.visibility, "private");
+    const ranks = preserveWallTrustOrder([{ id: "penalized" }, { id: "clean" }], [{ _id: "penalized", __trustPenalty: 3 }, { _id: "clean", __trustPenalty: 0 }]);
+    assert.equal(ranks[0].id, "clean");
+  } finally { await mongoose.disconnect(); await server.stop(); }
+});

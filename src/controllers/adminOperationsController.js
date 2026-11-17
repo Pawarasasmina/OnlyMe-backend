@@ -99,7 +99,7 @@ export const getUnifiedReport = asyncHandler(async (req, res) => {
 
 async function applyContentAction(report, model, action) {
   if (model === "PublicationReport" && ["HIDDEN", "REMOVED"].includes(action)) await Publication.updateOne({ _id: report.publication }, { $set: { status: action === "REMOVED" ? "REMOVED" : "ARCHIVED" } });
-  if (model === "MessageReport" && report.feedPost && ["HIDDEN", "REMOVED"].includes(action)) await FeedPost.updateOne({ _id: report.feedPost }, { $set: { status: action === "REMOVED" ? "deleted" : "archived", ...(action === "REMOVED" ? { deletedAt: new Date() } : { archivedAt: new Date() }) } });
+  if (model === "MessageReport" && report.feedPost && ["HIDDEN", "REMOVED"].includes(action)) await FeedPost.updateOne({ _id: report.feedPost }, { $set: { status: action === "REMOVED" ? "deleted" : "archived", ...(report.source !== "AUTOMATED_DUPLICATE" ? { moderationStatus: "REJECTED" } : {}), ...(action === "REMOVED" ? { deletedAt: new Date() } : { archivedAt: new Date() }) } });
   if (model === "MessageReport" && report.message && ["HIDDEN", "REMOVED"].includes(action)) await Message.updateOne({ _id: report.message }, { $set: { deletedAt: new Date() } });
   if (model === "MessageReport" && report.groupMessage && ["HIDDEN", "REMOVED"].includes(action)) await GroupMessage.updateOne({ _id: report.groupMessage }, { $set: { deletedAt: new Date() } });
   if (model === "MessageReport" && report.story && ["HIDDEN", "REMOVED"].includes(action)) await Story.updateOne({ _id: report.story }, { $set: { audience: "only_me", ...(action === "REMOVED" ? { expiresAt: new Date() } : {}) } });
@@ -111,6 +111,8 @@ export const actionUnifiedReport = asyncHandler(async (req, res) => {
   const allowed = new Set(["NO_ACTION", "HIDDEN", "REMOVED", "WARNING", "POSTING_RESTRICTED", "SELLING_RESTRICTED", "MESSAGING_RESTRICTED", "ACCOUNT_RESTRICTED", "SUSPENDED", "BANNED"]);
   if (!allowed.has(action) || reason.length < 3) throw new ApiError(400, "Choose an action and enter a reason");
   const report = await findReport(req.params.model, req.params.id); if (!report) throw new ApiError(404, "Report not found");
+  if (req.body.falseReport != null && typeof req.body.falseReport !== "boolean") throw new ApiError(400, "False report must be true or false");
+  if (req.body.falseReport && (action !== "NO_ACTION" || report.scope !== "FEED_POST" || report.source !== "USER_REPORT")) throw new ApiError(400, "Only a dismissed Wall user report can be confirmed false");
   if (["RESOLVED", "CLOSED"].includes(report.status)) throw new ApiError(409, "This report is already resolved");
   const authorId = report.reportedUser?._id || report.creator?._id; const durationDays = Math.min(365, Math.max(1, Number(req.body.durationDays) || 7)); const until = new Date(Date.now() + durationDays * 86400000);
   const userUpdate = {};
@@ -122,10 +124,10 @@ export const actionUnifiedReport = asyncHandler(async (req, res) => {
   if (action === "BANNED") Object.assign(userUpdate, { status: "banned", authVersion: Number((await User.findById(authorId).select("authVersion").lean())?.authVersion || 0) + 1 });
   if (Object.keys(userUpdate).length) await User.updateOne({ _id: authorId }, { $set: userUpdate });
   await applyContentAction(report, req.params.model, action);
-  report.status = "RESOLVED"; report.reviewedBy = req.user._id; report.resolvedAt = new Date(); report.resolution = { action, note: reason, restrictionUntil: ["POSTING_RESTRICTED", "SELLING_RESTRICTED", "MESSAGING_RESTRICTED", "ACCOUNT_RESTRICTED"].includes(action) ? until : null }; await report.save();
+  report.status = "RESOLVED"; report.reviewedBy = req.user._id; report.resolvedAt = new Date(); report.resolution = { action, note: reason, falseReport: Boolean(req.body.falseReport), restrictionUntil: ["POSTING_RESTRICTED", "SELLING_RESTRICTED", "MESSAGING_RESTRICTED", "ACCOUNT_RESTRICTED"].includes(action) ? until : null }; await report.save();
   const ReportModel = req.params.model === "MessageReport" ? MessageReport : PublicationReport;
   const siblingReports = await ReportModel.find({ ...siblingFilter(report, req.params.model), _id: { $ne: report._id } });
-  for (const sibling of siblingReports) { sibling.status = "RESOLVED"; sibling.reviewedBy = req.user._id; sibling.resolvedAt = report.resolvedAt; sibling.resolution = report.resolution; await sibling.save(); }
+  for (const sibling of siblingReports) { sibling.status = "RESOLVED"; sibling.reviewedBy = req.user._id; sibling.resolvedAt = report.resolvedAt; sibling.resolution = { ...report.resolution.toObject?.() || report.resolution, falseReport: false }; await sibling.save(); }
   const p = await policy();
   const reporters = [report, ...siblingReports].map((item) => item.reporter?._id || item.reporter).filter(Boolean);
   await Notification.insertMany([
