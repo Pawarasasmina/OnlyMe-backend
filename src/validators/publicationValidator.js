@@ -129,6 +129,7 @@ export function assertCompletePublication(publication, chapters) {
   const previews = chapters.filter((chapter) => chapter.isPreview).length;
   if (publication.kind === "SEEN") {
     const paid = publication.pricing?.mode === "ONE_TIME";
+    if (paid && publication.visibility === "WORLD_MEMBERS") throw new ApiError(400, "World members audience is available only for Free Seens");
     if (!paid && (publication.pricing?.mode !== "FREE" || publication.pricing?.starsAmount != null)) throw new ApiError(400, "Free Seens cannot charge Stars");
     if (paid && (!Number.isSafeInteger(publication.pricing?.starsAmount) || publication.pricing.starsAmount < 10)) throw new ApiError(400, "Paid Seen price must be at least 10 Stars");
     const max = 5;

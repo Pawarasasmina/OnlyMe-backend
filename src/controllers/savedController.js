@@ -9,8 +9,7 @@ import WallPost from "../models/WallPost.js";
 import WallShareEngagement from "../models/WallShareEngagement.js";
 import { countFollowedCreators, listFollowedCreators } from "../services/profileRelationshipService.js";
 import { attachEntityMetadata } from "../services/contentEntityService.js";
-import { mutualFriendCreatorIds } from "../services/publicationAccessService.js";
-import { serializePublication } from "../services/publicationAccessService.js";
+import { canAccessPublicationAudience, mutualFriendCreatorIds, serializePublication } from "../services/publicationAccessService.js";
 import { savedService } from "../services/savedService.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -191,16 +190,17 @@ async function loadSavedPublications({ context, kinds, limit, user }) {
     ...visiblePublicationFilter(context, kinds),
   }).populate("creator", "name username avatar isVerified").populate("series", "name").lean();
   await attachEntityMetadata(records, user);
-  return records
-    .map((publication) => {
-      const id = String(publication._id);
-      const serialized = serializePublication(publication, user, { audienceAllowed: true });
-      return serialized ? {
-        ...serialized,
-        savedAt: savedAtByPublication.get(id) || null,
-        viewerSaved: savedAtByPublication.has(id),
-      } : null;
-    })
+  const serializedRecords = await Promise.all(records.map(async (publication) => {
+    const id = String(publication._id);
+    const audienceAllowed = publication.kind !== "SEEN" || await canAccessPublicationAudience(publication, user);
+    const serialized = serializePublication(publication, user, { audienceAllowed });
+    return serialized ? {
+      ...serialized,
+      savedAt: savedAtByPublication.get(id) || null,
+      viewerSaved: savedAtByPublication.has(id),
+    } : null;
+  }));
+  return serializedRecords
     .filter(Boolean)
     .sort((left, right) => new Date(right.savedAt || 0) - new Date(left.savedAt || 0));
 }

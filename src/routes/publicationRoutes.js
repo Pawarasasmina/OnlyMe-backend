@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { addSeenToSeries, addWorldModerator, archive, cancelRevision, createChapter, createDraft, createSeries, decideExperienceAccess, deleteChapter, deleteSeries, editChapter, getExperienceAccessLink, getMemberWorld, getMine, getPublishedPublication, getSeenInsights, getSeries, getWorldManagement, getWorldPricing, includeWorldExperience, listMine, listMySeries, listPublishedSeens, listSeenCategories, listWorldModeratorCandidates, listWorldModerators, openWorldWave, pinSeen, removeMedia, removePlanet, removeSeen, removeSeenFromSeries, removeWorldCover, removeWorldExperience, removeWorldModerator, removeWorldStoryPreview, removeWorldWelcomeVoice, reorder, requestExperienceAccess, restore, resubmit, setCommentsEnabled, startRevision, submit, updateDraft, updateSeries, updateWorldManagement, updateWorldPricing, uploadMedia, uploadWorldCover, uploadWorldStoryPreview, uploadWorldWelcomeVoice } from "../controllers/publicationController.js";
+import { addSeenToSeries, addWorldModerator, archive, cancelRevision, createChapter, createDraft, createSeries, decideExperienceAccess, deleteChapter, deleteSeries, downloadSeenPdf, editChapter, getExperienceAccessLink, getMemberWorld, getMine, getPublishedPublication, getSeenInsights, getSeries, getWorldManagement, getWorldPricing, includeWorldExperience, listMine, listMySeries, listPublishedSeens, listSeenCategories, listWorldModeratorCandidates, listWorldModerators, openWorldWave, pinSeen, removeMedia, removePlanet, removeSeen, removeSeenFromSeries, removeWorldCover, removeWorldExperience, removeWorldModerator, removeWorldStoryPreview, removeWorldWelcomeVoice, reorder, requestExperienceAccess, restore, resubmit, setCommentsEnabled, startRevision, submit, updateDraft, updateSeries, updateWorldManagement, updateWorldPricing, uploadMedia, uploadWorldCover, uploadWorldStoryPreview, uploadWorldWelcomeVoice } from "../controllers/publicationController.js";
 import { setWorldBonusChapter } from "../controllers/publicationController.js";
 import { optionalProtect, protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
@@ -91,6 +91,7 @@ router.post("/:id/mute-creator", protect, authorize("fan", "creator"), muteSeenC
 router.put("/:id/block-creator", protect, authorize("fan", "creator"), blockSeenCreator);
 router.post("/:id/report", protect, authorize("fan", "creator"), reportSeen);
 router.post("/:id/chapters/:chapterId/report", protect, authorize("fan", "creator"), reportChapter);
+router.get("/:id/pdf", protect, authorize("fan", "creator"), downloadSeenPdf);
 router.get("/:id", optionalProtect, getPublishedPublication);
 
 export default router;

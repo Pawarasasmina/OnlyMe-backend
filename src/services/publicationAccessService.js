@@ -42,8 +42,18 @@ export async function seenVisibilityFilter(viewer, candidateCreatorIds = [], { i
   const viewerId = viewer?._id;
   const filter = [...legacyPublicVisibility];
   if (viewerId) {
-    const mutualIds = await mutualFriendCreatorIds(viewerId, candidateCreatorIds);
+    const [mutualIds, memberships] = await Promise.all([
+      mutualFriendCreatorIds(viewerId, candidateCreatorIds),
+      PremiumMembership.find({
+        user: viewerId,
+        status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] },
+        currentPeriodEnd: { $gt: new Date() },
+        ...(candidateCreatorIds.length ? { creator: { $in: candidateCreatorIds } } : {}),
+      }).select("creator").lean(),
+    ]);
     if (mutualIds.size) filter.push({ visibility: "FRIENDS", creator: { $in: [...mutualIds] } });
+    const memberCreatorIds = [...new Set(memberships.map((membership) => String(membership.creator)))];
+    if (memberCreatorIds.length) filter.push({ visibility: "WORLD_MEMBERS", creator: { $in: memberCreatorIds } });
     if (includeOwner) filter.push({ creator: viewerId, visibility: { $ne: "LINK_ONLY" } });
   }
   const hidden = await User.find({ status: { $in: ["deactivated", "pending_deletion", "deleted"] } }).select("_id").lean();
@@ -63,6 +73,7 @@ export async function canAccessPublicationAudience(publication, viewer, { shareT
   if (visibility === "PUBLIC") return true;
   if (visibility === "LINK_ONLY") return tokenMatches(item, shareToken);
   if (visibility === "FRIENDS") return areMutualFriends(viewer?._id, ownerId);
+  if (visibility === "WORLD_MEMBERS" && viewer?._id) return Boolean(await PremiumMembership.exists({ user: viewer._id, creator: ownerId, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }));
   return false;
 }
 
