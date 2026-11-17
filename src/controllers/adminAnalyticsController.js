@@ -13,12 +13,12 @@ export const exportAnalyticsReport = asyncHandler(async (req, res) => {
 
   if (format === "csv") {
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", "attachment; filename=onlyme-analytics-report.csv");
+    res.setHeader("Content-Disposition", "attachment; filename=atseen-analytics-report.csv");
     return res.status(200).send(exported);
   }
   if (format === "pdf") {
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "attachment; filename=onlyme-analytics-report.pdf");
+    res.setHeader("Content-Disposition", "attachment; filename=atseen-analytics-report.pdf");
     return res.status(200).send(exported);
   }
 

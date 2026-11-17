@@ -377,7 +377,7 @@ async function seedContent(c, index) {
       ] },
       { title: "Your next seven days", isPreview: false, blocks: [
         { type: "HIGHLIGHT", text: "Make the next step small enough to begin today." },
-        { type: "LINK", label: "Continue the conversation in the community", url: "https://onlyme.example/community" },
+        { type: "LINK", label: "Continue the conversation in the community", url: "https://atseen.example/community" },
       ] },
     ];
     experienceIds.push(await seedPublication(c, `${c.username}-experience-${i}`, { kind: "EXPERIENCE", title, summary: `A guided ${c.category.toLowerCase()} experience designed by ${c.first}.`, description: `Three focused chapters combining explanation, visual guidance, reflection, and an actionable seven-day plan.`, tags: [c.category.toLowerCase(), "guided", "experience"], coverMedia: experienceCover, introMedia: i === 0 ? media(`${c.username}-experience-${i}-intro`, "https://storage.googleapis.com/coverr-main/mp4/Mt_Baker.mp4", "VIDEO") : undefined, pricing: { mode: "ONE_TIME", starsAmount: [90, 190][i], presetId: `experience-${[90, 190][i]}` }, planet: { slot: null, emoji: "", accent: `#${c.color}` }, experiencePath: `${c.category} / ${i === 0 ? "Foundation" : "Practice"}`, experienceLocation: i === 0 ? "Online" : c.city, allowDownload: i === 1, includedInWorld: i === 0, chapters }, at(index * 8 + i * 24 + 48)));

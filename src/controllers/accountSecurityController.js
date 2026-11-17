@@ -18,7 +18,7 @@ export const beginAccountTwoFactorSetup = asyncHandler(async (req, res) => {
   if (req.user.twoFactorEnabled) throw new ApiError(409, "Two-factor authentication is already enabled");
   const secret = createTotpSecret();
   await User.updateOne({ _id: req.user._id }, { $set: { twoFactorPendingSecret: secret } });
-  const issuer = "OnlyMe";
+  const issuer = "ATSEEN";
   const account = encodeURIComponent(req.user.email);
   const uri = `otpauth://totp/${encodeURIComponent(issuer)}:${account}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&digits=6&period=30`;
   return sendResponse(res, 200, "Two-factor setup started", { secret, uri });

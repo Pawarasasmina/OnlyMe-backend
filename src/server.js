@@ -66,7 +66,7 @@ async function startServer() {
     configureMessagingSocket(io);
     app.set("io", io);
     server.listen(env.port, () => {
-      console.log(`OnlyMe API listening on port ${env.port}`);
+      console.log(`ATSEEN API listening on port ${env.port}`);
       // Maintenance must never delay API readiness or cold-start recovery.
       if (env.maintenanceWorkersEnabled) startMaintenanceWorkers(io);
       else console.log("Maintenance workers disabled for this API instance");

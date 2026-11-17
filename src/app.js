@@ -57,10 +57,10 @@ app.use(
 app.use(helmet());
 app.use(morgan(env.nodeEnv === "production" ? "combined" : "dev"));
 app.use(uptimeAlertMiddleware);
-app.get("/api/health/live", (_req, res) => res.status(200).json({ success: true, message: "OnlyMe API process is alive", data: {} }));
+app.get("/api/health/live", (_req, res) => res.status(200).json({ success: true, message: "ATSEEN API process is alive", data: {} }));
 app.get("/api/health/ready", (_req, res) => {
   const ready = !app.get("shuttingDown") && mongoose.connection.readyState === 1;
-  return res.status(ready ? 200 : 503).json({ success: ready, message: ready ? "OnlyMe API is ready" : "Database is unavailable", data: {} });
+  return res.status(ready ? 200 : 503).json({ success: ready, message: ready ? "ATSEEN API is ready" : "Database is unavailable", data: {} });
 });
 app.post("/api/identity/webhook", express.raw({ type: "application/json", limit: "1mb" }), stripeIdentityWebhook);
 app.use(express.json());

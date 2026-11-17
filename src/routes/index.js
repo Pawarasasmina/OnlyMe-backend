@@ -46,7 +46,7 @@ import { sendResponse } from "../utils/response.js";
 
 const router = Router();
 
-router.get("/health", (_req, res) => sendResponse(res, 200, "OnlyMe API is running"));
+router.get("/health", (_req, res) => sendResponse(res, 200, "ATSEEN API is running"));
 router.use("/internal/moderation", uploadSafetyWebhookRoutes);
 router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
