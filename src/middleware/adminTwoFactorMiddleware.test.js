@@ -3,3 +3,4 @@ import test from "node:test";
 import { requireAdminTwoFactor } from "./adminTwoFactorMiddleware.js";
 const run = (user) => new Promise((resolve) => requireAdminTwoFactor({ user }, {}, (error) => resolve(error || null)));
 test("admin console requires 2FA while consumer requests remain unaffected", async () => { assert.equal((await run({ role: "admin", adminTwoFactorEnabled: false })).code, "ADMIN_2FA_SETUP_REQUIRED"); assert.equal(await run({ role: "admin", adminTwoFactorEnabled: true }), null); assert.equal(await run({ role: "fan" }), null); });
+test("a Main Admin can explicitly make 2FA optional for a staff account", async () => { assert.equal(await run({ role: "admin", adminTwoFactorEnabled: false, adminTwoFactorRequired: false }), null); });

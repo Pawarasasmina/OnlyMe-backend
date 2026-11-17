@@ -257,16 +257,17 @@ export const releasePayouts = asyncHandler(async (req, res) => { const reason = 
 
 export const getOperationsDashboard = asyncHandler(async (_req, res) => {
   const now = new Date();
+  const platformUserIds = await User.distinct("_id");
   const [messages, publications, appeals] = await Promise.all([
-    MessageReport.find({ status: { $in: ["RECEIVED", "REVIEWING"] } }).select("reason priority dueAt createdAt reportedUser").lean(),
-    PublicationReport.find({ status: { $in: ["RECEIVED", "REVIEWING"] } }).select("reason priority dueAt createdAt creator").lean(),
-    ModerationAppeal.find().select("status createdAt reviewedAt").lean(),
+    MessageReport.find({ reportedUser: { $in: platformUserIds }, status: { $in: ["RECEIVED", "REVIEWING"] } }).select("reason priority dueAt createdAt reportedUser").lean(),
+    PublicationReport.find({ creator: { $in: platformUserIds }, status: { $in: ["RECEIVED", "REVIEWING"] } }).select("reason priority dueAt createdAt creator").lean(),
+    ModerationAppeal.find({ appellant: { $in: platformUserIds } }).select("status createdAt reviewedAt").lean(),
   ]);
   const all = [...messages.map((r) => normalizedReport(r, "MessageReport")), ...publications.map((r) => normalizedReport(r, "PublicationReport"))];
-  const [resolvedMessages, resolvedPublications] = await Promise.all([MessageReport.find({ resolvedAt: { $ne: null } }).select("createdAt resolvedAt").limit(5000).lean(), PublicationReport.find({ resolvedAt: { $ne: null } }).select("createdAt resolvedAt").limit(5000).lean()]);
+  const [resolvedMessages, resolvedPublications] = await Promise.all([MessageReport.find({ reportedUser: { $in: platformUserIds }, resolvedAt: { $ne: null } }).select("createdAt resolvedAt").limit(5000).lean(), PublicationReport.find({ creator: { $in: platformUserIds }, resolvedAt: { $ne: null } }).select("createdAt resolvedAt").limit(5000).lean()]);
   const times = [...resolvedMessages, ...resolvedPublications].map((r) => new Date(r.resolvedAt) - new Date(r.createdAt)).sort((a, b) => a - b);
-  const medianMs = times.length ? times[Math.floor(times.length / 2)] : 0;
-  const within24 = times.length ? Math.round(times.filter((x) => x <= 86400000).length / times.length * 100) : 100;
+  const medianMs = times.length ? times[Math.floor(times.length / 2)] : null;
+  const within24 = times.length ? Math.round(times.filter((x) => x <= 86400000).length / times.length * 100) : null;
   const userCounts = new Map();
   for (const row of all) { const id = String(row.author?._id || row.author || ""); if (id) userCounts.set(id, (userCounts.get(id) || 0) + 1); }
   const leaders = [...userCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
@@ -274,7 +275,9 @@ export const getOperationsDashboard = asyncHandler(async (_req, res) => {
   const peopleById = new Map(people.map((person) => [String(person._id), person]));
   const topReportedUsers = leaders.map(([userId, count]) => ({ userId, count, user: peopleById.get(userId) || null }));
   return sendResponse(res, 200, "Operations dashboard fetched", {
-    reports: { open: all.length, urgent: all.filter((x) => x.priority === "URGENT").length, overdue: all.filter((x) => new Date(x.dueAt) < now).length, medianActionMinutes: Math.round(medianMs / 60000), within24Percent: within24 },
+    scope: "ALL_CURRENT_ACCOUNTS",
+    generatedAt: now,
+    reports: { open: all.length, urgent: all.filter((x) => x.priority === "URGENT").length, overdue: all.filter((x) => new Date(x.dueAt) < now).length, resolvedSampleSize: times.length, medianActionMinutes: medianMs == null ? null : Math.round(medianMs / 60000), within24Percent: within24 },
     appeals: { total: appeals.length, open: appeals.filter((x) => ["PENDING", "REVIEWING"].includes(x.status)).length, reversed: appeals.filter((x) => x.status === "REVERSED").length },
     topReportedUsers,
   });
