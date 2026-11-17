@@ -573,7 +573,7 @@ function drawHeader(commands, report, pageTitle = "Reports & Analytics") {
   commands.push(rectCommand(0, 735, 612, 57, "#fff7ed"));
   commands.push(rectCommand(40, 748, 34, 30, "#f97316"));
   commands.push(textCommand("O", 52, 758, 15, "#ffffff"));
-  commands.push(textCommand("OnlyMe", 86, 765, 16, "#0f172a"));
+  commands.push(textCommand("ATSEEN", 86, 765, 16, "#0f172a"));
   commands.push(textCommand(pageTitle, 86, 748, 10, "#64748b"));
   commands.push(textCommand(`${new Date(report.range.startDate).toISOString().slice(0, 10)} to ${new Date(report.range.endDate).toISOString().slice(0, 10)} | ${report.range.granularity}`, 365, 760, 9, "#475569"));
 }

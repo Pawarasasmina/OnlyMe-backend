@@ -62,7 +62,7 @@ export async function searchLiveLocations({ language = "en", latitude, longitude
   let response;
   try {
     response = await fetch(url, {
-      headers: { Accept: "application/json", "User-Agent": "OnlyMe/1.0 location-search" },
+      headers: { Accept: "application/json", "User-Agent": "ATSEEN/1.0 location-search" },
       signal: AbortSignal.timeout(6000),
     });
   } catch {
