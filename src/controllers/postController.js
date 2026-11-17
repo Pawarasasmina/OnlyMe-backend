@@ -456,6 +456,7 @@ async function createPostRecord({ imageFiles = [], req, status, voiceFile = null
   ensureCreatable({ hasVoice: Boolean(voiceFile), imageFiles, status, text });
 
   const post = new FeedPost({
+    ...(req.wallPostId ? { _id: req.wallPostId } : {}),
     author: req.user._id,
     creationKey: status === "published" ? req.wallCreationKey : undefined,
     creationFingerprint: status === "published" ? req.wallFingerprint : undefined,
@@ -681,7 +682,8 @@ export const createFeedPost = asyncHandler(async (req, res) => {
     if (files.voice?.[0]) req.wallPreparedVoice = await prepareWallVoiceTranscript({ file: files.voice[0], transcript: cleanString(req.body.voiceTranscript, POST_TEXT_MAX_LENGTH), transcriptLanguage: normalizeVoiceLanguageCode(req.body.voiceTranscriptLanguage) });
     const content = [text, req.wallPreparedVoice?.transcript || ""].filter(Boolean).join(" ");
     validateWallPublishingText(content, req.user);
-    release = await reserveWallCreation(req.user._id, content, req.wallCreationKey, new Date(), { user: req.user, postType: req.body.postType });
+    req.wallPostId = new mongoose.Types.ObjectId();
+    release = await reserveWallCreation(req.user._id, content, req.wallCreationKey, new Date(), { user: req.user, postType: req.body.postType, postId: req.wallPostId });
     req.wallCopyEvidence = await findRecentWallCopy(req.user._id, content);
     assertNotExactWallCopy(req.wallCopyEvidence);
     const post = await createPostRecord({ imageFiles: files.media || [], req, status: "published", voiceFile: files.voice?.[0] || null });
@@ -809,13 +811,20 @@ const updateFeedPostInternal = async (req, res) => {
     if (media.some((item) => item.type === "audio" && item.duration > 30)) throw new ApiError(400, "Wall voice notes must be 30 seconds or shorter");
     post.creationKey = post.creationKey || creationKey(req);
     await post.validate();
-    release = await reserveWallCreation(req.user._id, content, post.creationKey, new Date(), { user: req.user, postType: post.postType });
+    release = await reserveWallCreation(req.user._id, content, post.creationKey, new Date(), { user: req.user, postType: post.postType, postId: post._id });
     post.status = "published";
     post.visibility = copyEvidence ? "private" : "public";
     post.publishedAt = new Date();
   }
 
-  if (previousPost.status === "published" && (previousPost.text !== text || previousPost.postType !== post.postType)) {
+  if (previousPost.status === "published" && JSON.stringify(wallNoteVersion(previousPost)) === JSON.stringify(wallNoteVersion(post.toObject()))) {
+    await populatePostForResponse(post);
+    await attachSavedCommentState(post, req.user._id);
+    await attachEntityMetadata(post, req.user || null);
+    return sendResponse(res, 200, "No changes", { post: serializePost(post, req.user), unchanged: true });
+  }
+
+  if (previousPost.status === "published" && (previousPost.text !== text || previousPost.postType !== post.postType || req.body.retainedMedia != null || req.files?.voice?.length)) {
     await post.validate();
     await registerWallEdit(previousPost, content, new Date(), { user: req.user, postType: post.postType });
   }

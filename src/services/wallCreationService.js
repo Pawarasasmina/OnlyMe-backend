@@ -42,10 +42,11 @@ export async function wallFingerprint(req) {
 async function ensureWallLedger(author, cutoff) {
   // Seed once from existing publications, including archived/deleted records.
   const existing = await FeedPost.find({ author, $or: [{ publishedAt: { $gt: cutoff } }, { publishedAt: null, status: { $ne: "draft" }, createdAt: { $gt: cutoff } }] }).select("text postType publishedAt createdAt creationKey media.transcript").lean();
-  if (existing.length) try { await WallPublicationLog.bulkWrite(existing.map(post => ({ updateOne: { filter: { author, key: post.creationKey || String(post._id) }, update: { $setOnInsert: { author, key: post.creationKey || String(post._id), postType: post.postType || "", textHash: textHash(post.text || ""), normalizedText: normalizeWallText(post.text || ""), publishedAt: post.publishedAt || post.createdAt } }, upsert: true } })), { ordered: false }); }
+  if (existing.length) try { await WallPublicationLog.bulkWrite(existing.map(post => ({ updateOne: { filter: { author, key: post.creationKey || String(post._id) }, update: { $setOnInsert: { author, key: post.creationKey || String(post._id), postId: post._id, postType: post.postType || "", textHash: textHash(post.text || ""), normalizedText: normalizeWallText(post.text || ""), publishedAt: post.publishedAt || post.createdAt } }, upsert: true } })), { ordered: false }); }
   catch (error) { if (error.code !== 11000 && !error.writeErrors?.every(entry => entry.code === 11000)) throw error; }
+  const publications = await WallPublicationLog.find({ author, publishedAt: { $gt: cutoff } }).lean();
   try {
-    await WallCreationLedger.updateOne({ _id: author }, { $setOnInsert: { entries: existing.map((post) => ({ key: post.creationKey || String(post._id), textHash: textHash(post.text || ""), textHashes: [textHash(post.text || "")], postType: post.postType || "", createdAt: post.publishedAt || post.createdAt })) } }, { upsert: true });
+    await WallCreationLedger.updateOne({ _id: author }, { $setOnInsert: { entries: publications.map(post => ({ key: post.key, textHash: post.textHash, textHashes: [...new Set([post.textHash, ...(post.textHistory || []).map(textHash)].filter(Boolean))], postType: post.postType || "", createdAt: post.publishedAt })) } }, { upsert: true });
   } catch (error) { if (error.code !== 11000) throw error; }
 }
 export async function reserveWallCreation(author, text, key, now = new Date(), options = {}) {
@@ -55,7 +56,7 @@ export async function reserveWallCreation(author, text, key, now = new Date(), o
   await ensureWallLedger(author, cutoff);
   const fingerprint = textHash(text);
   const normalized = normalizeWallText(text);
-  if (fingerprint && await WallPublicationLog.exists({ author, key: { $ne: key }, publishedAt: { $gt: cutoff }, $or: [{ textHash: fingerprint }, { textHistory: normalized }] })) throw new ApiError(409, "You already posted this text in the last 24 hours.", "WALL_DUPLICATE_TEXT");
+  if (fingerprint && await WallPublicationLog.exists({ author, key: { $ne: key }, publishedAt: { $gt: cutoff }, $or: [{ textHash: fingerprint }, { textHistory: normalized }] })) throw new ApiError(409, "You already posted this today", "WALL_DUPLICATE_TEXT");
   if (policy.isBusiness && postType === "Offering" && await WallPublicationLog.exists({ author, key: { $ne: key }, postType: "Offering", publishedAt: { $gt: cutoff } })) throw new ApiError(429, "Business accounts: one offer a day", "WALL_BUSINESS_OFFERING_LIMIT");
   const live = { $filter: { input: "$entries", as: "entry", cond: { $gt: ["$$entry.createdAt", cutoff] } } };
   const conditions = [{ $lt: [{ $size: live }, policy.dailyLimit] }];
@@ -66,12 +67,12 @@ export async function reserveWallCreation(author, text, key, now = new Date(), o
   if (!reserved) {
     const ledger = await WallCreationLedger.findById(author).lean();
     if (ledger?.entries.some((entry) => entry.key === key)) throw new ApiError(409, "This note is already publishing. Check your Wall, then retry if needed.", "WALL_PUBLICATION_PENDING");
-    if (fingerprint && ledger?.entries.some((entry) => (entry.textHash === fingerprint || entry.textHashes?.includes(fingerprint)) && entry.createdAt > cutoff)) throw new ApiError(409, "You already posted this text in the last 24 hours.", "WALL_DUPLICATE_TEXT");
+    if (fingerprint && ledger?.entries.some((entry) => (entry.textHash === fingerprint || entry.textHashes?.includes(fingerprint)) && entry.createdAt > cutoff)) throw new ApiError(409, "You already posted this today", "WALL_DUPLICATE_TEXT");
     if (policy.isBusiness && postType === "Offering" && ledger?.entries.some(entry => entry.postType === "Offering" && entry.createdAt > cutoff)) throw new ApiError(429, "Business accounts: one offer a day", "WALL_BUSINESS_OFFERING_LIMIT");
     throw new ApiError(429, policy.isNew ? "New here: 2 Wall notes a day for your first week" : "Five Wall posts in 24 hours keeps Wall useful. Try again after an earlier post leaves that window.", "WALL_DAILY_LIMIT");
   }
   const release = async () => { await WallCreationLedger.updateOne({ _id: author }, { $pull: { entries: { key } } }); await WallPublicationLog.deleteOne({ author, key }); };
-  try { await WallPublicationLog.updateOne({ author, key }, { $setOnInsert: { author, key, postType, textHash: fingerprint, normalizedText: normalized, publishedAt: now } }, { upsert: true }); }
+  try { await WallPublicationLog.updateOne({ author, key }, { $setOnInsert: { author, key, postId: options.postId || null, postType, textHash: fingerprint, normalizedText: normalized, publishedAt: now } }, { upsert: true }); }
   catch (error) { await release(); throw error; }
   return release;
 }
@@ -121,7 +122,7 @@ export async function registerWallEdit(post, text, now = new Date(), options = {
   const cutoff = new Date(now.getTime() - WALL_DAY_MS);
   if (!fingerprint || !post.publishedAt || post.publishedAt <= cutoff) return;
   await ensureWallLedger(author, cutoff);
-  if (await WallPublicationLog.exists({ author, key: { $ne: key }, publishedAt: { $gt: cutoff }, $or: [{ textHash: fingerprint }, { textHistory: normalized }] })) throw new ApiError(409, "You already posted this text in the last 24 hours.", "WALL_DUPLICATE_TEXT");
+  if (await WallPublicationLog.exists({ author, key: { $ne: key }, publishedAt: { $gt: cutoff }, $or: [{ textHash: fingerprint }, { textHistory: normalized }] })) throw new ApiError(409, "You already posted this today", "WALL_DUPLICATE_TEXT");
   const match = { _id: author, "entries.key": key };
   match.$and = [{ entries: { $not: { $elemMatch: { key: { $ne: key }, createdAt: { $gt: cutoff }, $or: [{ textHash: fingerprint }, { textHashes: fingerprint }] } } } }];
   const becomingOffering = wallAccountPolicy(options.user || {}, now).isBusiness && options.postType === "Offering" && post.postType !== "Offering";
@@ -129,10 +130,10 @@ export async function registerWallEdit(post, text, now = new Date(), options = {
     if (await WallPublicationLog.exists({ author, key: { $ne: key }, postType: "Offering", publishedAt: { $gt: cutoff } })) throw new ApiError(429, "Business accounts: one offer a day", "WALL_BUSINESS_OFFERING_LIMIT");
     match.$and.push({ entries: { $not: { $elemMatch: { key: { $ne: key }, postType: "Offering", createdAt: { $gt: cutoff } } } } });
   }
-  const updated = await WallCreationLedger.updateOne(match, { $addToSet: { "entries.$.textHashes": fingerprint }, ...(becomingOffering ? { $set: { "entries.$.postType": "Offering" } } : {}) });
+  const updated = await WallCreationLedger.updateOne(match, { $set: { "entries.$.textHash": fingerprint, "entries.$.textHashes": [fingerprint], ...(becomingOffering ? { "entries.$.postType": "Offering" } : {}) } });
   if (becomingOffering && !updated.matchedCount) throw new ApiError(429, "Business accounts: one offer a day", "WALL_BUSINESS_OFFERING_LIMIT");
-  if (!updated.matchedCount) throw new ApiError(409, "You already posted this text in the last 24 hours.", "WALL_DUPLICATE_TEXT");
-  await WallPublicationLog.updateOne({ author, key }, { $setOnInsert: { author, key, postType: post.postType, textHash: textHash(post.text || ""), normalizedText: normalizeWallText(post.text || ""), publishedAt: post.publishedAt }, $addToSet: { textHistory: normalized } }, { upsert: true });
+  if (!updated.matchedCount) throw new ApiError(409, "You already posted this today", "WALL_DUPLICATE_TEXT");
+  await WallPublicationLog.updateOne({ author, key }, { $setOnInsert: { author, key, postId: post._id, postType: post.postType, publishedAt: post.publishedAt }, $set: { textHash: fingerprint, normalizedText: normalized, textHistory: [] } }, { upsert: true });
   if (becomingOffering) await WallPublicationLog.updateOne({ author, key }, { $set: { postType: "Offering" } });
 }
 export function creationKey(req) {
