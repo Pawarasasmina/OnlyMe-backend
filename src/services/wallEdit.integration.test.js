@@ -7,6 +7,7 @@ import User from "../models/User.js";
 import WallPublicationLog from "../models/WallPublicationLog.js";
 import { updateFeedPost, serializePost } from "../controllers/postController.js";
 import { canEditWallNote, WALL_EDIT_MS } from "./wallEditService.js";
+import { reserveWallCreation, textHash } from "./wallCreationService.js";
 test("edit boundary is exclusive and never extends after prior edits or bumps", () => {
   const now = Date.now(), post = { status: "published", publishedAt: new Date(now - WALL_EDIT_MS), bumpedAt: new Date(now), editedAt: new Date(now) };
   assert.equal(Boolean(canEditWallNote(post, now)), false);
@@ -27,7 +28,20 @@ test("edits preserve publication/quota and store hidden prior versions; stale an
     assert.equal(stored.publishedAt.getTime(), publishedAt.getTime()); assert.equal(stored.bumpedAt, null);
     assert.ok(stored.editedAt); assert.equal(stored.noteVersions.length, 1); assert.equal(stored.noteVersions[0].text, "Original desk"); assert.equal(stored.noteVersions[0].media.length, 1);
     assert.equal(await WallPublicationLog.countDocuments({ author: user._id }), 1);
+    const log = await WallPublicationLog.findOne({ author: user._id }).lean();
+    assert.equal(log.normalizedText, "updated desk");
+    assert.equal(log.textHash, textHash("Updated desk"));
+    assert.equal(log.publishedAt.getTime(), publishedAt.getTime());
+    await assert.rejects(reserveWallCreation(user._id, "Updated desk", "duplicate_updated"), { code: "WALL_DUPLICATE_TEXT" });
+    const release = await reserveWallCreation(user._id, "Original desk", "original_reusable");
+    await release();
     assert.equal(serializePost(stored, user).noteVersions, undefined);
+    result = await run({ text: "Updated desk", editVersion: stored.__v });
+    assert.ifError(result.error);
+    assert.equal(result.res.body.data.unchanged, true);
+    const unchanged = await FeedPost.findById(post._id).select("+noteVersions");
+    assert.equal(unchanged.__v, stored.__v);
+    assert.equal(unchanged.noteVersions.length, 1);
     result = await run({ text: "Stale save", editVersion: 0 }); assert.equal(result.error?.statusCode, 409);
     result = await run({ text: "WhatsApp me", editVersion: stored.__v }); assert.equal(result.error?.code, "WALL_CONTACT_DETAILS");
     await FeedPost.updateOne({ _id: post._id }, { $set: { publishedAt: new Date(Date.now() - WALL_EDIT_MS) } });
