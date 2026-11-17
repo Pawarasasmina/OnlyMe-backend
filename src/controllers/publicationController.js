@@ -830,9 +830,10 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
   await attachEntityMetadata(items, req.user || null);
   const publicationIds = items.map((item) => item._id);
   const creatorIds = [...new Set(items.map((item) => String(item.creator?._id || item.creator)).filter(Boolean))];
-  const [engagementRows, reactionRows, viewerRows, profileRows, commentRows, premiumWorldRows, activeMembershipRows] = await Promise.all([
+  const [engagementRows, reactionRows, reactionPreviewRows, viewerRows, profileRows, commentRows, premiumWorldRows, activeMembershipRows] = await Promise.all([
     publicationIds.length ? SeenEngagement.aggregate([{ $match: { publication: { $in: publicationIds } } }, { $group: { _id: { publication: "$publication", type: "$type" }, count: { $sum: 1 } } }]) : [],
     publicationIds.length ? SeenEngagement.aggregate([{ $match: { publication: { $in: publicationIds }, type: "REACTION" } }, { $group: { _id: { publication: "$publication", reaction: { $ifNull: ["$reaction", "LIKE"] } }, count: { $sum: 1 } } }]) : [],
+    publicationIds.length ? SeenEngagement.find({ publication: { $in: publicationIds }, type: "REACTION", actorAccountType: { $ne: "TEST" } }).sort({ updatedAt: -1, _id: -1 }).populate("user", "name username avatar isVerified").lean() : [],
     req.user?._id && publicationIds.length ? SeenEngagement.find({ publication: { $in: publicationIds }, user: req.user._id, type: { $in: ["REACTION", "SHARE", "SAVE"] } }).lean() : [],
     creatorIds.length ? CreatorProfile.find({ user: { $in: creatorIds } }).select("user city country orbitStatus").lean() : [],
     publicationIds.length ? SeenEngagement.find({ publication: { $in: publicationIds }, type: "COMMENT" }).sort({ createdAt: -1 }).limit(100).populate("user", "name username avatar").lean() : [],
@@ -856,6 +857,15 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
     current.reactionBreakdown[row._id.reaction] = row.count;
     current.topReactions.push(row._id.reaction);
     reactionsByPublication.set(key, current);
+  }
+  const reactorPreviewsByPublication = new Map();
+  for (const row of reactionPreviewRows.sort((first, second) => Number(String(second.user?._id || second.user) === String(req.user?._id || "")) - Number(String(first.user?._id || first.user) === String(req.user?._id || "")))) {
+    if (!row.user?._id) continue;
+    const key = String(row.publication);
+    const previews = reactorPreviewsByPublication.get(key) || [];
+    if (previews.length >= 2) continue;
+    previews.push({ id: String(row.user._id), name: row.user.name || row.user.username || "User", username: row.user.username || "", avatar: row.user.avatar || "", verified: Boolean(row.user.isVerified) });
+    reactorPreviewsByPublication.set(key, previews);
   }
   const viewerByPublication = new Map();
   for (const row of viewerRows) {
@@ -903,6 +913,7 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
         reactionCount: counts.REACTION || 0,
         reactionBreakdown: reactionSummary.reactionBreakdown,
         topReactions: reactionSummary.topReactions.slice(0, 3),
+        reactorPreviews: reactorPreviewsByPublication.get(String(item._id)) || [],
         commentCount: counts.COMMENT || 0,
         shareCount: counts.SHARE || 0,
         saveCount: counts.SAVE || 0,

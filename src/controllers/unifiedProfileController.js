@@ -1,4 +1,5 @@
 import { publicWallModerationFilter, wallProfileModerationFilter } from "../services/wallModerationAccess.js";
+import mongoose from "mongoose";
 import Content from "../models/Content.js";
 import { synchronizeIdentityBadge } from "../services/verifiedCreatorService.js";
 import { storyAudiencesFor } from "../services/storyAudienceService.js";
@@ -59,11 +60,11 @@ async function loadProfile(owner, viewer) {
     PublicationSeries.find({ creator: owner._id, archivedAt: null }).sort({ isPinned: -1, sortOrder: 1, updatedAt: -1, name: 1 }).lean(),
     Publication.find({ creator: owner._id, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ "planet.slot": 1 }).limit(3).populate("creator", "name username avatar").lean(),
     Publication.find({ creator: owner._id, kind: "EXPERIENCE", status: planetStatus, ...(!profileOwner && { publishedSnapshot: { $exists: true } }) }).select("+submittedSnapshot").sort({ publishedAt: -1, updatedAt: -1 }).limit(3).populate("creator", "name username avatar").lean(),
-    FeedPost.find({ author: owner._id, status: "published", ...wallProfileModerationFilter(owner._id, viewer), deletedAt: null }).sort({ publishedAt: -1, createdAt: -1 }).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }]).lean(),
+    FeedPost.find({ author: owner._id, status: "published", ...wallProfileModerationFilter(owner._id, viewer), deletedAt: null }).sort({ publishedAt: -1, createdAt: -1 }).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "reactions.user", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }]).lean(),
     WallPost.find({ creator: owner._id, status: "PUBLISHED" }).sort({ createdAt: -1 }).populate("creator", "name username avatar isVerified").lean(),
     SeenEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("publication text createdAt").lean(),
     WallEngagement.find({ user: owner._id, type: "SHARE" }).sort({ createdAt: -1 }).limit(30).select("post text createdAt").lean(),
-    FeedPost.find({ status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null, "shares.user": owner._id }).sort({ "shares.createdAt": -1 }).limit(30).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }, { path: "shares.user", select: "name username avatar isVerified role status" }]).lean(),
+    FeedPost.find({ status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null, "shares.user": owner._id }).sort({ "shares.createdAt": -1 }).limit(30).populate([{ path: "author", select: "name username avatar isVerified" }, { path: "reactions.user", select: "name username avatar isVerified" }, { path: "comments.user", select: "name username avatar isVerified" }, { path: "shares.user", select: "name username avatar isVerified role status" }]).lean(),
     ProfileRelationship.countDocuments({ target: owner._id, type: "FOLLOW" }),
     ProfileRelationship.countDocuments({ actor: owner._id, type: "FOLLOW" }),
     OrbitSignal.countDocuments({ targetUser: owner._id, type: "SEE_YOU", status: "active" }),
@@ -237,6 +238,53 @@ async function loadProfile(owner, viewer) {
     };
   });
   const activeStoryCount = profileStories.length;
+  const profileSeenIds = [...new Set([...seens, ...sharedSeens].map((item) => String(item._id)))];
+  if (profileSeenIds.length) {
+    const objectIds = profileSeenIds.map((id) => new mongoose.Types.ObjectId(id));
+    const [seenCountRows, seenReactionRows, seenPreviewRows, seenViewerRows] = await Promise.all([
+      SeenEngagement.aggregate([{ $match: { publication: { $in: objectIds } } }, { $group: { _id: { publication: "$publication", type: "$type" }, count: { $sum: 1 } } }]),
+      SeenEngagement.aggregate([{ $match: { publication: { $in: objectIds }, type: "REACTION" } }, { $group: { _id: { publication: "$publication", reaction: { $ifNull: ["$reaction", "LIKE"] } }, count: { $sum: 1 } } }]),
+      SeenEngagement.find({ publication: { $in: objectIds }, type: "REACTION", actorAccountType: { $ne: "TEST" } }).sort({ updatedAt: -1, _id: -1 }).populate("user", "name username avatar isVerified").lean(),
+      viewer?._id ? SeenEngagement.find({ publication: { $in: objectIds }, user: viewer._id, type: { $in: ["REACTION", "SHARE", "SAVE"] } }).lean() : [],
+    ]);
+    const counts = new Map();
+    for (const row of seenCountRows) {
+      const key = String(row._id.publication);
+      counts.set(key, { ...(counts.get(key) || {}), [row._id.type]: row.count });
+    }
+    const reactionSummaries = new Map();
+    for (const row of seenReactionRows.sort((first, second) => second.count - first.count)) {
+      const key = String(row._id.publication);
+      const current = reactionSummaries.get(key) || { reactionBreakdown: {}, topReactions: [] };
+      current.reactionBreakdown[row._id.reaction] = row.count;
+      current.topReactions.push(row._id.reaction);
+      reactionSummaries.set(key, current);
+    }
+    const previews = new Map();
+    seenPreviewRows.sort((first, second) => Number(String(second.user?._id || "") === String(viewer?._id || "")) - Number(String(first.user?._id || "") === String(viewer?._id || ""))).forEach((row) => {
+      if (!row.user?._id) return;
+      const key = String(row.publication);
+      const current = previews.get(key) || [];
+      if (current.length < 2) current.push({ id: String(row.user._id), name: row.user.name || row.user.username || "User", username: row.user.username || "", avatar: row.user.avatar || "", verified: Boolean(row.user.isVerified) });
+      previews.set(key, current);
+    });
+    const viewerStates = new Map();
+    seenViewerRows.forEach((row) => {
+      const key = String(row.publication);
+      const current = viewerStates.get(key) || {};
+      if (row.type === "REACTION") current.viewerReaction = row.reaction || "LIKE";
+      if (row.type === "SHARE") current.viewerShared = true;
+      if (row.type === "SAVE") current.viewerSaved = true;
+      viewerStates.set(key, current);
+    });
+    [...seens, ...sharedSeens].forEach((item) => {
+      const key = String(item._id);
+      const count = counts.get(key) || {};
+      const reactions = reactionSummaries.get(key) || { reactionBreakdown: {}, topReactions: [] };
+      const viewerState = viewerStates.get(key) || {};
+      item.engagement = { reactionCount: count.REACTION || 0, reactionBreakdown: reactions.reactionBreakdown, topReactions: reactions.topReactions.slice(0, 3), reactorPreviews: previews.get(key) || [], commentCount: count.COMMENT || 0, shareCount: count.SHARE || 0, saveCount: count.SAVE || 0, viewCount: (count.WALKED || 0) + (count.REACTION || 0) + (count.COMMENT || 0) + (count.SHARE || 0) + (count.SAVE || 0), viewerReaction: viewerState.viewerReaction || null, viewerShared: Boolean(viewerState.viewerShared), viewerSaved: Boolean(viewerState.viewerSaved) };
+    });
+  }
   if (ownCurrentWallPosts.length) await attachEntityMetadata(ownCurrentWallPosts, viewer || null);
   const currentWallPosts = await Promise.all(ownCurrentWallPosts.map(async (post) => serializeWallPost(post, await engagementForWallPost(post._id, viewer?._id))));
   const ownWallPosts = [...ownFeedPosts.map((post) => serializePost(post, viewer)), ...currentWallPosts]
