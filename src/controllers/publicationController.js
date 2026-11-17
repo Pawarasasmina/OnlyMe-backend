@@ -36,6 +36,7 @@ import { sendCommentResponse as sendResponse } from "../services/commentBadgeSer
 import { getStarExchangeRate } from "../services/starExchangeService.js";
 import { getActiveRecommendationConfig, personalizeCandidates } from "../services/recommendationService.js";
 import { admitWorldWaitlist } from "../services/premiumMembershipService.js";
+import { buildSeenPdf } from "../services/seenPdfService.js";
 
 const page = (req) => ({ page: Math.max(1, Number(req.query.page) || 1), limit: Math.min(50, Math.max(1, Number(req.query.limit) || 20)) });
 const shareUrlFor = (item) => item.visibility === "LINK_ONLY" && item.shareToken ? `${String(env.clientUrl || "").replace(/\/+$/u, "")}/seen/${item._id}?access=${encodeURIComponent(item.shareToken)}` : null;
@@ -748,7 +749,7 @@ export const getSeenInsights = asyncHandler(async (req, res) => {
       views: engagementViews,
       uniqueViewers: uniqueViewers.length,
       saves: engagement.SAVE || 0,
-      shares: engagement.SHARE || 0,
+      shares: Number(publication.privateShareCount || 0),
       comments: engagement.COMMENT || 0,
       reactions: engagement.REACTION || 0,
       walked: engagement.WALKED || 0,
@@ -898,6 +899,7 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
         location: [profile.city, profile.country].filter(Boolean).join(", "),
       },
       engagement: {
+        privateShareCount: Number(serialized.privateShareCount || 0),
         reactionCount: counts.REACTION || 0,
         reactionBreakdown: reactionSummary.reactionBreakdown,
         topReactions: reactionSummary.topReactions.slice(0, 3),
@@ -1023,4 +1025,32 @@ export const getPublishedPublication = asyncHandler(async (req, res) => {
   }
 
   return sendResponse(res, 200, "Publication fetched", { publication: serialized });
+});
+
+export const downloadSeenPdf = asyncHandler(async (req, res) => {
+  ensurePublicationId(req.params.id);
+  const publication = await Publication.findOne({ _id: req.params.id, kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } })
+    .populate("creator", "name username status")
+    .lean();
+  if (!publication) throw new ApiError(404, "Seen not found");
+  const metadata = publication.publishedSnapshot?.metadata || {};
+  if (!metadata.allowDownload) throw new ApiError(403, "PDF download is not enabled for this Seen");
+  const audienceAllowed = await canAccessPublicationAudience(publication, req.user, { shareToken: req.query.access || req.query.token });
+  if (!audienceAllowed) throw new ApiError(404, "Seen not found");
+  const owner = String(publication.creator?._id || publication.creator) === String(req.user._id);
+  const admin = req.user.role === "admin";
+  if (metadata.pricing?.mode === "ONE_TIME" && !owner && !admin) {
+    const entitlement = await WorldEntitlement.exists({ user: req.user._id, publication: publication._id, status: "ACTIVE" });
+    if (!entitlement) throw new ApiError(403, "Purchase this Seen to download its PDF copy");
+  }
+  const pdf = buildSeenPdf({ publication, viewer: req.user });
+  const safeTitle = String(metadata.title || "seen").normalize("NFKD").replace(/[^a-z0-9]+/giu, "-").replace(/^-+|-+$/gu, "").slice(0, 80) || "seen";
+  res.set({
+    "Cache-Control": "private, no-store",
+    "Content-Disposition": `attachment; filename="${safeTitle}.pdf"`,
+    "Content-Length": String(pdf.length),
+    "Content-Type": "application/pdf",
+    "X-Content-Type-Options": "nosniff",
+  });
+  res.send(pdf);
 });

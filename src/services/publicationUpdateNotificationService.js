@@ -12,9 +12,12 @@ export async function notifyAddedChapters(previous, publication) {
   const added = publication.publishedSnapshot.chapters.filter(chapter => !before.has(String(chapter.stableChapterId)));
   if (!added.length) return { sent: 0 };
   const worlds = await Publication.distinct("_id", { creator: publication.creator, kind: "PREMIUM_WORLD", status: "PUBLISHED", includedExperienceIds: publication._id });
+  const memberFilter = publication.publishedSnapshot.metadata?.visibility === "WORLD_MEMBERS"
+    ? { creator: publication.creator }
+    : { premiumPublication: { $in: [publication._id, ...worlds] } };
   const [owners, members, creator] = await Promise.all([
     WorldEntitlement.distinct("user", { publication: publication._id, status: "ACTIVE" }),
-    PremiumMembership.distinct("user", { premiumPublication: { $in: [publication._id, ...worlds] }, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }),
+    PremiumMembership.distinct("user", { ...memberFilter, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }),
     User.findById(publication.creator).select("name username").lean(),
   ]);
   const recipients = [...new Set([...owners, ...members].map(String))].filter(user => user !== String(publication.creator));
@@ -29,7 +32,12 @@ export async function notifyAddedChapters(previous, publication) {
 async function notifyTaggedPeople(previous, publication) {
   if (publication.kind !== "SEEN") return;
   const before = new Set((previous.publishedSnapshot?.metadata?.taggedPeople || []).map(String));
-  const people = [...new Set((publication.publishedSnapshot?.metadata?.taggedPeople || []).map(String))].filter(id => id !== String(publication.creator) && !before.has(id));
+  let people = [...new Set((publication.publishedSnapshot?.metadata?.taggedPeople || []).map(String))].filter(id => id !== String(publication.creator) && !before.has(id));
+  if (publication.publishedSnapshot?.metadata?.visibility === "WORLD_MEMBERS" && people.length) {
+    const eligible = await PremiumMembership.distinct("user", { user: { $in: people }, creator: publication.creator, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } });
+    const eligibleIds = new Set(eligible.map(String));
+    people = people.filter((id) => eligibleIds.has(id));
+  }
   if (!people.length) return;
   const creator = await User.findById(publication.creator).select("name username").lean();
   await Notification.bulkWrite(people.map(user => {

@@ -144,6 +144,7 @@ const feedPostSchema = new mongoose.Schema(
     saveCount: { type: Number, min: 0, default: 0 },
     viewCount: { type: Number, min: 0, default: 0 },
     shareCount: { type: Number, min: 0, default: 0 },
+    privateShareCount: { type: Number, min: 0, default: 0 },
     seedSource: { type: String, trim: true, default: "", index: true },
     seedKey: { type: String, trim: true, default: "", index: true },
     deletedAt: { type: Date, default: null },

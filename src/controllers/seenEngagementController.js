@@ -73,14 +73,15 @@ const publishedSaveable = async (id, viewer, shareToken = "") => {
 };
 
 const summary = async (publication, viewerId) => {
-  const [counts, reactionCounts, viewer, comments, reactions, commentReactionRows, viewerCommentReactions] = await Promise.all([
-    SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), actorAccountType: { $ne: "TEST" } } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
+  const [counts, reactionCounts, viewer, comments, reactions, commentReactionRows, viewerCommentReactions, shareMetric] = await Promise.all([
+    SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication) } }, { $group: { _id: "$type", count: { $sum: 1 } } }]),
     SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), type: "REACTION", actorAccountType: { $ne: "TEST" } } }, { $group: { _id: { $ifNull: ["$reaction", "LIKE"] }, count: { $sum: 1 } } }]),
     viewerId ? SeenEngagement.find({ publication, user: viewerId, type: { $in: ["REACTION", "SHARE", "SAVE"] } }).lean() : [],
     SeenEngagement.find({ publication, type: "COMMENT" }).sort({ createdAt: -1, _id: -1 }).populate("user", "name username avatar").lean(),
     SeenEngagement.find({ publication, type: "REACTION" }).sort({ updatedAt: -1 }).limit(200).populate("user", "name username avatar").lean(),
     SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), type: "COMMENT_REACTION", actorAccountType: { $ne: "TEST" } } }, { $group: { _id: { comment: "$parentComment", reaction: { $ifNull: ["$reaction", "LIKE"] } }, count: { $sum: 1 } } }]),
     viewerId ? SeenEngagement.find({ publication, user: viewerId, type: "COMMENT_REACTION" }).select("parentComment reaction").lean() : [],
+    Publication.findById(publication).select("privateShareCount").lean(),
   ]);
   const savedCommentRows = viewerId && comments.length
     ? await SavedItem.find({ user: viewerId, targetType: "comment", targetModel: "SeenEngagement", targetId: { $in: comments.map((item) => item._id) } }).select("targetId").lean()
@@ -88,8 +89,12 @@ const summary = async (publication, viewerId) => {
   const repostedCommentRows = viewerId && comments.length
     ? await Repost.find({ user: viewerId, kind: "cm", targetModel: "SeenEngagement", targetId: { $in: comments.map((item) => item._id) } }).select("targetId").lean()
     : [];
+  const repostCountRows = comments.length
+    ? await Repost.aggregate([{ $match: { kind: "cm", targetModel: "SeenEngagement", targetId: { $in: comments.map((item) => item._id) } } }, { $group: { _id: "$targetId", count: { $sum: 1 } } }])
+    : [];
   const savedCommentIds = new Set(savedCommentRows.map((item) => String(item.targetId)));
   const repostedCommentIds = new Set(repostedCommentRows.map((item) => String(item.targetId)));
+  const repostCountByComment = new Map(repostCountRows.map((item) => [String(item._id), item.count]));
   const count = Object.fromEntries(counts.map((item) => [item._id, item.count]));
   const sortedReactionCounts = sortReactionCounts(reactionCounts);
   const reactionBreakdown = Object.fromEntries(sortedReactionCounts.map((item) => [item._id, item.count]));
@@ -104,7 +109,7 @@ const summary = async (publication, viewerId) => {
   const serialized = comments.reverse().map((item) => {
     const breakdown = reactionsByComment.get(String(item._id)) || {};
     const ordered = sortReactionCounts(Object.entries(breakdown).map(([_id, reactionCount]) => ({ _id, count: reactionCount })));
-    return { id: item._id, parentCommentId: item.parentComment ? String(item.parentComment) : null, text: item.text, audio: serializeCommentAudio(item.audio), createdAt: item.createdAt, author: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" }, reactionCount: ordered.reduce((total, row) => total + row.count, 0), reactionBreakdown: breakdown, topReactions: ordered.slice(0, 3).map((row) => row._id), viewerReaction: viewerReactionByComment.get(String(item._id)) || null, viewerSaved: savedCommentIds.has(String(item._id)), viewerReposted: repostedCommentIds.has(String(item._id)), replies: [] };
+    return { id: item._id, parentCommentId: item.parentComment ? String(item.parentComment) : null, text: item.text, audio: serializeCommentAudio(item.audio), createdAt: item.createdAt, author: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" }, reactionCount: ordered.reduce((total, row) => total + row.count, 0), reactionBreakdown: breakdown, topReactions: ordered.slice(0, 3).map((row) => row._id), viewerReaction: viewerReactionByComment.get(String(item._id)) || null, viewerSaved: savedCommentIds.has(String(item._id)), viewerReposted: repostedCommentIds.has(String(item._id)), repostCount: repostCountByComment.get(String(item._id)) || 0, replies: [] };
   });
   const byId = new Map(serialized.map((item) => [String(item.id), item]));
   const topLevelComments = [];
@@ -113,7 +118,7 @@ const summary = async (publication, viewerId) => {
     if (parent) parent.replies.push(item);
     else topLevelComments.push(item);
   });
-  return { reactionCount: count.REACTION || 0, reactionBreakdown, topReactions: sortedReactionCounts.slice(0, 3).map((item) => item._id), reactors: reactions.map((item) => ({ id: item._id, reaction: item.reaction || "LIKE", user: { id: item.user?._id, name: item.user?.name || item.user?.username || "User", username: item.user?.username || "", avatar: item.user?.avatar || "" } })), commentCount: count.COMMENT || 0, shareCount: count.SHARE || 0, saveCount: count.SAVE || 0, viewCount: (count.WALKED || 0) + (count.REACTION || 0) + (count.COMMENT || 0) + (count.SHARE || 0) + (count.SAVE || 0), viewerReaction: viewer.find((item) => item.type === "REACTION")?.reaction || null, viewerShared: Boolean(viewer.find((item) => item.type === "SHARE")), viewerSaved: Boolean(viewer.find((item) => item.type === "SAVE")), comments: topLevelComments };
+  return { privateShareCount: Number(shareMetric?.privateShareCount || 0), reactionCount: count.REACTION || 0, reactionBreakdown, topReactions: sortedReactionCounts.slice(0, 3).map((item) => item._id), reactors: reactions.map((item) => ({ id: item._id, reaction: item.reaction || "LIKE", user: { id: item.user?._id, name: item.user?.name || item.user?.username || "User", username: item.user?.username || "", avatar: item.user?.avatar || "" } })), commentCount: count.COMMENT || 0, shareCount: count.SHARE || 0, saveCount: count.SAVE || 0, viewCount: (count.WALKED || 0) + (count.REACTION || 0) + (count.COMMENT || 0) + (count.SHARE || 0) + (count.SAVE || 0), viewerReaction: viewer.find((item) => item.type === "REACTION")?.reaction || null, viewerShared: Boolean(viewer.find((item) => item.type === "SHARE")), viewerSaved: Boolean(viewer.find((item) => item.type === "SAVE")), comments: topLevelComments };
 };
 
 const cleanString = (value, maxLength) => {

@@ -69,8 +69,14 @@ export async function listProfileMediaForUser(userId, { limit = 60, viewerId = n
     .sort({ sortOrder: -1, createdAt: -1, _id: -1 })
     .limit(Math.min(100, Math.max(1, Number(limit) || 60)))
     .lean();
-  const repostedIds = viewerId ? new Set((await Repost.find({ user: viewerId, kind: "photo", targetId: { $in: items.map((item) => item._id) } }).select("targetId").lean()).map((row) => String(row.targetId))) : new Set();
-  return items.map((item) => ({ ...serializeProfileMedia(item, { viewerId }), viewerReposted: repostedIds.has(String(item._id)) }));
+  const itemIds = items.map((item) => item._id);
+  const [viewerRows, countRows] = await Promise.all([
+    viewerId ? Repost.find({ user: viewerId, kind: "photo", targetModel: "ProfileMedia", targetId: { $in: itemIds } }).select("targetId").lean() : [],
+    itemIds.length ? Repost.aggregate([{ $match: { kind: "photo", targetModel: "ProfileMedia", targetId: { $in: itemIds } } }, { $group: { _id: "$targetId", count: { $sum: 1 } } }]) : [],
+  ]);
+  const repostedIds = new Set(viewerRows.map((row) => String(row.targetId)));
+  const repostCounts = new Map(countRows.map((row) => [String(row._id), row.count]));
+  return items.map((item) => ({ ...serializeProfileMedia(item, { viewerId }), repostCount: repostCounts.get(String(item._id)) || 0, viewerReposted: repostedIds.has(String(item._id)) }));
 }
 
 export async function listOwnProfileMedia(userId, { limit = 60 } = {}) {

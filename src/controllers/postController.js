@@ -29,6 +29,7 @@ import { messageVoiceUrl, uploadMessageVoice } from "../services/messageVoiceSto
 import { getVoiceLanguageName, normalizeVoiceLanguageCode, resolveSupportedVoiceLanguage } from "../constants/voiceTranslationLanguages.js";
 import { personalizeCandidates } from "../services/recommendationService.js";
 import { syncRepost } from "../services/repostService.js";
+import Repost from "../models/Repost.js";
 
 function pageOptions(req) {
   const page = Math.floor(Number(req.query.page));
@@ -146,7 +147,7 @@ function authorPayload(author) {
   };
 }
 
-function serializeComment(comment, savedCommentIds = new Set(), viewerId = "") {
+function serializeComment(comment, savedCommentIds = new Set(), viewerId = "", repostedCommentIds = new Set(), repostCountByComment = new Map()) {
   const user = comment.user || {};
   return {
     id: String(comment._id),
@@ -159,6 +160,8 @@ function serializeComment(comment, savedCommentIds = new Set(), viewerId = "") {
     viewerReaction: (comment.reactions || []).find(item => String(item.user?._id || item.user) === viewerId)?.reaction || null,
     author: authorPayload(user),
     viewerSaved: savedCommentIds.has(String(comment._id)),
+    viewerReposted: repostedCommentIds.has(String(comment._id)),
+    repostCount: repostCountByComment.get(String(comment._id)) || 0,
   };
 }
 
@@ -277,12 +280,13 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
     viewerViewed,
     viewerShared,
     viewerHidden,
-    comments: comments.map((comment) => serializeComment(comment, savedCommentIds, viewerId)),
+    comments: comments.map((comment) => serializeComment(comment, savedCommentIds, viewerId, post.repostedCommentIds || new Set(), post.repostCountByComment || new Map())),
     supportCount: reactions.length || post.supportCount || 0,
     commentCount: comments.length || post.commentCount || 0,
     saveCount: saves.length || post.saveCount || 0,
     viewCount: wallViewCount(post),
-    shareCount: shares.length || post.shareCount || 0,
+    shareCount: shares.length,
+    privateShareCount: Number(post.privateShareCount || 0),
     reportCount: (post.reports || []).length,
     createdAt: post.createdAt,
     updatedAt: post.updatedAt,
@@ -313,13 +317,18 @@ async function populatePostForResponse(post) {
 }
 
 async function attachSavedCommentState(posts, userId) {
-  if (!userId) return posts;
   const list = Array.isArray(posts) ? posts : [posts];
   const commentIds = list.flatMap((post) => (post.comments || []).filter((comment) => !comment.deletedAt).map((comment) => comment._id));
   if (!commentIds.length) return posts;
-  const rows = await SavedItem.find({ user: userId, targetType: "comment", targetModel: "FeedPostComment", targetId: { $in: commentIds } }).select("targetId").lean();
-  const savedIds = new Set(rows.map((row) => String(row.targetId)));
-  for (const post of list) post.savedCommentIds = savedIds;
+  const [savedRows, repostedRows, countRows] = await Promise.all([
+    userId ? SavedItem.find({ user: userId, targetType: "comment", targetModel: "FeedPostComment", targetId: { $in: commentIds } }).select("targetId").lean() : [],
+    userId ? Repost.find({ user: userId, kind: "cm", targetModel: "FeedPost", targetId: { $in: commentIds } }).select("targetId").lean() : [],
+    Repost.aggregate([{ $match: { kind: "cm", targetModel: "FeedPost", targetId: { $in: commentIds } } }, { $group: { _id: "$targetId", count: { $sum: 1 } } }]),
+  ]);
+  const savedIds = new Set(savedRows.map((row) => String(row.targetId)));
+  const repostedIds = new Set(repostedRows.map((row) => String(row.targetId)));
+  const repostCounts = new Map(countRows.map((row) => [String(row._id), row.count]));
+  for (const post of list) { post.savedCommentIds = savedIds; post.repostedCommentIds = repostedIds; post.repostCountByComment = repostCounts; }
   return posts;
 }
 
@@ -786,6 +795,7 @@ export const togglePostSave = asyncHandler(async (req, res) => {
 export const togglePostShare = asyncHandler(async (req, res) => {
   const post = await findPublishedPost(req.params.id);
   const userId = String(req.user._id);
+  if (String(post.author?._id || post.author) === userId) throw new ApiError(409, "It's already on your profile");
   const existing = post.shares.find((item) => String(item.user) === userId);
 
   if (existing) {
@@ -794,9 +804,9 @@ export const togglePostShare = asyncHandler(async (req, res) => {
     post.shares.push({ user: req.user._id, actorAccountType: req.user.accountType, caption: cleanString(req.body.caption, 500) });
   }
 
-  post.shareCount = post.shares.filter((item) => item.actorAccountType !== "TEST").length;
+  post.shareCount = post.shares.length;
   await post.save();
-  await syncRepost({ allowOwn: true, enabled: !existing, kind: "note", originalAuthor: post.author?._id || post.author, targetId: post._id, targetModel: "FeedPost", user: req.user._id });
+  await syncRepost({ enabled: !existing, kind: "note", originalAuthor: post.author?._id || post.author, targetId: post._id, targetModel: "FeedPost", user: req.user._id });
   if (!existing) await trackPostEvent(req, "SHARE", post._id);
   await populatePostForResponse(post);
   await attachSavedCommentState(post, req.user?._id);

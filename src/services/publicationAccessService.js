@@ -42,8 +42,18 @@ export async function seenVisibilityFilter(viewer, candidateCreatorIds = [], { i
   const viewerId = viewer?._id;
   const filter = [...legacyPublicVisibility];
   if (viewerId) {
-    const mutualIds = await mutualFriendCreatorIds(viewerId, candidateCreatorIds);
+    const [mutualIds, memberships] = await Promise.all([
+      mutualFriendCreatorIds(viewerId, candidateCreatorIds),
+      PremiumMembership.find({
+        user: viewerId,
+        status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] },
+        currentPeriodEnd: { $gt: new Date() },
+        ...(candidateCreatorIds.length ? { creator: { $in: candidateCreatorIds } } : {}),
+      }).select("creator").lean(),
+    ]);
     if (mutualIds.size) filter.push({ visibility: "FRIENDS", creator: { $in: [...mutualIds] } });
+    const memberCreatorIds = [...new Set(memberships.map((membership) => String(membership.creator)))];
+    if (memberCreatorIds.length) filter.push({ visibility: "WORLD_MEMBERS", creator: { $in: memberCreatorIds } });
     if (includeOwner) filter.push({ creator: viewerId, visibility: { $ne: "LINK_ONLY" } });
   }
   const hidden = await User.find({ status: { $in: ["deactivated", "pending_deletion", "deleted"] } }).select("_id").lean();
@@ -63,6 +73,7 @@ export async function canAccessPublicationAudience(publication, viewer, { shareT
   if (visibility === "PUBLIC") return true;
   if (visibility === "LINK_ONLY") return tokenMatches(item, shareToken);
   if (visibility === "FRIENDS") return areMutualFriends(viewer?._id, ownerId);
+  if (visibility === "WORLD_MEMBERS" && viewer?._id) return Boolean(await PremiumMembership.exists({ user: viewer._id, creator: ownerId, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }));
   return false;
 }
 
@@ -104,6 +115,7 @@ export function serializePublication(publication, viewer, { admin = false, audie
   const visibility = normalizedVisibility(item.visibility || metadata.visibility);
   const canEditMedia = access === "OWNER" || access === "ADMIN";
   const result = { id: item._id, creator: item.creator?._id ? { id: item.creator._id, name: item.creator.name, username: item.creator.username, avatar: item.creator.avatar, verified: Boolean(item.creator.isVerified) } : { id: item.creator }, creatorId: String(item.creator?._id || item.creator || ""), kind: item.kind, title: metadata.title, summary: metadata.summary, description: metadata.description, category: metadata.category, series: seriesPayload(item, metadata), seriesId: seriesPayload(item, metadata)?.id || null, visibility, audience: visibility, tags: metadata.tags || [], taggedPeople: (metadata.taggedPeople || item.taggedPeople || []).map(String), attachedEntities: item.attachedEntities || metadata.attachedEntities || [], entityRefs: refs.map((ref) => ({ entityId: String(ref.entityId), entityType: ref.entityType })), coverMedia: safeMedia(metadata.coverMedia, canEditMedia), introMedia: safeMedia(metadata.introMedia, canEditMedia), replyToSeen: metadata.replyToSeen || item.replyToSeen || null, status: item.status, isPinned: Boolean(item.isPinned), pricing: metadata.pricing, planet: metadata.planet, includedInWorld: Boolean(metadata.includedInWorld), includedExperienceIds: (metadata.includedExperienceIds || item.includedExperienceIds || []).map(String), worldSeatCapacity: metadata.worldSeatCapacity ?? item.worldSeatCapacity ?? null, worldFoundingCapacity: metadata.worldFoundingCapacity ?? item.worldFoundingCapacity ?? null, worldWaveSize: metadata.worldWaveSize ?? item.worldWaveSize ?? null, commentsEnabled: (metadata.commentsEnabled ?? item.commentsEnabled) !== false, firstMonthOfferEnabled: Boolean(metadata.firstMonthOfferEnabled ?? item.firstMonthOfferEnabled), memberPriceLocked: (metadata.memberPriceLocked ?? item.memberPriceLocked) !== false, directAccessIncluded: (metadata.directAccessIncluded ?? item.directAccessIncluded) !== false, directAccessIncludedReplies: Number(metadata.directAccessIncludedReplies ?? item.directAccessIncludedReplies ?? 1), experiencePath: metadata.experiencePath || "", experienceLocation: metadata.experienceLocation || "", allowDownload: Boolean(metadata.allowDownload), ownerWelcomeNote: metadata.ownerWelcomeNote || "", captionsEnabled: (metadata.captionsEnabled ?? item.captionsEnabled) !== false, publishedAt: item.publishedAt, access, paymentAvailable: ["SEEN", "EXPERIENCE"].includes(item.kind) && metadata.pricing?.mode === "ONE_TIME" && access === "PUBLIC_PREVIEW" };
+  result.privateShareCount = Number(item.privateShareCount || 0);
   result.worldWelcomeVoiceMedia = safeMedia(metadata.worldWelcomeVoiceMedia ?? item.worldWelcomeVoiceMedia, canEditMedia);
   result.worldWelcomeVoiceMedia = safeMedia(metadata.worldWelcomeVoiceMedia ?? item.worldWelcomeVoiceMedia, canEditMedia);
   if (isOneTimePaid(item)) {
