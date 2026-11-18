@@ -9,14 +9,14 @@ import { effectiveAdminRole } from "../middleware/adminPermissionMiddleware.js";
 
 const ROLES = new Set(["MAIN_ADMIN", "MODERATOR", "FINANCE"]);
 const clean = (value, max = 500) => String(value || "").trim().slice(0, max);
-const safeStaff = (user) => ({ id: user._id, name: user.name, username: user.username, email: user.email, adminRole: user.adminRole || "MAIN_ADMIN", status: user.status, twoFactorEnabled: Boolean(user.adminTwoFactorEnabled), twoFactorRequired: user.adminTwoFactorRequired !== false, createdAt: user.createdAt, lastLoginAt: user.adminProfile?.lastLoginAt || null, createdBy: user.adminCreatedBy || null });
+const safeStaff = (user) => ({ id: user._id, name: user.name, username: user.username, email: user.email, adminRole: user.adminRole || "MAIN_ADMIN", status: user.status, readOnly: Boolean(user.adminReadOnly), twoFactorEnabled: Boolean(user.adminTwoFactorEnabled), twoFactorRequired: user.adminTwoFactorRequired !== false, createdAt: user.createdAt, lastLoginAt: user.adminProfile?.lastLoginAt || null, createdBy: user.adminCreatedBy || null });
 
 async function audit(req, action, target, reason, before, after) {
   await AdminAuditEvent.create({ actor: req.user._id, actorRole: effectiveAdminRole(req.user), action, targetType: "ADMIN_ACCOUNT", targetId: String(target), reason, before, after, metadata: { ip: req.ip, userAgent: clean(req.get("User-Agent"), 300) } });
 }
 
 export const listAdminStaff = asyncHandler(async (_req, res) => {
-  const users = await User.find({ role: "admin" }).select("name username email adminRole status adminTwoFactorEnabled adminTwoFactorRequired adminCreatedBy createdAt").sort({ createdAt: -1 }).lean();
+  const users = await User.find({ role: "admin" }).select("+accountType name username email adminRole status adminReadOnly adminTwoFactorEnabled adminTwoFactorRequired adminCreatedBy createdAt").sort({ createdAt: -1 }).lean();
   const profiles = await AdminProfile.find({ user: { $in: users.map((item) => item._id) } }).select("user lastLoginAt").lean();
   const byUser = new Map(profiles.map((item) => [String(item.user), item]));
   return sendResponse(res, 200, "Admin staff fetched", { staff: users.map((user) => safeStaff({ ...user, adminProfile: byUser.get(String(user._id)) })) });
@@ -115,4 +115,18 @@ export const updateRoleTwoFactor = asyncHandler(async (req, res) => {
   if (!targets.length) throw new ApiError(404, "No admin accounts use this role");
   await applyTwoFactorPolicy(req, targets, action, reason);
   return sendResponse(res, 200, "Role two-factor policy updated", { affected: targets.length, adminRole, action });
+});
+
+export const deleteTestAdminStaff = asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid admin account ID");
+  if (String(req.params.id) === String(req.user._id)) throw new ApiError(400, "You cannot delete the account you are currently using");
+  const reason = clean(req.body.reason, 500);
+  if (reason.length < 3) throw new ApiError(400, "A reason is required");
+  const target = await User.findOne({ _id: req.params.id, role: "admin" }).select("+accountType name email adminRole adminReadOnly");
+  if (!target) throw new ApiError(404, "Admin account not found");
+  if (!target.adminReadOnly || target.accountType !== "TEST") throw new ApiError(403, "Only read-only TEST administrator accounts can be deleted here");
+  await audit(req, "TEST_ADMIN_ACCOUNT_DELETED", target._id, reason, { name: target.name, email: target.email, adminRole: target.adminRole, readOnly: true, accountType: "TEST" }, null);
+  await Promise.all([AdminProfile.deleteOne({ user: target._id }), User.deleteOne({ _id: target._id })]);
+  req.app.get("io")?.in(`user:${target._id}`).disconnectSockets(true);
+  return sendResponse(res, 200, "Read-only test administrator deleted");
 });

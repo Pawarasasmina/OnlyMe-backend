@@ -21,7 +21,7 @@ import { uploadGiftImage } from "../middleware/uploadMiddleware.js";
 import { getWelcomeEmailTemplate, updateWelcomeEmailTemplate } from "../controllers/adminEmailTemplateController.js";
 import { activateRecommendationConfig, createRecommendationDraft, getRecommendationSettings, resetRecommendationConfig } from "../controllers/adminRecommendationController.js";
 import { requireAdminRole } from "../middleware/adminPermissionMiddleware.js";
-import { createAdminStaff, listAdminStaff, resetAdminPassword, updateAdminStaff, updateRoleTwoFactor, updateStaffTwoFactor } from "../controllers/adminStaffController.js";
+import { createAdminStaff, deleteTestAdminStaff, listAdminStaff, resetAdminPassword, updateAdminStaff, updateRoleTwoFactor, updateStaffTwoFactor } from "../controllers/adminStaffController.js";
 
 const router = Router();
 const messageReportScope = (req, _res, next) => { req.reportScopes = ["MESSAGE", "GROUP_MESSAGE", "CONVERSATION"]; next(); };
@@ -35,6 +35,7 @@ router.post("/staff/2fa-policy", requireAdminRole("MAIN_ADMIN"), updateRoleTwoFa
 router.patch("/staff/:id", requireAdminRole("MAIN_ADMIN"), updateAdminStaff);
 router.post("/staff/:id/reset-password", requireAdminRole("MAIN_ADMIN"), resetAdminPassword);
 router.post("/staff/:id/2fa", requireAdminRole("MAIN_ADMIN"), updateStaffTwoFactor);
+router.delete("/staff/:id", requireAdminRole("MAIN_ADMIN"), deleteTestAdminStaff);
 router.use(requireAdminRole("MAIN_ADMIN", "MODERATOR"));
 router.get("/dashboard", getAdminDashboard);
 router.get("/recommendations", requireAdminRole("MAIN_ADMIN"), getRecommendationSettings);

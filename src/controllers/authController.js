@@ -47,6 +47,7 @@ function sanitizeUser(user) {
     adminRole: effectiveRole === "admin" ? (user.adminRole || "MAIN_ADMIN") : null,
     adminTwoFactorEnabled: effectiveRole === "admin" ? Boolean(user.adminTwoFactorEnabled) : null,
     adminTwoFactorRequired: effectiveRole === "admin" ? user.adminTwoFactorRequired !== false : null,
+    adminReadOnly: effectiveRole === "admin" ? Boolean(user.adminReadOnly) : null,
     twoFactorEnabled: effectiveRole === "admin" ? Boolean(user.adminTwoFactorEnabled) : Boolean(user.twoFactorEnabled),
     profileType: user.profileType || (effectiveRole === "creator" ? "creator" : "personal"),
     accountRole: user.role === "admin" ? "admin" : "fan",
