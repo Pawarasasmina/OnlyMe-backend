@@ -1,6 +1,10 @@
 ﻿import mongoose from "mongoose";
 import Content from "../models/Content.js";
+import Publication from "../models/Publication.js";
+import FeedPost from "../models/FeedPost.js";
+import WallPost from "../models/WallPost.js";
 import Subscription from "../models/Subscription.js";
+import PremiumMembership from "../models/PremiumMembership.js";
 import Story from "../models/Story.js";
 import User from "../models/User.js";
 import MessageReport from "../models/MessageReport.js";
@@ -14,22 +18,46 @@ import { sendResponse } from "../utils/response.js";
 import { effectiveAdminRole } from "../middleware/adminPermissionMiddleware.js";
 
 export const getAdminDashboard = asyncHandler(async (_req, res) => {
-  const [totalUsers, fans, creators, admins, activeUsers, pendingCreators, publishedContent, draftContent, activeSubscriptions, accountTypeRows] =
+  const platformUserIds = await User.distinct("_id");
+  const platformUserFilter = { _id: { $in: platformUserIds } };
+  const creatorFilter = { $in: platformUserIds };
+  const now = new Date();
+  const [totalUsers, fans, creators, admins, activeUsers, pendingCreators, legacyPublished, publicationsPublished, feedPostsPublished, wallPostsPublished, storiesPublished, legacyDrafts, publicationDrafts, feedPostDrafts, legacySubscriptions, premiumMemberships, accountTypeRows] =
     await Promise.all([
-      User.countDocuments(),
-      User.countDocuments({ role: { $in: ["fan", "creator"] }, creatorApprovalStatus: { $ne: "approved" } }),
-      User.countDocuments({ role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved" }),
-      User.countDocuments({ role: "admin" }),
-      User.countDocuments({ status: "active" }),
-      User.countDocuments({ role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "pending" }),
-      Content.countDocuments({ status: { $in: ["PUBLISHED", "published"] } }),
-      Content.countDocuments({ status: { $in: ["DRAFT", "draft"] } }),
-      Subscription.countDocuments({ status: "active" }),
+      User.countDocuments(platformUserFilter),
+      User.countDocuments({ ...platformUserFilter, role: { $in: ["fan", "creator"] }, creatorApprovalStatus: { $ne: "approved" } }),
+      User.countDocuments({ ...platformUserFilter, role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved" }),
+      User.countDocuments({ ...platformUserFilter, role: "admin" }),
+      User.countDocuments({ ...platformUserFilter, status: "active" }),
+      User.countDocuments({ ...platformUserFilter, role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "pending" }),
+      Content.countDocuments({ creator: creatorFilter, status: { $in: ["PUBLISHED", "published"] } }),
+      Publication.countDocuments({ creator: creatorFilter, status: "PUBLISHED" }),
+      FeedPost.countDocuments({ author: creatorFilter, status: "published", deletedAt: null }),
+      WallPost.countDocuments({ creator: creatorFilter, status: "PUBLISHED" }),
+      Story.countDocuments({ creator: creatorFilter }),
+      Content.countDocuments({ creator: creatorFilter, status: { $in: ["DRAFT", "draft"] } }),
+      Publication.countDocuments({ creator: creatorFilter, status: "DRAFT" }),
+      FeedPost.countDocuments({ author: creatorFilter, status: "draft", deletedAt: null }),
+      Subscription.countDocuments({ fan: creatorFilter, status: "active", $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }] }),
+      PremiumMembership.countDocuments({ user: creatorFilter, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: now } }),
       User.aggregate([{ $group: { _id: { $ifNull: ["$accountType", "SEED"] }, count: { $sum: 1 } } }]),
     ]);
 
+  const contentBreakdown = { legacy: legacyPublished, publications: publicationsPublished, wall: feedPostsPublished + wallPostsPublished, stories: storiesPublished };
+  const draftBreakdown = { legacy: legacyDrafts, publications: publicationDrafts, wall: feedPostDrafts };
+  const subscriptionBreakdown = { legacy: legacySubscriptions, premium: premiumMemberships };
+
   return sendResponse(res, 200, "Admin dashboard fetched", {
-    stats: { totalUsers, fans, creators, admins, activeUsers, pendingCreators, publishedContent, draftContent, activeSubscriptions, accountTypes: Object.fromEntries(accountTypeRows.map((row) => [row._id, row.count])) },
+    stats: {
+      scope: "ALL_CURRENT_ACCOUNTS",
+      generatedAt: now,
+      totalUsers, fans, creators, admins, activeUsers, pendingCreators,
+      publishedContent: Object.values(contentBreakdown).reduce((sum, value) => sum + value, 0),
+      draftContent: Object.values(draftBreakdown).reduce((sum, value) => sum + value, 0),
+      activeSubscriptions: Object.values(subscriptionBreakdown).reduce((sum, value) => sum + value, 0),
+      contentBreakdown, draftBreakdown, subscriptionBreakdown,
+      accountTypes: Object.fromEntries(accountTypeRows.map((row) => [row._id, row.count])),
+    },
   });
 });
 

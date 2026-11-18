@@ -56,6 +56,8 @@ const userSchema = new mongoose.Schema(
     },
     adminCreatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     adminTwoFactorEnabled: { type: Boolean, default: false },
+    adminTwoFactorRequired: { type: Boolean, default: true },
+    adminReadOnly: { type: Boolean, default: false },
     twoFactorEnabled: { type: Boolean, default: false },
     twoFactorSecret: { type: String, default: "", select: false },
     twoFactorPendingSecret: { type: String, default: "", select: false },
