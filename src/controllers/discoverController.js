@@ -1017,12 +1017,31 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const localProfiles = selectedCityGroup?.profiles || [];
   const localProfileIds = new Set(localProfiles.map((profile) => String(profile.user?._id || profile.user)));
   const localStories = stories.filter((story) => localProfileIds.has(String(story.creator?._id || story.creator)));
-  const localTonight = localProfiles.length ? {
+  const localStoryGroups = [...localStories.reduce((groups, story) => {
+    const creatorId = String(story.creator?._id || story.creator || "");
+    if (!creatorId) return groups;
+    const group = groups.get(creatorId) || {
+      id: creatorId,
+      userId: creatorId,
+      displayName: story.creator?.name || story.creator?.username || localCity,
+      username: story.creator?.username || "",
+      avatar: story.creator?.avatar || "",
+      profileUrl: story.creator?.username ? `/profile/${encodeURIComponent(story.creator.username)}` : "",
+      stories: [],
+    };
+    group.stories.push(serializeStory(story));
+    groups.set(creatorId, group);
+    return groups;
+  }, new Map()).values()].map((group) => ({
+    ...group,
+    stories: group.stories.sort((left, right) => new Date(left.createdAt || 0) - new Date(right.createdAt || 0)),
+  }));
+  const localTonight = localStories.length ? {
     city: localCity,
-    title: `${localCity} tonight`,
-    subtitle: `${localStories.length || localProfiles.length} ${localStories.length === 1 ? "story" : "stories"} · last hours`,
-    route: `/search?location=${encodeURIComponent(localCity)}`,
-    avatars: localProfiles.slice(0, 4).map((profile) => ({ id: String(profile.user._id), name: profile.user.name || profile.user.username || localCity, avatar: profile.user.avatar || "" })),
+    title: `${localCity} today`,
+    subtitle: `${localStories.length} ${localStories.length === 1 ? "story" : "stories"} · last hours`,
+    storyGroups: localStoryGroups,
+    avatars: localStoryGroups.slice(0, 4).map((group) => ({ id: group.id, name: group.displayName, avatar: group.avatar })),
   } : null;
 
   if (slidesOnly) {
