@@ -16,6 +16,8 @@ const groupConversationSchema = new mongoose.Schema({
   },
   archivedBy: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [] },
   mutedBy: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [] },
+  pinnedBy: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [] },
+  manualUnreadBy: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [] },
   deletedAt: { type: Date, default: null },
 }, { timestamps: true });
 

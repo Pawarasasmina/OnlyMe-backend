@@ -8,6 +8,8 @@ const conversationSchema = new mongoose.Schema({
   requestRecipient: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   archivedBy: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [] },
   mutedBy: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [] },
+  pinnedBy: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [] },
+  manualUnreadBy: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [] },
   status: { type: String, enum: ["REQUEST", "ACTIVE", "DECLINED"], required: true, default: "REQUEST" },
   acceptedAt: { type: Date, default: null },
   acceptedByCreator: { type: Boolean, default: false },

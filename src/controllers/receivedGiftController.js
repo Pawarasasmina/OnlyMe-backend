@@ -36,6 +36,7 @@ function serializeGift(gift, kind, senderUser, hiddenSender = false) {
   return {
     id: `${kind}-${gift._id}`,
     name: gift.giftName,
+    caption: catalog?.caption || gift.giftCaption || "",
     imageUrl: gift.giftImageUrl,
     stars: gift.starsAmount,
     idleMotion: gift.giftAnimation?.idleMotion || catalog?.idleMotion || "hover",

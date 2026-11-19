@@ -26,7 +26,7 @@ const serializeMediaMessage = (message) => ({
   video: !message.deletedAt && message.mediaType === "video" && message.video?.assetId ? { url: messageVideoUrl(message.video), duration: message.video.duration, width: message.video.width, height: message.video.height } : null,
   sharedAttachment: !message.deletedAt && message.sharedAttachment?.contentType ? message.sharedAttachment : null,
 });
-const serializeGroup = (group, me, lastMessage = null, unreadCount = 0, pinnedGroupId = null) => ({ id: String(group._id), type: "group", name: group.name, avatarUrl: group.avatar || null, createdBy: String(group.createdBy), members: (group.members || []).map((item) => item?.name ? person(item) : { id: String(item) }), admins: (group.admins || []).map(String), permissions: { editGroupInfo: group.permissions?.editGroupInfo || "ADMINS", addMembers: group.permissions?.addMembers || "ADMINS" }, archived: (group.archivedBy || []).some((id) => String(id) === String(me)), muted: (group.mutedBy || []).some((id) => String(id) === String(me)), pinnedToProfile: String(pinnedGroupId || "") === String(group._id), lastMessage: lastMessage ? serializeMediaMessage(lastMessage) : null, unreadCount });
+const serializeGroup = (group, me, lastMessage = null, unreadCount = 0, pinnedGroupId = null) => { const manualUnread = (group.manualUnreadBy || []).some((id) => String(id) === String(me)); return ({ id: String(group._id), type: "group", name: group.name, avatarUrl: group.avatar || null, createdBy: String(group.createdBy), members: (group.members || []).map((item) => item?.name ? person(item) : { id: String(item) }), admins: (group.admins || []).map(String), permissions: { editGroupInfo: group.permissions?.editGroupInfo || "ADMINS", addMembers: group.permissions?.addMembers || "ADMINS" }, archived: (group.archivedBy || []).some((id) => String(id) === String(me)), muted: (group.mutedBy || []).some((id) => String(id) === String(me)), pinned: (group.pinnedBy || []).some((id) => String(id) === String(me)), manualUnread, pinnedToProfile: String(pinnedGroupId || "") === String(group._id), lastMessage: lastMessage ? serializeMediaMessage(lastMessage) : null, unreadCount: Math.max(unreadCount, manualUnread ? 1 : 0) }); };
 const isGroupAdmin = (group, userId) => group.admins.some((id) => String(id) === String(userId));
 const canEditGroupInfo = (group, userId) => isGroupAdmin(group, userId) || group.permissions?.editGroupInfo === "ALL_MEMBERS";
 const canAddGroupMembers = (group, userId) => isGroupAdmin(group, userId) || group.permissions?.addMembers === "ALL_MEMBERS";
@@ -86,6 +86,10 @@ export const createGroup = asyncHandler(async (req, res) => {
 
 export const getGroupMessages = asyncHandler(async (req, res) => {
   const group = await getGroup(req.params.groupId, req.user._id);
+  if (group.manualUnreadBy?.some((id) => String(id) === String(req.user._id))) {
+    group.manualUnreadBy.pull(req.user._id);
+    await group.save();
+  }
   const owner = await User.findById(req.user._id).select("pinnedMessageGroup").lean();
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
   const filter = { group: group._id, deletedFor: { $ne: req.user._id } };
@@ -233,6 +237,10 @@ export const setGroupAdmin = asyncHandler(async (req, res) => {
 export const archiveGroup = asyncHandler(async (req, res) => { const group = await getGroup(req.params.groupId, req.user._id); if (req.body.archived === false) group.archivedBy.pull(req.user._id); else group.archivedBy.addToSet(req.user._id); await group.save(); return sendResponse(res, 200, "Archive updated", { archived: req.body.archived !== false }); });
 
 export const muteGroup = asyncHandler(async (req, res) => { const group = await getGroup(req.params.groupId, req.user._id); const muted = req.body.muted !== false; if (muted) group.mutedBy.addToSet(req.user._id); else group.mutedBy.pull(req.user._id); await group.save(); return sendResponse(res, 200, muted ? "Group muted" : "Group unmuted", { muted }); });
+
+export const updateGroupState = asyncHandler(async (req, res) => { const group = await getGroup(req.params.groupId, req.user._id); if (typeof req.body.pinned === "boolean") req.body.pinned ? group.pinnedBy.addToSet(req.user._id) : group.pinnedBy.pull(req.user._id); if (typeof req.body.manualUnread === "boolean") { req.body.manualUnread ? group.manualUnreadBy.addToSet(req.user._id) : group.manualUnreadBy.pull(req.user._id); if (!req.body.manualUnread) await GroupMessage.updateMany({ group: group._id, sender: { $ne: req.user._id }, "readBy.user": { $ne: req.user._id } }, { $push: { readBy: { user: req.user._id, readAt: new Date() } } }); } await group.save(); return sendResponse(res, 200, "Group state updated", { pinned: group.pinnedBy.some((id) => String(id) === String(req.user._id)), manualUnread: group.manualUnreadBy.some((id) => String(id) === String(req.user._id)) }); });
+
+export const leaveGroup = asyncHandler(async (req, res) => { const group = await getGroup(req.params.groupId, req.user._id); if (group.members.length <= 1) throw new ApiError(409, "The final member cannot leave the group"); group.members.pull(req.user._id); group.admins.pull(req.user._id); group.archivedBy.pull(req.user._id); group.mutedBy.pull(req.user._id); group.pinnedBy.pull(req.user._id); group.manualUnreadBy.pull(req.user._id); if (!group.admins.length) group.admins.addToSet(group.members[0]); await group.save(); return sendResponse(res, 200, "You left the group", {}); });
 
 export const pinGroupToProfile = asyncHandler(async (req, res) => { const group = await getGroup(req.params.groupId, req.user._id); const pinned = req.body.pinned !== false; await User.updateOne({ _id: req.user._id }, { $set: { pinnedMessageGroup: pinned ? group._id : null } }); return sendResponse(res, 200, pinned ? "Group pinned to profile" : "Group removed from profile", { pinned, groupId: pinned ? String(group._id) : null }); });
 
