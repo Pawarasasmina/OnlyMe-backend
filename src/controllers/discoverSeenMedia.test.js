@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { serializeDiscoverSeen, selectSidebarSeens } from "./discoverController.js";
+import { serializeDiscoverSeen, selectSidebarSeens, buildDiscoverPreviewSeens } from "./discoverController.js";
 
 test("Fresh and Trending Seens deliver newly uploaded private videos with a signed URL", () => {
   const seen = serializeDiscoverSeen({
@@ -34,4 +34,17 @@ test("sidebar selects trending by engagement and fresh by publication date witho
   assert.equal(items[0].id, "older");
   assert.deepEqual(selectSidebarSeens([]), { trendingSeen: null, freshSeens: [] });
   assert.deepEqual(selectSidebarSeens([items[0]]).freshSeens, [items[0]]);
+});
+
+test("Discover preview has up to three free Seens and excludes paid snapshot media", () => {
+  const owner = { _id: "alex", username: "alex" };
+  const seens = Array.from({ length: 4 }, (_, index) => ({ _id: String(index), title: `Free ${index}`, creator: owner }));
+  const paid = [
+    { _id: "paid", creator: owner, pricing: { mode: "ONE_TIME" } },
+    { _id: "paid-snapshot", creator: owner, pricing: {}, publishedSnapshot: { metadata: { pricing: { mode: "ONE_TIME" } } } },
+  ];
+  const result = buildDiscoverPreviewSeens([...paid, ...seens, { _id: "missing-owner" }]);
+  assert.deepEqual(result.get("alex").map(seen => seen.id), ["0", "1", "2"]);
+  assert.equal(result.get("alex")[0].route, "/seen/0");
+  assert.equal(buildDiscoverPreviewSeens(paid).size, 0);
 });
