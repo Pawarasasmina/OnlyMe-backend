@@ -90,6 +90,23 @@ function writeSlidesCache(req, data) {
   slidesCache.set(slidesCacheKey(req), { data, expiresAt: Date.now() + SLIDES_CACHE_TTL });
 }
 
+export function refreshCachedDiscoverRelationships(data, followedIds) {
+  const update = person => {
+    const following = followedIds.has(String(person.userId || person.creator?.id || person.creatorId || person.id || person._id));
+    return {
+      ...person, following, isFollowing: following,
+      ...(person.creator ? { creator: { ...person.creator, following, isFollowing: following } } : {}),
+      ...(person.actions ? { actions: { ...person.actions, following } } : {}),
+    };
+  };
+  return {
+    ...data,
+    recommendations: (data.recommendations || []).map(update),
+    following: (data.following || []).map(update).filter(person => person.following),
+    suggestedUsers: (data.suggestedUsers || []).map(update).filter(person => !person.following),
+  };
+}
+
 function roleProfileModel(role, creatorApprovalStatus = null) {
   return role === "creator" || creatorApprovalStatus === "approved" ? CreatorProfile : FanProfile;
 }
@@ -813,7 +830,13 @@ async function discoverSidebar(viewer, profiles) {
 
 export const getDiscover = asyncHandler(async (req, res) => {
   const cachedSlides = readSlidesCache(req);
-  if (cachedSlides) return sendResponse(res, 200, "Discover fetched", cachedSlides);
+  if (cachedSlides) {
+    // Recommendation media may be cached, but relationships must stay live.
+    // Read on every cache hit so follow changes also work across API instances.
+    const relationships = await ProfileRelationship.find({ actor: req.user._id, type: "FOLLOW" }).select("target").lean();
+    const followedIds = new Set(relationships.map(row => String(row.target)));
+    return sendResponse(res, 200, "Discover fetched", refreshCachedDiscoverRelationships(cachedSlides, followedIds));
+  }
   const viewerModel = roleProfileModel(req.user.role, req.user.creatorApprovalStatus);
   const slidesOnly = req.query.view === "slides";
   const [viewerProfile, initialBlockedIds, followingCount] = await Promise.all([
