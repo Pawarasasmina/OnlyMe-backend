@@ -1,12 +1,12 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { acceptMessageRequest, archiveConversation, blockMessageAccount, consumeDisappearingMessage, declineMessageRequest, deleteConversation, deleteMessage, forwardMessage, listChatGifts, listConversations, listMessages, listShareRecipients, muteConversation, openDisappearingMessage, removeMessageReaction, reportConversation, reportMessage, searchMessagePeople, sendChatGift, sendImageMessage, sendMessage, sendSharedContent, sendVideoNote, sendVoiceMessage, setMessageReaction, unblockMessageAccount } from "../controllers/messageController.js";
+import { acceptMessageRequest, archiveConversation, blockMessageAccount, consumeDisappearingMessage, declineMessageRequest, deleteConversation, deleteMessage, forwardMessage, listChatGifts, listConversations, listMessages, listShareRecipients, muteConversation, openDisappearingMessage, removeMessageReaction, reportConversation, reportMessage, searchMessagePeople, sendChatGift, sendImageMessage, sendMessage, sendSharedContent, sendVideoNote, sendVoiceMessage, setMessageReaction, unblockMessageAccount, updateConversationState } from "../controllers/messageController.js";
 import { askDirectAccessQuestion, getDirectAccessOffer, listDirectAccessWindows, openWindow, replyToFreeFanFollowup, sendFreeFanFollowup, updateDirectAccessSettings } from "../controllers/directAccessController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { financialMutationLimit } from "../middleware/financialRateLimit.js";
 import { uploadMessageImage, uploadVideoNote, uploadVoiceMessage } from "../middleware/uploadMiddleware.js";
-import { addGroupMember, archiveGroup, createGroup, deleteGroup, deleteGroupMessage, forwardGroupMessage, getGroupMessages, listGroups, markGroupMessageDelivered, muteGroup, pinGroupToProfile, removeGroupAvatar, removeGroupMember, removeGroupMessageReaction, reportGroupMessage, sendGroupImageMessage, sendGroupMessage, sendGroupVideoNote, sendGroupVoiceMessage, setGroupAdmin, setGroupMessageReaction, syncGroupMessageDeliveries, updateGroup, updateGroupAvatar } from "../controllers/groupMessageController.js";
+import { addGroupMember, archiveGroup, createGroup, deleteGroup, deleteGroupMessage, forwardGroupMessage, getGroupMessages, leaveGroup, listGroups, markGroupMessageDelivered, muteGroup, pinGroupToProfile, removeGroupAvatar, removeGroupMember, removeGroupMessageReaction, reportGroupMessage, sendGroupImageMessage, sendGroupMessage, sendGroupVideoNote, sendGroupVoiceMessage, setGroupAdmin, setGroupMessageReaction, syncGroupMessageDeliveries, updateGroup, updateGroupAvatar, updateGroupState } from "../controllers/groupMessageController.js";
 
 const router = Router();
 const messageSendLimiter = rateLimit({
@@ -43,6 +43,8 @@ router.post("/groups/:groupId/avatar", uploadMessageImage.single("avatar"), upda
 router.delete("/groups/:groupId/avatar", removeGroupAvatar);
 router.put("/groups/:groupId/archive", archiveGroup);
 router.put("/groups/:groupId/mute", muteGroup);
+router.put("/groups/:groupId/state", updateGroupState);
+router.post("/groups/:groupId/leave", leaveGroup);
 router.put("/groups/:groupId/profile-pin", pinGroupToProfile);
 router.post("/groups/:groupId/members", addGroupMember);
 router.delete("/groups/:groupId/members/:userId", removeGroupMember);
@@ -63,6 +65,7 @@ router.post("/conversations/:userId/image", messageSendLimiter, uploadMessageIma
 router.post("/conversations/:userId/report", reportConversation);
 router.put("/conversations/:userId/archive", archiveConversation);
 router.put("/conversations/:userId/mute", muteConversation);
+router.put("/conversations/:userId/state", updateConversationState);
 router.delete("/conversations/:userId", deleteConversation);
 router.put("/blocks/:userId", blockMessageAccount);
 router.delete("/blocks/:userId", unblockMessageAccount);

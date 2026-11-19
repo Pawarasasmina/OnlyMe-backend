@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 
 const schema = new mongoose.Schema({
   name: { type: String, required: true, trim: true, maxlength: 80 },
+  caption: { type: String, trim: true, maxlength: 160, default: "" },
   stars: { type: Number, required: true, min: 1, max: 1000000, validate: Number.isSafeInteger },
   image: {
     assetId: { type: String, required: true },

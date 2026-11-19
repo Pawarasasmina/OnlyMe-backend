@@ -10,9 +10,10 @@ import { deleteGiftImage, uploadGiftImage } from "../services/giftImageStorageSe
 
 const serializeCategory = (category) => category ? ({ id: category._id, name: category.name, slug: category.slug, sortOrder: category.sortOrder, isActive: category.isActive }) : null;
 const animation = (gift) => ({ idleMotion: gift.idleMotion || "hover", motionDelay: gift.motionDelay || 0, showShine: Boolean(gift.showShine), showHalo: Boolean(gift.showHalo), celebrationTier: gift.celebrationTier || "AUTO", effectFamily: gift.effectFamily || "glass", objectEffect: gift.objectEffect || "none", animationConfigured: Boolean(gift.animationConfigured) });
-const serialize = (gift) => ({ id: gift._id, name: gift.name, stars: gift.stars, imageUrl: gift.image.url, image: gift.image, isAnimated: Boolean(gift.image?.isAnimated), displayScale: gift.displayScale, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0, ...animation(gift), category: serializeCategory(gift.category), sortOrder: gift.sortOrder, isActive: gift.isActive, createdAt: gift.createdAt, updatedAt: gift.updatedAt });
+const serialize = (gift) => ({ id: gift._id, name: gift.name, caption: gift.caption || "", stars: gift.stars, imageUrl: gift.image.url, image: gift.image, isAnimated: Boolean(gift.image?.isAnimated), displayScale: gift.displayScale, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0, ...animation(gift), category: serializeCategory(gift.category), sortOrder: gift.sortOrder, isActive: gift.isActive, createdAt: gift.createdAt, updatedAt: gift.updatedAt });
 const integer = (value, label, min, max) => { const result = Number(value); if (!Number.isSafeInteger(result) || result < min || result > max) throw new ApiError(400, `${label} must be a whole number from ${min} to ${max}`); return result; };
 const nameValue = (value) => { const name = String(value || "").trim(); if (!name || name.length > 80) throw new ApiError(400, "Gift name is required and must be at most 80 characters"); return name; };
+const captionValue = (value) => { const caption = String(value || "").trim(); if (caption.length > 160) throw new ApiError(400, "Gift caption must be at most 160 characters"); return caption; };
 const choices = (value, label, allowed, fallback) => { const result = String(value || fallback); if (!allowed.includes(result)) throw new ApiError(400, `Choose a valid ${label}`); return result; };
 const animationValue = (body) => ({
   idleMotion: choices(body.idleMotion, "idle motion", ["beat", "sway", "hover", "floaty", "glowp", "rev", "spin", "coin", "flick", "bob2", "pulse"], "hover"),
@@ -40,7 +41,7 @@ export const createGift = asyncHandler(async (req, res) => {
   const image = await uploadGiftImage(req.file, req.user._id);
   try {
     const lastGift = await Gift.findOne().sort({ sortOrder: -1 }).select("sortOrder").lean();
-    const gift = await Gift.create({ name: nameValue(req.body.name), stars: integer(req.body.stars, "Star value", 1, 1000000), category: await categoryValue(req.body.categoryId), displayScale: integer(req.body.displayScale || 100, "Display scale", 40, 140), imagePositionX: integer(req.body.imagePositionX || 0, "Horizontal position", -50, 50), imagePositionY: integer(req.body.imagePositionY || 0, "Vertical position", -50, 50), ...animationValue(req.body), animationConfigured: true, sortOrder: Math.min((lastGift?.sortOrder || 0) + 1, 100000), isActive: String(req.body.isActive) !== "false", image, createdBy: req.user._id, updatedBy: req.user._id });
+const gift = await Gift.create({ name: nameValue(req.body.name), caption: captionValue(req.body.caption), stars: integer(req.body.stars, "Star value", 1, 1000000), category: await categoryValue(req.body.categoryId), displayScale: integer(req.body.displayScale || 100, "Display scale", 40, 140), imagePositionX: integer(req.body.imagePositionX || 0, "Horizontal position", -50, 50), imagePositionY: integer(req.body.imagePositionY || 0, "Vertical position", -50, 50), ...animationValue(req.body), animationConfigured: true, sortOrder: Math.min((lastGift?.sortOrder || 0) + 1, 100000), isActive: String(req.body.isActive) !== "false", image, createdBy: req.user._id, updatedBy: req.user._id });
     if (gift.isActive) await GiftPreference.updateMany({}, { $addToSet: { enabledGifts: gift._id } });
     return sendResponse(res, 201, "Gift created", { gift: serialize(gift) });
   } catch (error) { await deleteGiftImage(image.assetId).catch(() => {}); throw error; }
@@ -56,6 +57,7 @@ export const updateGift = asyncHandler(async (req, res) => {
   if (req.file) uploaded = await uploadGiftImage(req.file, req.user._id);
   try {
     if (req.body.name !== undefined) gift.name = nameValue(req.body.name);
+    if (req.body.caption !== undefined) gift.caption = captionValue(req.body.caption);
     if (req.body.stars !== undefined) gift.stars = integer(req.body.stars, "Star value", 1, 1000000);
     if (req.body.categoryId !== undefined) gift.category = await categoryValue(req.body.categoryId);
     if (req.body.displayScale !== undefined) gift.displayScale = integer(req.body.displayScale, "Display scale", 40, 140);

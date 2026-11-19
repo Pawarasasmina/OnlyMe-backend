@@ -3,7 +3,7 @@ import GiftCategory from "../models/GiftCategory.js";
 import GiftPreference from "../models/GiftPreference.js";
 
 export const giftAnimation = (gift) => ({ idleMotion: gift.idleMotion || "hover", motionDelay: gift.motionDelay || 0, showShine: Boolean(gift.showShine), showHalo: Boolean(gift.showHalo), celebrationTier: gift.celebrationTier || "AUTO", effectFamily: gift.effectFamily || "glass", objectEffect: gift.objectEffect || "none", animationConfigured: Boolean(gift.animationConfigured) });
-export const serializeGift = (gift) => ({ id: String(gift._id), key: String(gift._id), name: gift.name, stars: gift.stars, imageUrl: gift.image.url, isAnimated: Boolean(gift.image?.isAnimated), displayScale: gift.displayScale || 100, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0, ...giftAnimation(gift), category: gift.category && gift.category.name ? { id: String(gift.category._id), name: gift.category.name, slug: gift.category.slug, sortOrder: gift.category.sortOrder || 0 } : null });
+export const serializeGift = (gift) => ({ id: String(gift._id), key: String(gift._id), name: gift.name, caption: gift.caption || "", stars: gift.stars, imageUrl: gift.image.url, isAnimated: Boolean(gift.image?.isAnimated), displayScale: gift.displayScale || 100, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0, ...giftAnimation(gift), category: gift.category && gift.category.name ? { id: String(gift.category._id), name: gift.category.name, slug: gift.category.slug, sortOrder: gift.category.sortOrder || 0 } : null });
 
 export async function giftsForRecipient(userId) {
   const preference = userId ? await GiftPreference.findOne({ user: userId }).select("enabledGifts").lean() : null;
