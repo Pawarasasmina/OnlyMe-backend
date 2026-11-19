@@ -19,6 +19,7 @@ import { accountOwnershipSummary, canRestoreAccount, changeAccountOwnership } fr
 import AdminLoginEvent from "../models/AdminLoginEvent.js";
 import { verifyTotp } from "../utils/totp.js";
 import crypto from "node:crypto";
+import UsernameReservation from "../models/UsernameReservation.js";
 
 void mongoose;
 
@@ -37,6 +38,8 @@ function sanitizeUser(user) {
   return {
     id: user._id,
     name: user.name,
+    firstName: user.firstName || user.name?.trim().split(/\s+/)[0] || "",
+    lastName: user.lastName || user.name?.trim().split(/\s+/).slice(1).join(" ") || "",
     username: user.username,
     memberNumber: user.memberNumber,
     showMemberNumber: user.showMemberNumber !== false,
@@ -91,15 +94,20 @@ async function recordAuthAnalytics(req, user, eventType) {
 }
 
 export const register = asyncHandler(async (req, res) => {
-  const { name, username, email, password, dateOfBirth } = validateRegisterPayload(req.body);
+  const { name, firstName, lastName, username, email, password, dateOfBirth } = validateRegisterPayload(req.body);
 
   if (req.body.referralCode) await resolveReferral(req.body.referralCode);
 
-  const existingUser = await User.findOne({ $or: [{ email }, { username }] });
-  if (existingUser) throw new ApiError(409, "A user with that email or username already exists");
+  const [existingUser, reservedUsername] = await Promise.all([
+    User.findOne({ $or: [{ email }, { username }] }),
+    UsernameReservation.exists({ username, expiresAt: { $gt: new Date() } }),
+  ]);
+  if (existingUser || reservedUsername) throw new ApiError(409, "A user with that email or username already exists");
 
   const userData = {
     name,
+    firstName,
+    lastName,
     username,
     email,
     password,

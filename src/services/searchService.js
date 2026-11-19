@@ -173,10 +173,10 @@ function serializePerson({ following = false, profile, user, query }) {
     ? [...new Set([...(profile.categories || []), profile.category].filter(Boolean))]
     : profile.interests || [];
   const location = profile.privacySettings?.showLocation === false ? publicLocation("", "") : publicLocation(profile.city, profile.country);
-  const title = user.name || user.username;
-  const subtitleParts = [`@${user.username}`];
-  if (creatorEnabled && (profile.category || categories[0])) subtitleParts.push(profile.category || categories[0]);
-  if (location.city || location.country) subtitleParts.push([location.city, location.country].filter(Boolean).join(", "));
+  const title = `@${user.username}`;
+  // Search is one of the two deliberate places where the real name is
+  // retained as secondary identity context.
+  const subtitleParts = [user.name].filter(Boolean);
 
   return {
     id: String(user._id),

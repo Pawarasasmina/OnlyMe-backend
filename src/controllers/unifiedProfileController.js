@@ -7,6 +7,7 @@ import { resolveStorySources } from "../services/storySourceService.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
 import User from "../models/User.js";
+import UsernameReservation from "../models/UsernameReservation.js";
 import Publication from "../models/Publication.js";
 import PublicationSeries from "../models/PublicationSeries.js";
 import FeedPost from "../models/FeedPost.js";
@@ -568,7 +569,11 @@ export const getProfileConnections = asyncHandler(async (req, res) => {
 
 export const getUnifiedProfileByUsername = asyncHandler(async (req, res) => {
   const username = normalizeUsername(req.params.username);
-  const owner = await User.findOne({ username, role: { $in: ["fan", "creator"] }, status: "active", profileModerationHiddenAt: null });
+  let owner = await User.findOne({ username, role: { $in: ["fan", "creator"] }, status: "active", profileModerationHiddenAt: null });
+  if (!owner) {
+    const reservation = await UsernameReservation.findOne({ username, expiresAt: { $gt: new Date() } }).select("user").lean();
+    if (reservation) owner = await User.findOne({ _id: reservation.user, role: { $in: ["fan", "creator"] }, status: "active", profileModerationHiddenAt: null });
+  }
   if (!owner) throw new ApiError(404, "Profile not found");
   const Model = profileModelFor(owner);
   const visibility = await Model.findOne({ user: owner._id }).select("profileVisibility").lean();

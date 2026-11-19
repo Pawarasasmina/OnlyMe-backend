@@ -3,6 +3,8 @@ import ApiError from "../utils/ApiError.js";
 import { CREATOR_PROFILE_CATEGORIES } from "../constants/profileCategoryConstants.js";
 
 export const RESERVED_USERNAMES = new Set([
+  "seen",
+  "atseen",
   "admin",
   "administrator",
   "support",
@@ -16,6 +18,13 @@ export const RESERVED_USERNAMES = new Set([
   "user",
   "users",
   "onlyme",
+  "official",
+  "team",
+  "help",
+  "about",
+  "www",
+  "app",
+  "me",
 ]);
 
 const usernamePattern = /^[a-z0-9_.]+$/;
@@ -54,12 +63,20 @@ export function validateUsername(username) {
     throw new ApiError(400, "Username is required");
   }
 
+  if (normalized.length < 3) {
+    throw new ApiError(400, "Username must be at least 3 characters");
+  }
+
   if (normalized.length > 30) {
     throw new ApiError(400, "Username must be 30 characters or less");
   }
 
   if (!usernamePattern.test(normalized)) {
     throw new ApiError(400, "Username may contain only letters, numbers, underscores, and periods");
+  }
+
+  if (normalized.startsWith(".") || normalized.endsWith(".") || normalized.includes("..")) {
+    throw new ApiError(400, "A period cannot start, end, or repeat in a username");
   }
 
   if (RESERVED_USERNAMES.has(normalized)) {
@@ -269,8 +286,18 @@ function validateSocialLinks(value) {
 export function validateRoleProfilePayload(role, payload, user) {
   const common = {};
 
-  if (payload.displayName !== undefined || payload.name !== undefined) {
+  if (payload.firstName !== undefined || payload.lastName !== undefined) {
+    const firstName = sanitizeText(payload.firstName, 30);
+    const lastName = sanitizeText(payload.lastName, 30);
+    if (!firstName) throw new ApiError(400, "First name is required");
+    common.firstName = firstName;
+    common.lastName = lastName;
+    common.name = `${firstName}${lastName ? ` ${lastName}` : ""}`;
+  } else if (payload.displayName !== undefined || payload.name !== undefined) {
     common.name = validateDisplayName(payload.displayName ?? payload.name);
+    const [firstName, ...lastName] = common.name.split(/\s+/);
+    common.firstName = firstName.slice(0, 30);
+    common.lastName = lastName.join(" ").slice(0, 30);
   }
 
   if (payload.username !== undefined) {
