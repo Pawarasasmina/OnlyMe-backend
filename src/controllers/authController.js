@@ -93,23 +93,39 @@ async function recordAuthAnalytics(req, user, eventType) {
   await recordAnalyticsEvent({ eventType, req, sessionId, source: "unknown", userId: user._id });
 }
 
+async function findLoginUser(identifier) {
+  const normalized = identifier.toLowerCase().replace(/^@/u, "");
+  const digits = identifier.replace(/\D/g, "");
+  const phoneCandidates = digits.length >= 7 ? [...new Set([identifier.trim(), digits, `+${digits}`])] : [];
+  const direct = await User.findOne({ $or: [{ email: normalized }, { username: normalized }, ...phoneCandidates.map(value => ({ phone: value }))] }).select("+password");
+  if (direct || !phoneCandidates.length) return direct;
+
+  // Older accounts kept phone numbers on their role profile. Support those
+  // records while new/updated accounts also mirror the normalized login phone.
+  const matches = await Promise.all([AdminProfile, CreatorProfile, FanProfile].map(Model => Model.find({ phoneNumber: { $in: phoneCandidates } }).select("user").lean()));
+  const userIds = [...new Set(matches.flat().map(match => String(match.user)).filter(Boolean))];
+  if (userIds.length !== 1) return null;
+  return User.findById(userIds[0]).select("+password");
+}
+
 export const register = asyncHandler(async (req, res) => {
-  const { name, firstName, lastName, username, email, password, dateOfBirth } = validateRegisterPayload(req.body);
+  const { name, firstName, lastName, username, email, phone, password, dateOfBirth } = validateRegisterPayload(req.body);
 
   if (req.body.referralCode) await resolveReferral(req.body.referralCode);
 
   const [existingUser, reservedUsername] = await Promise.all([
-    User.findOne({ $or: [{ email }, { username }] }),
+    User.findOne({ $or: [{ username }, ...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])] }),
     UsernameReservation.exists({ username, expiresAt: { $gt: new Date() } }),
   ]);
-  if (existingUser || reservedUsername) throw new ApiError(409, "A user with that email or username already exists");
+  if (existingUser || reservedUsername) throw new ApiError(409, "A user with that username, email or phone already exists");
 
   const userData = {
     name,
     firstName,
     lastName,
     username,
-    email,
+    ...(email ? { email } : {}),
+    ...(phone ? { phone } : {}),
     password,
     dateOfBirth,
     preferredLanguage: ["en", "ar", "ru", "uk", "es", "pt", "fr", "de"].includes(req.body.preferredLanguage) ? req.body.preferredLanguage : "en",
@@ -126,8 +142,8 @@ export const register = asyncHandler(async (req, res) => {
     } catch (error) {
       const duplicateMemberNumber = error?.code === 11000 && (error?.keyPattern?.memberNumber || error?.keyValue?.memberNumber);
       if (duplicateMemberNumber && attempt < 2) continue;
-      if (error?.code === 11000 && (error?.keyPattern?.email || error?.keyPattern?.username || error?.keyValue?.email || error?.keyValue?.username)) {
-        throw new ApiError(409, "A user with that email or username already exists");
+      if (error?.code === 11000 && (error?.keyPattern?.email || error?.keyPattern?.username || error?.keyPattern?.phone || error?.keyValue?.email || error?.keyValue?.username || error?.keyValue?.phone)) {
+        throw new ApiError(409, "A user with that username, email or phone already exists");
       }
       throw error;
     }
@@ -138,7 +154,7 @@ export const register = asyncHandler(async (req, res) => {
 
   // Email is a post-registration side effect: a provider outage must never
   // roll back an account that was created successfully.
-  sendWelcomeEmail(user).catch((error) => console.error("Welcome email delivery failed", { userId: String(user._id), error: error.message }));
+  if (user.email) sendWelcomeEmail(user).catch((error) => console.error("Welcome email delivery failed", { userId: String(user._id), error: error.message }));
 
   const tokens = issueAuthTokens(user);
   res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
@@ -149,14 +165,11 @@ export const register = asyncHandler(async (req, res) => {
   });
 });
 export const login = asyncHandler(async (req, res) => {
-  validateLoginPayload(req.body);
-
-  const { email, password } = req.body;
-
-  const user = await User.findOne({ email: email.toLowerCase() }).select("+password");
+  const { identifier, password } = validateLoginPayload(req.body);
+  const user = await findLoginUser(identifier);
 
   if (!user || !(await user.comparePassword(password))) {
-    throw new ApiError(401, "Invalid email or password");
+    throw new ApiError(401, "Invalid username, email, phone or password");
   }
 
   if (user.role === "admin" && user.adminTwoFactorEnabled) {

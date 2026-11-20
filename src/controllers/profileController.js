@@ -29,6 +29,7 @@ import {
   validateSettingsPayload,
   validateUsername,
 } from "../validators/profileValidator.js";
+import { normalizePhone } from "../validators/authValidator.js";
 
 const profileModels = {
   admin: AdminProfile,
@@ -536,6 +537,12 @@ export const updateMyAccountSettings = asyncHandler(async (req, res) => {
     });
   }
   const updates = stripUndefined(validateSettingsPayload(req.user.role, "account", req.body));
+  if (updates.phoneNumber !== undefined) {
+    const phone = normalizePhone(updates.phoneNumber);
+    if (phone && await User.exists({ phone, _id: { $ne: req.user._id } })) throw new ApiError(409, "That phone number is already in use");
+    updates.phoneNumber = phone;
+    await User.updateOne({ _id: req.user._id }, phone ? { $set: { phone } } : { $unset: { phone: 1 } });
+  }
   if (updates.preferredLanguage !== undefined) updates.uiLanguageSelectedAt = new Date();
   const Model = profileModels[effectiveProfileRole(req.user)];
   await Model.updateOne(
@@ -559,6 +566,14 @@ export const updateMyProfile = asyncHandler(async (req, res) => {
   const { common, profile } = validateRoleProfilePayload(effectiveProfileRole(req.user), req.body, req.user);
   const commonUpdates = stripUndefined(common);
   const profileUpdates = stripUndefined(profile);
+
+  if (profileUpdates.phoneNumber !== undefined) {
+    const phone = normalizePhone(profileUpdates.phoneNumber);
+    if (phone && await User.exists({ phone, _id: { $ne: req.user._id } })) throw new ApiError(409, "That phone number is already in use");
+    profileUpdates.phoneNumber = phone;
+    if (phone) commonUpdates.phone = phone;
+    else await User.updateOne({ _id: req.user._id }, { $unset: { phone: 1 } });
+  }
 
   if (commonUpdates.username && commonUpdates.username !== req.user.username) {
     const changedAt = req.user.usernameChangedAt ? new Date(req.user.usernameChangedAt) : null;
