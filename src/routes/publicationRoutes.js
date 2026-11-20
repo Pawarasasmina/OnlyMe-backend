@@ -5,7 +5,7 @@ import { optionalProtect, protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { requireApprovedCreatorOrSeenOwner } from "../middleware/creatorApprovalMiddleware.js";
 import { uploadContentMedia, uploadVoiceMessage } from "../middleware/uploadMiddleware.js";
-import { blockSeenCreator, commentOnSeen, getSeenEngagement, hideSeen, listSeenReactors, listWorldWalkers, markWorldWalked, muteSeenCreator, reactToSeen, reactToSeenComment, removeSeenComment, removeSeenCommentReaction, removeSeenReaction, removeSeenShare, reportSeen, shareSeen, toggleSeenSave } from "../controllers/seenEngagementController.js";
+import { blockSeenCreator, commentOnSeen, getSeenEngagement, hideSeen, listSeenReactors, listWorldWalkers, markWorldWalked, muteSeenCreator, reactToSeen, reactToSeenComment, reportSeenComment, removeSeenComment, removeSeenCommentReaction, removeSeenReaction, removeSeenShare, reportSeen, shareSeen, toggleSeenSave } from "../controllers/seenEngagementController.js";
 import { getPublicationPoll, votePublicationPoll } from "../controllers/publicationPollController.js";
 import { generate as generateAiSeen, linkPublication as linkAiSeenPublication, start as startAiSeen, status as aiSeenStatus } from "../controllers/aiSeenController.js";
 import { requireNoContentHold, requirePostingAccess } from "../middleware/accountRestrictionMiddleware.js";
@@ -82,6 +82,7 @@ router.delete("/:id/reaction", protect, authorize("fan", "creator"), removeSeenR
 router.post("/:id/comments", protect, authorize("fan", "creator"), uploadVoiceMessage.single("voice"), commentOnSeen);
 router.put("/:id/comments/:commentId/reaction", protect, authorize("fan", "creator"), reactToSeenComment);
 router.delete("/:id/comments/:commentId/reaction", protect, authorize("fan", "creator"), removeSeenCommentReaction);
+router.post("/:id/comments/:commentId/report", protect, authorize("fan", "creator"), reportSeenComment);
 router.delete("/:id/comments/:commentId", protect, authorize("fan", "creator"), removeSeenComment);
 router.put("/:id/share", protect, authorize("fan", "creator"), shareSeen);
 router.delete("/:id/share", protect, authorize("fan", "creator"), removeSeenShare);

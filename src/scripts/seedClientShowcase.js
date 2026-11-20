@@ -360,7 +360,7 @@ async function seedContent(c, index) {
   }
 
   const experienceIds = [];
-  const experienceNames = [`${c.category} Foundations`, `A Week With ${c.first}`];
+  const experienceNames = [`${c.first}'s ${c.category} Foundations`, `A Week With ${c.first}`];
   for (let i = 0; i < experienceNames.length; i += 1) {
     const title = experienceNames[i];
     const experienceCover = media(`${c.username}-experience-${i}-cover`, imageUrl(c, coverIds[(index + i + 7) % coverIds.length]));
