@@ -1,3 +1,4 @@
+import { removeSeenCommentThread } from "../services/seenCommentService.js";
 import mongoose from "mongoose";
 import Publication from "../models/Publication.js";
 import PublicationPreference from "../models/PublicationPreference.js";
@@ -81,7 +82,7 @@ const summary = async (publication, viewerId) => {
     SeenEngagement.find({ publication, type: "REACTION" }).sort({ updatedAt: -1 }).limit(200).populate("user", "name username avatar").lean(),
     SeenEngagement.aggregate([{ $match: { publication: new mongoose.Types.ObjectId(publication), type: "COMMENT_REACTION", actorAccountType: { $ne: "TEST" } } }, { $group: { _id: { comment: "$parentComment", reaction: { $ifNull: ["$reaction", "LIKE"] } }, count: { $sum: 1 } } }]),
     viewerId ? SeenEngagement.find({ publication, user: viewerId, type: "COMMENT_REACTION" }).select("parentComment reaction").lean() : [],
-    Publication.findById(publication).select("privateShareCount").lean(),
+    Publication.findById(publication).select("privateShareCount creator worldModerators").lean(),
   ]);
   const savedCommentRows = viewerId && comments.length
     ? await SavedItem.find({ user: viewerId, targetType: "comment", targetModel: "SeenEngagement", targetId: { $in: comments.map((item) => item._id) } }).select("targetId").lean()
@@ -119,7 +120,7 @@ const summary = async (publication, viewerId) => {
     else topLevelComments.push(item);
   });
   const sortedReactors = reactions.filter((item) => item.user?._id).sort((first, second) => Number(String(second.user._id) === String(viewerId || "")) - Number(String(first.user._id) === String(viewerId || "")));
-  return { privateShareCount: Number(shareMetric?.privateShareCount || 0), reactionCount: count.REACTION || 0, reactionBreakdown, topReactions: sortedReactionCounts.slice(0, 3).map((item) => item._id), reactorPreviews: sortedReactors.slice(0, 2).map((item) => ({ id: String(item.user._id), name: item.user.name || item.user.username || "User", username: item.user.username || "", avatar: item.user.avatar || "" })), reactors: reactions.map((item) => ({ id: item._id, reaction: item.reaction || "LIKE", user: { id: item.user?._id, name: item.user?.name || item.user?.username || "User", username: item.user?.username || "", avatar: item.user?.avatar || "" } })), commentCount: count.COMMENT || 0, shareCount: count.SHARE || 0, saveCount: count.SAVE || 0, viewCount: (count.WALKED || 0) + (count.REACTION || 0) + (count.COMMENT || 0) + (count.SHARE || 0) + (count.SAVE || 0), viewerReaction: viewer.find((item) => item.type === "REACTION")?.reaction || null, viewerShared: Boolean(viewer.find((item) => item.type === "SHARE")), viewerSaved: Boolean(viewer.find((item) => item.type === "SAVE")), comments: topLevelComments };
+  return { viewerCanModerate: canModeratePublication(viewerId, shareMetric), privateShareCount: Number(shareMetric?.privateShareCount || 0), reactionCount: count.REACTION || 0, reactionBreakdown, topReactions: sortedReactionCounts.slice(0, 3).map((item) => item._id), reactorPreviews: sortedReactors.slice(0, 2).map((item) => ({ id: String(item.user._id), name: item.user.name || item.user.username || "User", username: item.user.username || "", avatar: item.user.avatar || "" })), reactors: reactions.map((item) => ({ id: item._id, reaction: item.reaction || "LIKE", user: { id: item.user?._id, name: item.user?.name || item.user?.username || "User", username: item.user?.username || "", avatar: item.user?.avatar || "" } })), commentCount: count.COMMENT || 0, shareCount: count.SHARE || 0, saveCount: count.SAVE || 0, viewCount: (count.WALKED || 0) + (count.REACTION || 0) + (count.COMMENT || 0) + (count.SHARE || 0) + (count.SAVE || 0), viewerReaction: viewer.find((item) => item.type === "REACTION")?.reaction || null, viewerShared: Boolean(viewer.find((item) => item.type === "SHARE")), viewerSaved: Boolean(viewer.find((item) => item.type === "SAVE")), comments: topLevelComments };
 };
 
 const cleanString = (value, maxLength) => {
@@ -354,22 +355,32 @@ export const removeSeenCommentReaction = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Comment reaction removed", { engagement: await summary(req.params.id, req.user._id) });
 });
 
+export const reportSeenComment = asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id) || !mongoose.isValidObjectId(req.params.commentId)) throw new ApiError(400, "Invalid ID");
+  const publication = await publishedCommentable(req.params.id, req.user, req.body.accessToken || req.query.access || req.query.token);
+  const comment = await SeenEngagement.findOne({ _id: req.params.commentId, publication: publication._id, type: "COMMENT" }).lean();
+  if (!comment) throw new ApiError(404, "Comment not found");
+  if (String(comment.user) === String(req.user._id)) throw new ApiError(400, "You cannot report your own comment");
+  const reason = String(req.body.reason || "OTHER").toUpperCase();
+  if (!["SPAM", "HARASSMENT", "HATE", "DEFAMATION", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "SCAM", "COPYRIGHT", "IMPERSONATION", "CHILD_SAFETY", "OTHER"].includes(reason)) throw new ApiError(400, "Select a valid report reason");
+  try {
+    const report = await MessageReport.create({ reporter: req.user._id, reportedUser: comment.user, scope: "COMMENT", publication: publication._id, commentId: comment._id, reason, details: String(req.body.details || "").trim().slice(0, 1000), snapshot: { publicationId: String(publication._id), commentId: String(comment._id), authorId: String(comment.user), text: comment.text, audio: comment.audio, createdAt: comment.createdAt } });
+    return sendResponse(res, 201, "Comment report received", { reportId: report._id });
+  } catch (error) {
+    if (error?.code === 11000) throw new ApiError(409, "You already reported this comment");
+    throw error;
+  }
+});
+
 export const removeSeenComment = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid publication ID");
   if (!mongoose.isValidObjectId(req.params.commentId)) throw new ApiError(400, "Invalid comment ID");
-  const comment = await SeenEngagement.findOne({ _id: req.params.commentId, publication: req.params.id, type: "COMMENT" }).select("_id publication").lean();
+  const comment = await SeenEngagement.findOne({ _id: req.params.commentId, publication: req.params.id, type: "COMMENT" }).select("_id publication user").lean();
   if (!comment) throw new ApiError(404, "Comment not found");
   const publication = await Publication.findOne({ _id: comment.publication, kind: { $in: ["SEEN", "WORLD", "PREMIUM_WORLD", "EXPERIENCE"] } }).select("_id creator kind worldModerators").lean();
   if (!publication) throw new ApiError(404, "Publication not found");
-  if (!canModeratePublication(req.user._id, publication)) throw new ApiError(403, "Only the creator or this experience's moderator can remove comments");
-  await SeenEngagement.deleteMany({
-    publication: publication._id,
-    $or: [
-      { _id: comment._id },
-      { parentComment: comment._id },
-    ],
-  });
-  await SeenEngagement.deleteMany({ publication: publication._id, type: "COMMENT_REACTION", parentComment: comment._id });
+  if (String(comment.user) !== String(req.user._id) && !canModeratePublication(req.user._id, publication)) throw new ApiError(403, "Only the comment author, creator or this experience's moderator can remove comments");
+  await removeSeenCommentThread(publication._id, comment._id);
   return sendResponse(res, 200, "Comment removed", { engagement: await summary(publication._id, req.user._id) });
 });
 

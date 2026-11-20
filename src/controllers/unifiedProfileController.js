@@ -431,8 +431,12 @@ export const getOwnUnifiedProfile = asyncHandler(async (req, res) => {
 export const updateOwnProfileStatus = asyncHandler(async (req, res) => {
   if (!["fan", "creator"].includes(req.user.role)) throw new ApiError(403, "Profile status is available to fan and creator accounts");
   const { activeStatus, cleared } = buildProfileStatusFromPayload(req.body);
+  await User.updateOne(
+    { _id: req.user._id },
+    { $set: { activeStatus } },
+    { runValidators: true },
+  );
   req.user.activeStatus = activeStatus;
-  await req.user.save();
   return sendResponse(res, 200, cleared ? "Status cleared" : "Status updated", {
     activeStatus: serializeProfileStatus(req.user.activeStatus),
   });

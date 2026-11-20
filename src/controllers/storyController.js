@@ -776,8 +776,12 @@ export const listStories = asyncHandler(async (req, res) => {
 export const updateStoryStatus = asyncHandler(async (req, res) => {
   const currentStatus = serializeStatus(req.user.activeStatus);
   const { activeStatus, cleared } = buildStatusFromPayload(req.body, currentStatus);
+  await User.updateOne(
+    { _id: req.user._id },
+    { $set: { activeStatus } },
+    { runValidators: true },
+  );
   req.user.activeStatus = activeStatus;
-  await req.user.save();
   return sendResponse(res, 200, cleared ? "Status cleared" : "Status updated", { activeStatus: serializeStatus(req.user.activeStatus) });
 });
 

@@ -1,3 +1,4 @@
+import { removeSeenCommentThread } from "../services/seenCommentService.js";
 import mongoose from "mongoose";
 import User from "../models/User.js";
 import MessageReport from "../models/MessageReport.js";
@@ -98,6 +99,7 @@ export const getUnifiedReport = asyncHandler(async (req, res) => {
 });
 
 async function applyContentAction(report, model, action) {
+  if (model === "MessageReport" && report.scope === "COMMENT" && report.publication && report.commentId && ["HIDDEN", "REMOVED"].includes(action)) await removeSeenCommentThread(report.publication, report.commentId);
   if (model === "PublicationReport" && ["HIDDEN", "REMOVED"].includes(action)) await Publication.updateOne({ _id: report.publication }, { $set: { status: action === "REMOVED" ? "REMOVED" : "ARCHIVED" } });
   if (model === "MessageReport" && report.feedPost && ["HIDDEN", "REMOVED"].includes(action)) await FeedPost.updateOne({ _id: report.feedPost }, { $set: { status: action === "REMOVED" ? "deleted" : "archived", ...(report.source !== "AUTOMATED_DUPLICATE" ? { moderationStatus: "REJECTED" } : {}), ...(action === "REMOVED" ? { deletedAt: new Date() } : { archivedAt: new Date() }) } });
   if (model === "MessageReport" && report.message && ["HIDDEN", "REMOVED"].includes(action)) await Message.updateOne({ _id: report.message }, { $set: { deletedAt: new Date() } });

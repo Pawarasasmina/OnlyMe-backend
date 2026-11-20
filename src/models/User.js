@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 import { ACCOUNT_TYPES, DEFAULT_ACCOUNT_TYPE } from "../constants/accountTypeConstants.js";
 import { nextMemberNumber } from "../services/memberTicketService.js";
-import { WALL_NEED_HINT_IDS } from "../constants/wallNeedHintConstants.js";
+import { normalizeWallNeedHintIds, WALL_NEED_HINT_IDS } from "../constants/wallNeedHintConstants.js";
 
 const userSchema = new mongoose.Schema(
   {
@@ -188,6 +188,13 @@ const userSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+userSchema.pre("validate", function normalizeLegacyWallHints(next) {
+  if (this.isModified("wallHintDismissals") || this.wallHintDismissals?.length) {
+    this.wallHintDismissals = normalizeWallNeedHintIds(this.wallHintDismissals);
+  }
+  next();
+});
 
 userSchema.index({ memberNumber: 1 }, { unique: true, sparse: true });
 
