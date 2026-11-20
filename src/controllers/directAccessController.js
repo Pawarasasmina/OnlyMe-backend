@@ -14,6 +14,7 @@ import { activeDirectAccessWindow, createDirectAccessMessageAtomic, creatorTypic
 import { financialModeForAccountType } from "../constants/accountTypeConstants.js";
 import { assertCreatorCanMonetize, monetizationEligibility } from "../services/monetizationEligibilityService.js";
 import CreatorVerification from "../models/CreatorVerification.js";
+import { callAvailabilityForUser } from "../services/callAvailabilityService.js";
 
 const validId = (value) => {
   if (!mongoose.isValidObjectId(value)) throw new ApiError(400, "Invalid account id");
@@ -25,10 +26,12 @@ export const getDirectAccessOffer = asyncHandler(async (req, res) => {
   const profile = await CreatorProfile.findOne({ user: req.params.creatorId }).select("directAccessEnabled directAccessPriceStars directCallEnabled directCallPriceStars directCallDurationMinutes directCallAutoDeclineAway").lean();
   if (!profile) throw new ApiError(404, "Creator profile not found");
   const active = isConsumerAccount(req.user) ? await activeDirectAccessWindow(req.user._id, req.params.creatorId) : null;
-  const [wallet, membership, sellerVerification] = await Promise.all([
+  const [wallet, membership, sellerVerification, sellerCalls, viewerCalls] = await Promise.all([
     isConsumerAccount(req.user) ? Wallet.findOne({ user: req.user._id }).select("balance testBalance").lean() : null,
     isConsumerAccount(req.user) ? PremiumMembership.findOne({ user: req.user._id, creator: req.params.creatorId, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }).select("currentPeriodStart currentPeriodEnd directAccessAllowancePeriodStart directAccessAllowanceUsedAt").lean() : null,
     CreatorVerification.findOne({ creator: req.params.creatorId, purpose: "IDENTITY" }).select("status ageConfirmed dateOfBirth").lean(),
+    callAvailabilityForUser(req.params.creatorId),
+    callAvailabilityForUser(req.user),
   ]);
   const sellerEligibility = monetizationEligibility(sellerVerification);
   const sellerAllowed = sellerEligibility.allowed;
@@ -41,7 +44,9 @@ export const getDirectAccessOffer = asyncHandler(async (req, res) => {
     // current period even when the creator is not selling paid windows.
     enabled: Boolean(sellerAllowed && (profile.directAccessEnabled || allowanceAvailable)),
     priceStars: profile.directAccessPriceStars || 100,
-    callEnabled: Boolean(sellerAllowed && profile.directCallEnabled),
+    callEnabled: Boolean(sellerAllowed && sellerCalls.available && viewerCalls.available && profile.directCallEnabled),
+    callsAvailable: Boolean(sellerCalls.available && viewerCalls.available),
+    callsUnavailableReason: !sellerCalls.available || !viewerCalls.available ? "Calls are unavailable in your country" : "",
     callPriceStars: profile.directCallPriceStars || 500,
     callDurationMinutes: profile.directCallDurationMinutes || 5,
     callAutoDeclineAway: Boolean(profile.directCallAutoDeclineAway),
@@ -62,6 +67,8 @@ export const getDirectAccessOffer = asyncHandler(async (req, res) => {
 export const updateDirectAccessSettings = asyncHandler(async (req, res) => {
   if (!hasCreatorAccess(req.user)) throw new ApiError(403, "Only approved creators can configure Direct Access");
   if (req.body.enabled === true || req.body.callEnabled === true) await assertCreatorCanMonetize(req.user._id);
+  const calls = await callAvailabilityForUser(req.user);
+  if (req.body.callEnabled === true && !calls.available) throw new ApiError(403, calls.reason, "CALLS_UNAVAILABLE_IN_COUNTRY");
   const priceStars = Number(req.body.priceStars);
   if (!Number.isSafeInteger(priceStars) || priceStars < 10 || priceStars > 10000) throw new ApiError(400, "Direct Access price must be between 10 and 10,000 Stars");
   const callPriceStars = Number(req.body.callPriceStars ?? 500);
@@ -70,7 +77,7 @@ export const updateDirectAccessSettings = asyncHandler(async (req, res) => {
   if (![2, 5, 10, 15, 20, 30].includes(callDurationMinutes)) throw new ApiError(400, "Choose a supported call duration");
   const profile = await CreatorProfile.findOneAndUpdate(
     { user: req.user._id },
-    { $set: { directAccessEnabled: req.body.enabled === true, directAccessPriceStars: priceStars, directCallEnabled: req.body.callEnabled === true, directCallPriceStars: callPriceStars, directCallDurationMinutes: callDurationMinutes, directCallAutoDeclineAway: req.body.callAutoDeclineAway === true } },
+    { $set: { directAccessEnabled: req.body.enabled === true, directAccessPriceStars: priceStars, directCallEnabled: calls.available && req.body.callEnabled === true, directCallPriceStars: callPriceStars, directCallDurationMinutes: callDurationMinutes, directCallAutoDeclineAway: req.body.callAutoDeclineAway === true } },
     { new: true },
   ).select("directAccessEnabled directAccessPriceStars directCallEnabled directCallPriceStars directCallDurationMinutes directCallAutoDeclineAway");
   if (!profile) throw new ApiError(404, "Creator profile not found");
@@ -81,6 +88,8 @@ export const updateDirectAccessSettings = asyncHandler(async (req, res) => {
     callPriceStars: profile.directCallPriceStars,
     callDurationMinutes: profile.directCallDurationMinutes,
     callAutoDeclineAway: profile.directCallAutoDeclineAway,
+    callsAvailable: calls.available,
+    callsUnavailableReason: calls.reason,
   });
 });
 

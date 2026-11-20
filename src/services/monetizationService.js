@@ -11,7 +11,7 @@ import ApiError from "../utils/ApiError.js";
 import { countriesMatch, countryCode } from "../utils/countryCode.js";
 
 export const MONETIZATION_POLICY_KEY = "MONETIZATION_POLICY";
-const defaults = { enabled: true, supportedCountries: [], termsVersion: "monetization-v1" };
+const defaults = { enabled: true, supportedCountries: [], termsVersion: "monetization-v1", topCreatorPayoutThresholdUsd: 1000 };
 export async function getMonetizationPolicy() {
   const record = await PlatformSetting.findOne({ key: MONETIZATION_POLICY_KEY }).lean();
   return { ...defaults, ...record?.value };
@@ -22,7 +22,9 @@ export function validateMonetizationPolicy(payload) {
   const countries = [...new Map(payload.supportedCountries.map(country => [country.trim().toLowerCase(), country.trim()])).values()];
   const termsVersion = String(payload.termsVersion || "").trim();
   if (!/^[a-zA-Z0-9._-]{1,60}$/.test(termsVersion)) throw new ApiError(400, "Provide a valid terms version");
-  return { enabled: payload.enabled, supportedCountries: countries, termsVersion };
+  const topCreatorPayoutThresholdUsd = Number(payload.topCreatorPayoutThresholdUsd ?? defaults.topCreatorPayoutThresholdUsd);
+  if (!Number.isFinite(topCreatorPayoutThresholdUsd) || topCreatorPayoutThresholdUsd < 0 || topCreatorPayoutThresholdUsd > 10000000) throw new ApiError(400, "Top creator payout threshold must be between $0 and $10,000,000");
+  return { enabled: payload.enabled, supportedCountries: countries, termsVersion, topCreatorPayoutThresholdUsd: Math.round(topCreatorPayoutThresholdUsd * 100) / 100 };
 }
 export function isAdult(dateOfBirth, now = new Date()) {
   if (!dateOfBirth) return false;

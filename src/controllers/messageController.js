@@ -33,6 +33,7 @@ import { assertMessagingAccess } from "../services/messagingAccessService.js";
 import { createDirectAccessMessageAtomic, creatorTypicalReplyHours, releaseDirectAccessMessageReservation, reserveDirectAccessMessage, serializeDAWindow, settleDirectAccessReply } from "../services/directAccessService.js";
 import { canAccessPublicationAudience, serializePublication } from "../services/publicationAccessService.js";
 import { executeFinancialCommand } from "../services/financialCommandService.js";
+import { callAvailabilityForUser } from "../services/callAvailabilityService.js";
 import { safeWallet, transferStars } from "../services/walletLedgerService.js";
 import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
 import { giftAllowedForRecipient, giftsForRecipient, giftAnimation, serializeGift } from "../services/giftPreferenceService.js";
@@ -552,10 +553,12 @@ export const listMessages = asyncHandler(async (req, res) => {
   const participant = person(other);
   if (isApprovedCreator(other)) {
     const profile = await CreatorProfile.findOne({ user: other._id }).select("bio orbitStatus directCallEnabled").lean();
+    const [otherCalls, viewerCalls] = await Promise.all([callAvailabilityForUser(other), callAvailabilityForUser(req.user)]);
     participant.typicalReplyHours = await creatorTypicalReplyHours(other._id);
     participant.statusLine = profile?.orbitStatus || "";
     participant.personalLine = profile?.bio || "";
-    participant.callEnabled = Boolean(profile?.directCallEnabled);
+    participant.callEnabled = Boolean(profile?.directCallEnabled && otherCalls.available && viewerCalls.available);
+    participant.callsUnavailableReason = participant.callEnabled ? "" : (!otherCalls.available || !viewerCalls.available ? "Calls are unavailable in your country" : "");
   } else if (other.role === "fan") {
     const profile = await FanProfile.findOne({ user: other._id }).select("bio orbitStatus").lean();
     participant.statusLine = profile?.orbitStatus || "";

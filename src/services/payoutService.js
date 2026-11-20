@@ -10,6 +10,7 @@ import StarsLedgerEntry from "../models/StarsLedgerEntry.js";
 import User from "../models/User.js";
 import { getStarExchangeRate } from "./starExchangeService.js";
 import { clearingCutoff, creatorClearingLevel } from "./creatorClearingService.js";
+import { PAYOUT_POLICY } from "../constants/payoutPolicy.js";
 
 const CREATOR_EVENTS = ["WORLD_CREATOR_EARNING", "PREMIUM_CREATOR_EARNING", "DREAM_CREATOR_EARNING", "CHAT_GIFT_EARNING", "DA_CREATOR_EARNING", "CALL_CREATOR_EARNING"];
 
@@ -40,11 +41,11 @@ export async function transitionPayout({ payoutId, status, reason = "" }) {
 export const automaticPayoutMonthKey = (now = new Date()) => `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
 
 export async function processAutomaticPayouts(now = new Date()) {
-  if (now.getUTCDate() !== 1) return { skipped: true, created: 0 };
+  if (now.getUTCDate() !== PAYOUT_POLICY.automaticDayOfMonth) return { skipped: true, created: 0 };
   const monthKey = automaticPayoutMonthKey(now);
   const banks = await PayoutBankApplication.find({ status: "APPROVED", automaticPayout: true }).select("user accountLast4").limit(500).lean();
   const starsPerUsd = await getStarExchangeRate();
-  const minimumStars = Math.ceil(20 * starsPerUsd);
+  const minimumStars = Math.ceil(PAYOUT_POLICY.automaticMinimumUsd * starsPerUsd);
   let created = 0;
   for (const bank of banks) {
     if (await Payout.exists({ user: bank.user, trigger: "AUTOMATIC", monthKey })) continue;

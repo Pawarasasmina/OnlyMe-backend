@@ -24,12 +24,12 @@ export async function accountOwnershipSummary(user) {
   return { unwithdrawnUsd: Math.max(0, buckets.earned) / rate, graceDays: 30 };
 }
 
-export async function changeAccountOwnership(user, action, acknowledgeEarningsLoss, now = new Date()) {
+export async function changeAccountOwnership(user, action, _acknowledgeEarningsLoss, now = new Date()) {
   if (user.role === "admin") throw new ApiError(403, "Administrator accounts cannot be changed here");
   if (action === "delete" && await LegalHold.exists({ targetType: "USER", targetId: String(user._id), active: true })) throw new ApiError(423, "This account is currently subject to a deletion hold", "LEGAL_HOLD_ACTIVE");
-  if (action === "delete" && !acknowledgeEarningsLoss) {
+  if (action === "delete") {
     const summary = await accountOwnershipSummary(user);
-    if (summary.unwithdrawnUsd > 0) throw new ApiError(409, "Withdraw your earnings first, or confirm that you want to delete anyway", "UNWITHDRAWN_EARNINGS");
+    if (summary.unwithdrawnUsd > 0) throw new ApiError(409, "Withdraw all cleared earnings and wait for pending earnings to clear before deleting your account", "UNWITHDRAWN_EARNINGS");
   }
   const updated = await User.findOneAndUpdate({ _id: user._id, status: "active" }, {
     $set: action === "delete" ? { status: "pending_deletion", deletionRequestedAt: now, deletionScheduledAt: new Date(now.getTime() + DELETION_GRACE_MS) } : { status: "deactivated", deactivatedAt: now },

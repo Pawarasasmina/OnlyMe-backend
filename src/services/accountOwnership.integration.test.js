@@ -43,6 +43,7 @@ test("ownership lifecycle preserves balances, revokes sessions, restores login a
     assert.ifError(failure);
     assert.equal(response.body.data.user.status, "active");
     let current = await User.findById(user._id);
+    await Wallet.updateOne({ user: user._id }, { $set: { balance: 0, earnedBalance: 0 } });
     await changeAccountOwnership(current, "delete", true);
     assert.equal((await processDueAccountDeletions()).processed, 0);
     await login({ body: { email: user.email, password: "Password123" }, headers: {}, get: () => "" }, response, err => { throw err; });

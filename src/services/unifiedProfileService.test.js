@@ -131,6 +131,18 @@ test("an active World membership opens only Experiences included in that World",
   assert.equal(result.experiences[1].paymentAvailable, true);
 });
 
+test("an active World membership opens only Paid Seens included in that World", () => {
+  const snapshot = { metadata: { title: "Paid Seen", summary: "", description: "", category: "", tags: [], pricing: { mode: "ONE_TIME", starsAmount: 190 } }, chapters: [{ stableChapterId: "one", order: 0, title: "One", isPreview: true, blocks: [] }, { stableChapterId: "two", order: 1, title: "Two", isPreview: false, blocks: [] }], version: 1, frozenAt: new Date() };
+  const included = { _id: "included-seen", creator: owner._id, kind: "SEEN", status: "PUBLISHED", pricing: snapshot.metadata.pricing, publishedSnapshot: snapshot };
+  const separate = { ...included, _id: "separate-seen" };
+  const result = serializeUnifiedProfile({ owner, roleProfile, viewer: { _id: "fan", role: "fan" }, seens: [included, separate], membershipIncludedExperienceIds: new Set(["included-seen"]), premiumMembershipPublicationId: "premium-world" });
+  assert.equal(result.seens[0].access, "ACTIVE_PREMIUM_MEMBER");
+  assert.equal(result.seens[0].paymentAvailable, false);
+  assert.equal(result.seens[0].chapters.every((chapter) => !chapter.locked), true);
+  assert.equal(result.seens[1].access, "PUBLIC_PREVIEW");
+  assert.equal(result.seens[1].paymentAvailable, true);
+});
+
 test("profile contract exposes reposted Seen metadata", () => {
   const snapshot = { metadata: { title: "Shared Seen", summary: "", description: "", category: "", tags: [], pricing: {}, planet: {} }, chapters: [{ stableChapterId: "c", order: 0, title: "C", isPreview: true, blocks: [] }], version: 1, frozenAt: new Date() };
   const sharedAt = new Date();
@@ -147,5 +159,5 @@ test("creator profile exposes relationship counts and viewer state", () => {
   assert.deepEqual(result.publicMetrics, { publishedContentCount: 0, followerCount: 12, followingCount: 4, seenByCount: 6, supporterCount: 0 });
   assert.deepEqual(result.viewerRelationship, { following: true, seeSignalSent: true });
   assert.equal(result.viewerCapabilities.canFollow, true);
-  assert.deepEqual(result.profile.directAccess, { enabled: true, priceStars: 200, durationHours: 48, messageLimit: 3, callEnabled: false, callPriceStars: 500, callDurationMinutes: 5 });
+  assert.deepEqual(result.profile.directAccess, { enabled: true, priceStars: 200, durationHours: 48, messageLimit: 3, callEnabled: false, callsAvailable: true, callsUnavailableReason: "", callPriceStars: 500, callDurationMinutes: 5 });
 });

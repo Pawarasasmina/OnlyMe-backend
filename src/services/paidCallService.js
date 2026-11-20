@@ -12,6 +12,7 @@ import { creditWallet, debitWallet, safeWallet } from "./walletLedgerService.js"
 import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
 import { financialModeForAccountType } from "../constants/accountTypeConstants.js";
 import { requireMonetization } from "./monetizationService.js";
+import { callAvailabilityForUser } from "./callAvailabilityService.js";
 
 export const PAID_CALL_REQUEST_MS = 24 * 60 * 60 * 1000;
 export const PAID_CALL_PLATFORM_RATE_BPS = 0;
@@ -30,20 +31,24 @@ export function serializePaidCall(call) {
 export async function paidCallOffer(fan, creatorId) {
   await requireMonetization(creatorId, "directAccess");
   if (!["fan", "creator"].includes(fan.role)) throw new ApiError(403, "This account cannot request a paid creator call");
-  const [creator, profile, wallet, blocked] = await Promise.all([
+  const [creator, profile, wallet, blocked, fanCalls, creatorCalls] = await Promise.all([
     User.findOne({ _id: creatorId, role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved", status: "active" }).select("_id name username avatar role creatorApprovalStatus").lean(),
     CreatorProfile.findOne({ user: creatorId }).select("directCallEnabled directCallPriceStars directCallDurationMinutes directCallAutoDeclineAway").lean(),
     Wallet.findOne({ user: fan._id }).select("balance testBalance").lean(),
     UserBlock.exists({ $or: [{ blocker: fan._id, blocked: creatorId }, { blocker: creatorId, blocked: fan._id }] }),
+    callAvailabilityForUser(fan),
+    callAvailabilityForUser(creatorId),
   ]);
   if (!creator || !profile) throw new ApiError(404, "Creator not found");
   if (blocked) throw new ApiError(403, "Calling is unavailable for this account");
-  return { enabled: Boolean(profile.directCallEnabled), priceStars: profile.directCallPriceStars || 500, priorityPriceStars: PAID_CALL_PRIORITY_STARS, durationMinutes: profile.directCallDurationMinutes || 5, autoDeclineWhenAway: Boolean(profile.directCallAutoDeclineAway), walletBalance: financialModeForAccountType(fan.accountType) === "TEST" ? wallet?.testBalance ?? 0 : wallet?.balance ?? 0, creator };
+  const callsAvailable = fanCalls.available && creatorCalls.available;
+  return { enabled: Boolean(callsAvailable && profile.directCallEnabled), callsAvailable, callsUnavailableReason: callsAvailable ? "" : "Calls are unavailable in your country", priceStars: profile.directCallPriceStars || 500, priorityPriceStars: PAID_CALL_PRIORITY_STARS, durationMinutes: profile.directCallDurationMinutes || 5, autoDeclineWhenAway: Boolean(profile.directCallAutoDeclineAway), walletBalance: financialModeForAccountType(fan.accountType) === "TEST" ? wallet?.testBalance ?? 0 : wallet?.balance ?? 0, creator };
 }
 
 export async function openPaidCall({ fan, creatorId, key, type = "AUDIO", topic = "", priority = false }) {
   key = idempotencyKey(key);
   const offer = await paidCallOffer(fan, creatorId);
+  if (!offer.callsAvailable) throw new ApiError(403, offer.callsUnavailableReason, "CALLS_UNAVAILABLE_IN_COUNTRY");
   if (!offer.enabled) throw new ApiError(403, "This creator is not accepting paid calls");
   const { creator, durationMinutes } = offer;
   const normalizedTopic = String(topic || "").trim().slice(0, 160);
