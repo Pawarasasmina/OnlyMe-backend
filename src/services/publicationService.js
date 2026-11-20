@@ -48,7 +48,9 @@ async function validateTaggedPeople(creatorId, people = [], kind = "SEEN") {
 
 async function createWithSlot(creatorId, normalized, slot) { return withTransactionFallback(async (session) => { const policy = derivedPublicationPolicy(normalized.kind); const pricing = policy.pricing || normalized.pricing; const [publication] = await Publication.create([{ creator: creatorId, ...normalized, pricing, previewPolicy: policy.previewPolicy, planet: normalized.kind === "SEEN" ? { slot: null } : { ...normalized.planet, slot }, status: "DRAFT" }], session ? { session } : {}); await history(publication, "DRAFT_CREATED", "DRAFT", crypto.randomUUID(), session); return publication; }); }
 export async function createPublicationDraft(creatorId, payload) {
-  const normalized = normalizePublicationDraft(payload); normalized.entityRefs = await validateEntityRefs(payload.entityRefs); if (normalized.kind !== "SEEN") { delete normalized.visibility; delete normalized.series; delete normalized.taggedPeople; } else { normalized.series = await validateSeriesOwner(creatorId, normalized.series, normalized.kind); normalized.taggedPeople = await validateTaggedPeople(creatorId, normalized.taggedPeople, normalized.kind); } if (normalized.kind === "SEEN") {
+  const normalized = normalizePublicationDraft(payload);
+  if (normalized.kind === "EXPERIENCE") throw new ApiError(410, "Experiences have been replaced by Paid Seens");
+  normalized.entityRefs = await validateEntityRefs(payload.entityRefs); if (normalized.kind !== "SEEN") { delete normalized.visibility; delete normalized.series; delete normalized.taggedPeople; } else { normalized.series = await validateSeriesOwner(creatorId, normalized.series, normalized.kind); normalized.taggedPeople = await validateTaggedPeople(creatorId, normalized.taggedPeople, normalized.kind); } if (normalized.kind === "SEEN") {
     const draftFilter = { creator: creatorId, kind: "SEEN", status: "DRAFT" };
     const draftCount = await Publication.countDocuments(draftFilter);
     if (draftCount >= 3) {
@@ -65,9 +67,6 @@ export async function createPublicationDraft(creatorId, payload) {
       catch (error) { if (error.code !== 11000) throw error; }
     }
     throw new ApiError(409, "You can save up to 3 Seen drafts. Publish or remove one before saving another.");
-  }
-  if (normalized.kind === "EXPERIENCE") {
-    return createWithSlot(creatorId, normalized, null);
   }
   const slots = normalized.kind === "PREMIUM_WORLD" ? ["PREMIUM"] : ["WORLD_1", "WORLD_2"];
   for (const slot of slots) { try { return await createWithSlot(creatorId, normalized, slot); } catch (error) { if (error.code !== 11000) throw error; } }

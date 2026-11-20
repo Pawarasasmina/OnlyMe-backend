@@ -7,7 +7,7 @@ import { expireVerifiedCreator, synchronizeIdentityBadge } from "../services/ver
 
 export const protect = asyncHandler(async (req, _res, next) => {
   const authHeader = req.headers.authorization;
-  const token = authHeader?.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.split(" ")[1] : req.cookies?.accessToken;
 
   if (!token) {
     throw new ApiError(401, "Authentication token is required");
@@ -51,7 +51,7 @@ export const protect = asyncHandler(async (req, _res, next) => {
 
 export const optionalProtect = asyncHandler(async (req, _res, next) => {
   const authHeader = req.headers.authorization;
-  const token = authHeader?.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.split(" ")[1] : req.cookies?.accessToken;
   if (!token) return next();
 
   let decoded;

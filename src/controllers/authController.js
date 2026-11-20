@@ -32,6 +32,23 @@ const refreshCookieOptions = {
   path: "/api/auth",
   maxAge: 30 * 24 * 60 * 60 * 1000,
 };
+const accessCookieOptions = {
+  httpOnly: true,
+  sameSite: env.nodeEnv === "production" ? "none" : "lax",
+  secure: env.nodeEnv === "production",
+  path: "/",
+  maxAge: 15 * 60 * 1000,
+};
+
+function setAuthCookies(res, tokens) {
+  res.cookie("accessToken", tokens.accessToken, accessCookieOptions);
+  res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
+}
+
+function clearAuthCookies(res) {
+  res.clearCookie("accessToken", accessCookieOptions);
+  res.clearCookie("refreshToken", refreshCookieOptions);
+}
 
 function sanitizeUser(user) {
   const effectiveRole = user.role === "admin" ? "admin" : user.creatorApprovalStatus === "approved" ? "creator" : "fan";
@@ -93,25 +110,44 @@ async function recordAuthAnalytics(req, user, eventType) {
   await recordAnalyticsEvent({ eventType, req, sessionId, source: "unknown", userId: user._id });
 }
 
+async function findLoginUser(identifier) {
+  const normalized = identifier.toLowerCase().replace(/^@/u, "");
+  const digits = identifier.replace(/\D/g, "");
+  const phoneCandidates = digits.length >= 7 ? [...new Set([identifier.trim(), digits, `+${digits}`])] : [];
+  const direct = await User.findOne({ $or: [{ email: normalized }, { username: normalized }, ...phoneCandidates.map(value => ({ phone: value }))] }).select("+password");
+  if (direct || !phoneCandidates.length) return direct;
+
+  // Older accounts kept phone numbers on their role profile. Support those
+  // records while new/updated accounts also mirror the normalized login phone.
+  const matches = await Promise.all([AdminProfile, CreatorProfile, FanProfile].map(Model => Model.find({ phoneNumber: { $in: phoneCandidates } }).select("user").lean()));
+  const userIds = [...new Set(matches.flat().map(match => String(match.user)).filter(Boolean))];
+  if (userIds.length !== 1) return null;
+  return User.findById(userIds[0]).select("+password");
+}
+
 export const register = asyncHandler(async (req, res) => {
-  const { name, firstName, lastName, username, email, password, dateOfBirth } = validateRegisterPayload(req.body);
+  const { name, firstName, lastName, username, email, phone, password, dateOfBirth } = validateRegisterPayload(req.body);
 
   if (req.body.referralCode) await resolveReferral(req.body.referralCode);
 
   const [existingUser, reservedUsername] = await Promise.all([
-    User.findOne({ $or: [{ email }, { username }] }),
+    User.findOne({ $or: [{ username }, ...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])] }),
     UsernameReservation.exists({ username, expiresAt: { $gt: new Date() } }),
   ]);
-  if (existingUser || reservedUsername) throw new ApiError(409, "A user with that email or username already exists");
+  if (reservedUsername || existingUser?.username === username) throw new ApiError(409, "This username is already taken");
+  if (email && existingUser?.email === email) throw new ApiError(409, "This email is already registered");
+  if (phone && existingUser?.phone === phone) throw new ApiError(409, "This phone number is already registered");
 
   const userData = {
     name,
     firstName,
     lastName,
     username,
-    email,
+    ...(email ? { email } : {}),
+    ...(phone ? { phone } : {}),
     password,
     dateOfBirth,
+    monetization: { dateOfBirth },
     preferredLanguage: ["en", "ar", "ru", "uk", "es", "pt", "fr", "de"].includes(req.body.preferredLanguage) ? req.body.preferredLanguage : "en",
     profileType: "personal",
     role: "fan",
@@ -126,37 +162,35 @@ export const register = asyncHandler(async (req, res) => {
     } catch (error) {
       const duplicateMemberNumber = error?.code === 11000 && (error?.keyPattern?.memberNumber || error?.keyValue?.memberNumber);
       if (duplicateMemberNumber && attempt < 2) continue;
-      if (error?.code === 11000 && (error?.keyPattern?.email || error?.keyPattern?.username || error?.keyValue?.email || error?.keyValue?.username)) {
-        throw new ApiError(409, "A user with that email or username already exists");
+      if (error?.code === 11000 && (error?.keyPattern?.email || error?.keyPattern?.username || error?.keyPattern?.phone || error?.keyValue?.email || error?.keyValue?.username || error?.keyValue?.phone)) {
+        if (error?.keyPattern?.email || error?.keyValue?.email) throw new ApiError(409, "This email is already registered");
+        if (error?.keyPattern?.phone || error?.keyValue?.phone) throw new ApiError(409, "This phone number is already registered");
+        throw new ApiError(409, "This username is already taken");
       }
       throw error;
     }
   }
   if (!user) throw new ApiError(503, "Could not reserve a member number. Please try again.");
   await createRoleProfile(user);
-  await attributeReferral({ code: req.body.referralCode, invitee: user, shareIdentity: req.body.referralShareIdentity !== false });
+  await attributeReferral({ code: req.body.referralCode, invitee: user, shareIdentity: req.body.referralShareIdentity !== false, sessionId: readAnalyticsSessionId(req) });
 
   // Email is a post-registration side effect: a provider outage must never
   // roll back an account that was created successfully.
-  sendWelcomeEmail(user).catch((error) => console.error("Welcome email delivery failed", { userId: String(user._id), error: error.message }));
+  if (user.email) sendWelcomeEmail(user).catch((error) => console.error("Welcome email delivery failed", { userId: String(user._id), error: error.message }));
 
   const tokens = issueAuthTokens(user);
-  res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
+  setAuthCookies(res, tokens);
   await recordAuthAnalytics(req, user, "LOGIN");
   return sendResponse(res, 201, "Registration successful", {
     user: sanitizeUser(user),
-    accessToken: tokens.accessToken,
   });
 });
 export const login = asyncHandler(async (req, res) => {
-  validateLoginPayload(req.body);
-
-  const { email, password } = req.body;
-
-  const user = await User.findOne({ email: email.toLowerCase() }).select("+password");
+  const { identifier, password } = validateLoginPayload(req.body);
+  const user = await findLoginUser(identifier);
 
   if (!user || !(await user.comparePassword(password))) {
-    throw new ApiError(401, "Invalid email or password");
+    throw new ApiError(401, "Invalid username, email, phone or password");
   }
 
   if (user.role === "admin" && user.adminTwoFactorEnabled) {
@@ -197,12 +231,11 @@ export const login = asyncHandler(async (req, res) => {
 
   const tokens = issueAuthTokens(user);
 
-  res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
+  setAuthCookies(res, tokens);
   await recordAuthAnalytics(req, user, "LOGIN");
 
   return sendResponse(res, 200, "Login successful", {
     user: sanitizeUser(user),
-    accessToken: tokens.accessToken,
   });
 });
 
@@ -247,7 +280,7 @@ export const resetPassword = asyncHandler(async (req, res) => {
   user.resetPasswordExpires = undefined;
   user.authVersion = (user.authVersion || 0) + 1;
   await user.save();
-  res.clearCookie("refreshToken", refreshCookieOptions);
+  clearAuthCookies(res);
   return sendResponse(res, 200, "Password reset successfully", {});
 });
 
@@ -291,19 +324,19 @@ export const googleCallback = asyncHandler(async (req, res) => {
   if (user.status !== "active") return googleFailure(res, "This account is not available");
   if (user.twoFactorEnabled) return googleFailure(res, "This account uses two-factor authentication. Sign in with your password and authenticator code.");
   const tokens = issueAuthTokens(user);
-  res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
+  setAuthCookies(res, tokens);
   return res.redirect(`${env.clientUrl.replace(/\/+$/u, "")}/login?google=success`);
 });
 
 export const logout = asyncHandler(async (_req, res) => {
-  res.clearCookie("refreshToken", refreshCookieOptions);
+  clearAuthCookies(res);
   return sendResponse(res, 200, "Logout successful");
 });
 
 export const deleteAccount = asyncHandler(async (req, res) => {
   const user = await changeAccountOwnership(req.user, "delete", req.body?.acknowledgeEarningsLoss === true);
   req.app.get("io")?.in(`user:${req.user._id}`).disconnectSockets(true);
-  res.clearCookie("refreshToken", refreshCookieOptions);
+  clearAuthCookies(res);
   return sendResponse(res, 200, "Account deletion requested", {
     deletionRequestedAt: user.deletionRequestedAt,
     deletionScheduledAt: user.deletionScheduledAt,
@@ -314,7 +347,7 @@ export const getAccountOwnership = asyncHandler(async (req, res) => sendResponse
 export const deactivateAccount = asyncHandler(async (req, res) => {
   await changeAccountOwnership(req.user, "deactivate");
   req.app.get("io")?.in(`user:${req.user._id}`).disconnectSockets(true);
-  res.clearCookie("refreshToken", refreshCookieOptions);
+  clearAuthCookies(res);
   return sendResponse(res, 200, "Account deactivated");
 });
 
@@ -328,21 +361,19 @@ export const refreshSession = asyncHandler(async (req, res) => {
   try {
     decoded = jwt.verify(refreshToken, env.refreshSecret);
   } catch {
-    res.clearCookie("refreshToken", refreshCookieOptions);
+    clearAuthCookies(res);
     throw new ApiError(401, "Refresh token is invalid or expired");
   }
 
   const user = await User.findById(decoded.sub);
   if (!user || user.status !== "active" || (decoded.authVersion || 0) !== (user.authVersion || 0) || (user.loginRestrictedUntil && user.loginRestrictedUntil > new Date())) {
-    res.clearCookie("refreshToken", refreshCookieOptions);
+    clearAuthCookies(res);
     throw new ApiError(401, user?.loginRestrictedUntil > new Date() ? `Account access is restricted until ${user.loginRestrictedUntil.toISOString()}` : "User is not available");
   }
 
   const tokens = issueAuthTokens(user);
-  res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
-  return sendResponse(res, 200, "Session refreshed", {
-    accessToken: tokens.accessToken,
-  });
+  setAuthCookies(res, tokens);
+  return sendResponse(res, 200, "Session refreshed", {});
 });
 
 export const getMe = asyncHandler(async (req, res) => {

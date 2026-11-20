@@ -837,7 +837,7 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
     req.user?._id && publicationIds.length ? SeenEngagement.find({ publication: { $in: publicationIds }, user: req.user._id, type: { $in: ["REACTION", "SHARE", "SAVE"] } }).lean() : [],
     creatorIds.length ? CreatorProfile.find({ user: { $in: creatorIds } }).select("user city country orbitStatus").lean() : [],
     publicationIds.length ? SeenEngagement.find({ publication: { $in: publicationIds }, type: "COMMENT" }).sort({ createdAt: -1 }).limit(100).populate("user", "name username avatar").lean() : [],
-    creatorIds.length ? Publication.find({ creator: { $in: creatorIds }, kind: "PREMIUM_WORLD", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("creator title pricing firstMonthOfferEnabled publishedSnapshot.metadata.title publishedSnapshot.metadata.pricing publishedSnapshot.metadata.firstMonthOfferEnabled").lean() : [],
+    creatorIds.length ? Publication.find({ creator: { $in: creatorIds }, kind: "PREMIUM_WORLD", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } }).select("creator title pricing firstMonthOfferEnabled includedExperienceIds publishedSnapshot.metadata.title publishedSnapshot.metadata.pricing publishedSnapshot.metadata.firstMonthOfferEnabled publishedSnapshot.metadata.includedExperienceIds").lean() : [],
     req.user?._id && creatorIds.length ? PremiumMembership.find({ user: req.user._id, creator: { $in: creatorIds }, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }).select("creator").lean() : [],
   ]);
   const premiumWorldByCreator = new Map(premiumWorldRows.map((world) => [String(world.creator), world]));
@@ -889,7 +889,9 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
   }
   const itemsWithEngagement = items.map((item) => {
     const itemCreatorId = String(item.creator?._id || item.creator);
-    const serialized = serializePublication(item, req.user || null, { audienceAllowed: true, entitlement: activeWorldCreators.has(itemCreatorId) ? "ACTIVE_PREMIUM_MEMBER" : null });
+    const includedIds = premiumWorldByCreator.get(itemCreatorId)?.publishedSnapshot?.metadata?.includedExperienceIds || premiumWorldByCreator.get(itemCreatorId)?.includedExperienceIds || [];
+    const includedInWorld = Boolean(item.includedInWorld || item.publishedSnapshot?.metadata?.includedInWorld || includedIds.some((id) => String(id) === String(item._id)));
+    const serialized = serializePublication(item, req.user || null, { audienceAllowed: true, entitlement: activeWorldCreators.has(itemCreatorId) && includedInWorld ? "ACTIVE_PREMIUM_MEMBER" : null });
     if (!serialized) return null;
     const counts = engagementByPublication.get(String(item._id)) || {};
     const reactionSummary = reactionsByPublication.get(String(item._id)) || { reactionBreakdown: {}, topReactions: [] };

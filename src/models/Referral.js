@@ -12,6 +12,9 @@ const referralSchema = new mongoose.Schema({
   coins: { type: Number, min: 0, default: 0 },
   latestEarningAmount: { type: Number, min: 0, default: 0 },
   latestEarningCoins: { type: Number, min: 0, default: 0 },
+  firstPayoutAt: { type: Date, default: null, index: true },
+  exclusionReason: { type: String, default: "", maxlength: 80 },
+  deferredRewardStars: { type: Number, min: 0, default: 0 },
 }, { timestamps: true });
 
 referralSchema.index({ inviter: 1, createdAt: -1 });

@@ -5,6 +5,7 @@ import CallSession from "../models/CallSession.js";
 import Conversation from "../models/Conversation.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import { capturePaidCall, refundPaidCall } from "../services/paidCallService.js";
+import { callAvailabilityForUser } from "../services/callAvailabilityService.js";
 import { env } from "../config/env.js";
 import mongoose from "mongoose";
 
@@ -24,6 +25,7 @@ function scheduleRingTimeout(io, call, timeoutMs = 30000) {
   timer.unref?.(); callTimers.set(callId, timer);
 }
 const isOnline = (userId) => [...(userSockets.get(userId)?.values() || [])].some(Boolean);
+const cookieValue = (header, name) => String(header || "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1);
 
 async function broadcastPresence(io, userId, payload) {
   const blocks = await UserBlock.find({
@@ -67,7 +69,8 @@ function trackSocketActivity(io, socket, active) {
 export function configureMessagingSocket(io) {
   io.use(async (socket, next) => {
     try {
-      const decoded = jwt.verify(socket.handshake.auth?.token, env.accessSecret);
+      const token = socket.handshake.auth?.token || decodeURIComponent(cookieValue(socket.request.headers.cookie, "accessToken") || "");
+      const decoded = jwt.verify(token, env.accessSecret);
       const user = await User.findOne({ _id: decoded.sub, status: "active", role: { $in: ["fan", "creator"] } });
       if (!user || (decoded.authVersion || 0) !== (user.authVersion || 0)) return next(new Error("Unauthorized"));
       socket.user = user;
@@ -99,6 +102,8 @@ export function configureMessagingSocket(io) {
           if (!mongoose.isValidObjectId(input.callId)) throw new Error("Invalid paid call request");
           const paidCall = await CallSession.findOne({ _id: input.callId, caller: userId, paid: true, settlementStatus: "HELD", status: "REQUESTED", requestExpiresAt: { $gt: new Date() } });
           if (!paidCall) throw new Error("This paid call request is no longer available");
+          const [callerCalls, recipientCalls] = await Promise.all([callAvailabilityForUser(socket.user), callAvailabilityForUser(paidCall.recipient)]);
+          if (!callerCalls.available || !recipientCalls.available) throw new Error("Calls are unavailable in your country");
           const recipientSettings = await CreatorProfile.findOne({ user: paidCall.recipient }).select("directCallAutoDeclineAway").lean();
           if (recipientSettings?.directCallAutoDeclineAway && !isOnline(String(paidCall.recipient))) {
             paidCall.status = "DECLINED"; paidCall.endedAt = new Date(); paidCall.endReason = "CREATOR_AWAY"; await paidCall.save();
@@ -120,6 +125,8 @@ export function configureMessagingSocket(io) {
           Conversation.exists({ status: "ACTIVE", $or: [{ participants: { $all: [userId, recipientId] } }, { fan: userId, creator: recipientId }, { fan: recipientId, creator: userId }] }),
         ]);
         if (!recipient) throw new Error("Account unavailable");
+        const [callerCalls, recipientCalls] = await Promise.all([callAvailabilityForUser(socket.user), callAvailabilityForUser(recipientId)]);
+        if (!callerCalls.available || !recipientCalls.available) throw new Error("Calls are unavailable in your country");
         if (blocked) throw new Error("Calling is unavailable for this conversation");
         if (!conversation) throw new Error("Accept the message request before starting a call");
         if (busy) throw new Error("One of you is already on another call");

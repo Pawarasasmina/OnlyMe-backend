@@ -40,6 +40,13 @@ export async function publicationEntitlement(publication, viewer) {
       return publication.kind === "SEEN" ? "ENTITLED_SEEN" : publication.kind === "EXPERIENCE" ? "ENTITLED_EXPERIENCE" : "ENTITLED_WORLD";
     }
     if (["EXPERIENCE", "SEEN"].includes(publication.kind)) {
+      const includedInWorld = Boolean(publication.includedInWorld || publication.publishedSnapshot?.metadata?.includedInWorld);
+      if (includedInWorld && await PremiumMembership.exists({
+        user: viewer._id,
+        creator,
+        status: { $in: ACTIVE_MEMBERSHIP_STATUSES },
+        currentPeriodEnd: { $gt: new Date() },
+      })) return "ACTIVE_PREMIUM_MEMBER";
       const hasWorldBonus = publication.kind === "SEEN" && (publication.publishedSnapshot?.chapters || []).some((chapter) => chapter.worldBonus);
       if (hasWorldBonus && await PremiumMembership.exists({
         user: viewer._id,

@@ -30,13 +30,14 @@ const userSchema = new mongoose.Schema(
     usernameChangedAt: { type: Date, default: null },
     email: {
       type: String,
-      required: true,
       unique: true,
+      sparse: true,
       trim: true,
       lowercase: true,
+      default: undefined,
     },
     googleId: { type: String, default: undefined, index: { unique: true, sparse: true } },
-    phone: { type: String, trim: true, maxlength: 40, default: "", index: true },
+    phone: { type: String, trim: true, maxlength: 40, default: undefined, index: true },
     password: {
       type: String,
       required: true,

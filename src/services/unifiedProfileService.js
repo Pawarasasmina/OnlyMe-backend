@@ -3,6 +3,7 @@ import { serializeContent } from "./contentAccessService.js";
 import { serializePublication } from "./publicationAccessService.js";
 import { serializeProfileStatus } from "./statusService.js";
 import { profileAccountType, profileCategory } from "../constants/profileCategoryConstants.js";
+import { callsAllowedForCountries } from "./callAvailabilityService.js";
 
 const safeHttpUrl = (value) => {
   try {
@@ -44,6 +45,7 @@ function completion(owner, roleProfile) {
 
 export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], entitledExperienceIds = new Set(), entitledSeenIds = new Set(), experienceOwnerCounts = new Map(), experiences = [], followerCount = 0, followingCount = 0, seenByCount = 0, media = [], membershipIncludedExperienceIds = new Set(), owner, ownWallPosts = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, profileStories = [], publishedContentCount = content.length, reposts = [], roleProfile, seenOwnerCounts = new Map(), seens = [], series = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, typicalReplyHours = null, viewer, viewerRelationships = [], viewerSeeSignalSent = false, worldMemberCounts = new Map(), worldMemberPreviews = new Map(), worldOnlineMemberCounts = new Map(), worldMonthlyIncomeUsd = new Map() }) {
   const capabilities = profileViewerCapabilities(owner, viewer, roleProfile);
+  const callsAvailable = callsAllowedForCountries(owner.monetization?.country, roleProfile?.country);
   const creatorEnabled = owner.creatorApprovalStatus === "approved" || ["creator", "business"].includes(owner.profileType);
   const contentViewer = capabilities.isOwner ? viewer : null;
   const socialLinks = creatorEnabled
@@ -86,7 +88,9 @@ export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], en
         priceStars: Number(roleProfile?.directAccessPriceStars || 100),
         durationHours: 48,
         messageLimit: 3,
-        callEnabled: Boolean(roleProfile?.directCallEnabled),
+        callEnabled: Boolean(callsAvailable && roleProfile?.directCallEnabled),
+        callsAvailable,
+        callsUnavailableReason: callsAvailable ? "" : "Calls are unavailable in your country",
         callPriceStars: Number(roleProfile?.directCallPriceStars || 500),
         callDurationMinutes: Number(roleProfile?.directCallDurationMinutes || 5),
         ...(Number(typicalReplyHours) > 0 ? { typicalReplyHours: Number(typicalReplyHours) } : {}),
@@ -110,7 +114,7 @@ export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], en
     media: media.slice(0, 12),
     profileStories,
     series,
-    seens: seens.map((item) => { const publication = serializePublication(item, contentViewer, { audienceAllowed: true, entitlement: entitledSeenIds.has(String(item._id)) ? "ENTITLED_SEEN" : membershipIncludedExperienceIds.has(String(item._id)) ? "ACTIVE_PREMIUM_MEMBER" : null }); return publication ? { ...publication, engagement: item.engagement || {}, ownerCount: seenOwnerCounts.get(String(item._id)) || 0 } : null; }).filter(Boolean),
+    seens: seens.map((item) => { const included = Boolean(item.includedInWorld || item.publishedSnapshot?.metadata?.includedInWorld || membershipIncludedExperienceIds.has(String(item._id))); const publication = serializePublication(item, contentViewer, { audienceAllowed: true, entitlement: entitledSeenIds.has(String(item._id)) ? "ENTITLED_SEEN" : premiumMembershipPublicationId && included ? "ACTIVE_PREMIUM_MEMBER" : null }); return publication ? { ...publication, engagement: item.engagement || {}, ownerCount: seenOwnerCounts.get(String(item._id)) || 0 } : null; }).filter(Boolean),
     sharedSeens: sharedSeens.map((item) => { const publication = serializePublication(item, contentViewer, { audienceAllowed: true }); return publication ? { ...publication, engagement: item.engagement || {}, shareId: item.shareId || null, shareCaption: item.shareCaption || "", feedCreatedAt: item.feedCreatedAt || item.createdAt, sharedBy: item.sharedBy || null } : null; }).filter(Boolean),
     sharedWallPosts: sharedWallPosts
       .map((item) => item.author ? item : ({ id: `share-${item.shareId}`, originalPostId: item._id, closedReason: wallClosedReason(item), isClosed: Boolean(wallClosedReason(item)), expiresAt: wallExpiresAt(item), lifecycleStatus: wallLifecycleStatus(item), shareId: item.shareId, text: item.text, shareCaption: item.shareCaption || "", context: item.context, location: item.location, media: item.media || [], createdAt: item.createdAt, feedCreatedAt: item.feedCreatedAt, sharedBy: { id: owner._id, name: owner.name, username: owner.username, avatar: owner.avatar || "", verified: Boolean(owner.isVerified) }, reactionCount: item.engagement?.reactionCount || 0, reactionBreakdown: item.engagement?.reactionBreakdown || {}, topReactions: item.engagement?.topReactions || [], viewerReaction: item.engagement?.viewerReaction || null, commentCount: item.engagement?.commentCount || 0, shareCount: item.engagement?.shareCount || 0, saveCount: item.engagement?.saveCount || 0, viewerShared: Boolean(item.engagement?.viewerShared), viewerSaved: Boolean(item.engagement?.viewerSaved), creator: { name: item.creator?.name, username: item.creator?.username, avatar: item.creator?.avatar || "", verified: Boolean(item.creator?.isVerified) } }))

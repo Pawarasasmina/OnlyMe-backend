@@ -16,7 +16,7 @@ import { getActiveRecommendationConfig, personalizeCandidates } from "../service
 
 export const getWallPost = asyncHandler(async (req, res) => {
   const post = await requirePost(req.params.id);
-  const blocked = await UserBlock.exists({ $or: [{ blocker: req.user._id, blocked: post.creator }, { blocker: post.creator, blocked: req.user._id }] });
+  const blocked = req.user?._id ? await UserBlock.exists({ $or: [{ blocker: req.user._id, blocked: post.creator }, { blocker: post.creator, blocked: req.user._id }] }) : false;
   if (blocked) throw new ApiError(404, "Wall post not found");
   await post.populate("creator", "name username avatar isVerified");
   await attachEntityMetadata(post, req.user);

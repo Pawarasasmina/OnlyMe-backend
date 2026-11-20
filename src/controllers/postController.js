@@ -593,8 +593,9 @@ export const listFeedPosts = asyncHandler(async (req, res) => {
 export const getFeedPost = asyncHandler(async (req, res) => {
   const post = await findPublishedPost(req.params.id, req.user);
   const authorId = post.author?._id || post.author;
-  const blocked = await UserBlock.exists({ $or: [{ blocker: req.user._id, blocked: authorId }, { blocker: authorId, blocked: req.user._id }] });
-  if (blocked || post.hiddenBy.some((item) => String(item.user) === String(req.user._id))) {
+  const viewerId = req.user?._id;
+  const blocked = viewerId ? await UserBlock.exists({ $or: [{ blocker: viewerId, blocked: authorId }, { blocker: authorId, blocked: viewerId }] }) : false;
+  if (blocked || (viewerId && post.hiddenBy.some((item) => String(item.user) === String(viewerId)))) {
     throw new ApiError(404, "Post not found");
   }
   await populatePostForResponse(post);

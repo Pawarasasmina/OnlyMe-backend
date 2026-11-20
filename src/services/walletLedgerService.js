@@ -155,7 +155,12 @@ export const creditWallet = async (input, session) => {
     const { requireMonetization } = await import("./monetizationService.js");
     await requireMonetization(input.user, feature);
   }
-  return post({ ...input, direction: "CREDIT" }, session);
+  const posted = await post({ ...input, direction: "CREDIT" }, session);
+  if (feature && input.counterpartyUser && input.command) {
+    const { awardReferralEarnings } = await import("./referralFinancialService.js");
+    await awardReferralEarnings({ fromUser: input.counterpartyUser, toUser: input.user, amount: input.amount, referenceType: input.referenceType, sourceCredit: posted, publication: input.publication, creator: input.creator, command: input.command, idempotencyKey: input.idempotencyKey }, session);
+  }
+  return posted;
 };
 export const debitWallet = (input, session) => post({ ...input, direction: "DEBIT" }, session);
 export async function transferStars({ fromUser, toUser, amount, debitType, creditType, referenceType, referenceId, publication, creator, command, idempotencyKey, metadata }, session) {

@@ -21,8 +21,10 @@ import { clearingCutoff, creatorClearingLevel } from "../services/creatorClearin
 import { getWebCoinTaxRate, packByPrice, priceWithTax, WEB_COIN_PACKS, WEB_COIN_USD } from "../services/coinPackService.js";
 import { createBonusGrant, welcomeBonusFor } from "../services/bonusService.js";
 import { coverPreview } from "../services/activitySupplementService.js";
+import { PAYOUT_POLICY } from "../constants/payoutPolicy.js";
+import ReferralEarning from "../models/ReferralEarning.js";
 
-const CREATOR_EVENTS = ["WORLD_CREATOR_EARNING", "PREMIUM_CREATOR_EARNING", "DREAM_CREATOR_EARNING", "CHAT_GIFT_EARNING", "DA_CREATOR_EARNING", "CALL_CREATOR_EARNING"];
+const CREATOR_EVENTS = ["WORLD_CREATOR_EARNING", "PREMIUM_CREATOR_EARNING", "DREAM_CREATOR_EARNING", "CHAT_GIFT_EARNING", "DA_CREATOR_EARNING", "CALL_CREATOR_EARNING", "REFERRAL_CREATOR_EARNING"];
 const safePublication = (item) => item ? { id: item._id, title: item.title || item.publishedSnapshot?.metadata?.title || "", kind: item.kind, planet: item.planet || null, ...coverPreview(item) } : null;
 export function withdrawalBalances(earnedBalance, recentIncomeStars) {
   const pendingIncomeStars = Math.min(Math.max(0, Number(earnedBalance || 0)), Math.max(0, Number(recentIncomeStars || 0)));
@@ -42,7 +44,7 @@ export const getWallet = asyncHandler(async (req, res) => {
     getWebCoinTaxRate(),
     StarsLedgerEntry.aggregate([{ $match: { accountUser: req.user._id, ...ledgerMode, entryType: { $in: CREATOR_EVENTS } } }, { $group: { _id: null, stars: { $sum: "$signedAmount" } } }]),
     StarsLedgerEntry.aggregate([
-      { $match: { accountUser: req.user._id, ...ledgerMode, entryType: { $in: CREATOR_EVENTS }, createdAt: { $gt: withdrawalCutoff } } },
+      { $match: { accountUser: req.user._id, ...ledgerMode, entryType: { $in: CREATOR_EVENTS }, $or: [{ createdAt: { $gt: withdrawalCutoff } }, { "metadata.availableAt": { $gt: now } }] } },
       { $lookup: { from: StarsLedgerEntry.collection.name, localField: "_id", foreignField: "reversalOf", as: "reversals" } },
       { $match: { reversals: { $size: 0 } } },
       { $group: { _id: null, stars: { $sum: "$signedAmount" } } },
@@ -67,7 +69,9 @@ export const getWallet = asyncHandler(async (req, res) => {
   const autoTotals = automaticSummary[0] || { count: 0, starsPerMonth: 0 };
   const spending = await monthlyWalletSpending(req.user._id, financialMode, starsPerUsd);
   const topUpPacks = WEB_COIN_PACKS.map(pack => ({ id: pack.id, usd: pack.subtotalUsd, stars: pack.stars, bonusStars: pack.bonusStars, badge: pack.badge, ...priceWithTax(pack.subtotalUsd, taxPercent) }));
-  return sendResponse(res, 200, "Wallet fetched", { wallet: { ...spending, payouts: { ...payoutStatus, refundsDeductedUsd: Number(refundedIncome[0]?.stars || 0) / starsPerUsd, standard: { enabled: true, feeUsd: 0, status: "PENDING_ADMIN_PROCESSING" }, instant: { enabled: false }, automaticProcessingAvailable: false }, topUpPacks, monthlySpendingLimit: wallet?.monthlySpendingLimit ?? null, monthlySpendingLimitUsd: wallet?.monthlySpendingLimitUsd ?? 0, spendingLimitOptionsUsd: SPENDING_LIMIT_OPTIONS_USD, clearingLevel: clearingLevel.key, clearingDays: clearingLevel.days, balance, bonusBalance, purchasedBalance, earnedBalance, version: wallet?.version || 0, currency: "STARS", role: req.user.role, starsPerUsd, lifetimeIncomeStars: incomeStars, pendingIncomeStars, availableIncomeStars, withdrawalHoldHours: clearingLevel.days * 24, withdrawalMinimumUsd: 50, balanceUsd: balance / starsPerUsd, incomeUsd: earnedBalance / starsPerUsd, pendingIncomeUsd: pendingIncomeStars / starsPerUsd, availableIncomeUsd: availableIncomeStars / starsPerUsd, automaticIncome: { activeSubscriptions: Number(autoTotals.count || 0), starsPerMonth: Number(autoTotals.starsPerMonth || 0), usdPerMonth: Number(autoTotals.starsPerMonth || 0) / starsPerUsd, items: automaticMemberships.map((membership) => ({ id: membership._id, subscriber: membership.user ? { name: membership.user.name, username: membership.user.username, avatar: membership.user.avatar || "" } : null, world: { id: membership.premiumPublication?._id, title: membership.premiumPublication?.title || membership.premiumPublication?.publishedSnapshot?.metadata?.title || "Premium World" }, stars: membership.starsPerPeriod, usd: membership.starsPerPeriod / starsPerUsd, nextRenewalAt: membership.currentPeriodEnd })) } } });
+  const referralMonth = await ReferralEarning.aggregate([{ $match: { referrer: req.user._id, status: "SETTLED", createdAt: { $gte: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)) } } }, { $group: { _id: null, stars: { $sum: "$rewardStars" }, creators: { $addToSet: "$referredUser" } } }]);
+  const referralIncome = { creators: referralMonth[0]?.creators?.length || 0, thisMonthUsd: Number(referralMonth[0]?.stars || 0) / starsPerUsd };
+  return sendResponse(res, 200, "Wallet fetched", { wallet: { ...spending, payouts: { ...payoutStatus, refundsDeductedUsd: Number(refundedIncome[0]?.stars || 0) / starsPerUsd, standard: { enabled: true, feeUsd: 0, status: "PENDING_ADMIN_PROCESSING" }, instant: { enabled: false }, automaticProcessingAvailable: true }, topUpPacks, referralIncome, monthlySpendingLimit: wallet?.monthlySpendingLimit ?? null, monthlySpendingLimitUsd: wallet?.monthlySpendingLimitUsd ?? 0, spendingLimitOptionsUsd: SPENDING_LIMIT_OPTIONS_USD, clearingLevel: clearingLevel.key, clearingDays: clearingLevel.days, balance, bonusBalance, purchasedBalance, earnedBalance, version: wallet?.version || 0, currency: "STARS", role: req.user.role, starsPerUsd, lifetimeIncomeStars: incomeStars, pendingIncomeStars, availableIncomeStars, withdrawalHoldHours: clearingLevel.days * 24, withdrawalMinimumUsd: 50, requestedPayoutMinimumUsd: 50, automaticPayoutMinimumUsd: 20, automaticPayoutDayOfMonth: 1, balanceUsd: balance / starsPerUsd, incomeUsd: earnedBalance / starsPerUsd, pendingIncomeUsd: pendingIncomeStars / starsPerUsd, availableIncomeUsd: availableIncomeStars / starsPerUsd, automaticIncome: { activeSubscriptions: Number(autoTotals.count || 0), starsPerMonth: Number(autoTotals.starsPerMonth || 0), usdPerMonth: Number(autoTotals.starsPerMonth || 0) / starsPerUsd, items: automaticMemberships.map((membership) => ({ id: membership._id, subscriber: membership.user ? { name: membership.user.name, username: membership.user.username, avatar: membership.user.avatar || "" } : null, world: { id: membership.premiumPublication?._id, title: membership.premiumPublication?.title || membership.premiumPublication?.publishedSnapshot?.metadata?.title || "Premium World" }, stars: membership.starsPerPeriod, usd: membership.starsPerPeriod / starsPerUsd, nextRenewalAt: membership.currentPeriodEnd })) } } });
 });
 
 export const topUpWallet = asyncHandler(async (req, res) => {
@@ -116,7 +120,7 @@ export const convertIncomeToCoins = asyncHandler(async (req, res) => {
       }
       const conversionCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
       const recentRows = await StarsLedgerEntry.aggregate([
-        { $match: { accountUser: req.user._id, entryType: { $in: CREATOR_EVENTS }, createdAt: { $gt: conversionCutoff } } },
+        { $match: { accountUser: req.user._id, entryType: { $in: CREATOR_EVENTS }, $or: [{ createdAt: { $gt: conversionCutoff } }, { "metadata.availableAt": { $gt: new Date() } }] } },
         { $lookup: { from: StarsLedgerEntry.collection.name, localField: "_id", foreignField: "reversalOf", as: "reversals" } },
         { $match: { reversals: { $size: 0 } } },
         { $group: { _id: null, stars: { $sum: "$signedAmount" } } },
@@ -149,8 +153,8 @@ export const withdrawCreatorIncome = asyncHandler(async (req, res) => {
   const key = idempotencyKey(req.body.idempotencyKey);
   const amount = positiveStars(req.body.starsAmount);
   const starsPerUsd = await getStarExchangeRate();
-  const minimumStars = Math.ceil(50 * starsPerUsd);
-  if (amount < minimumStars) throw new ApiError(422, "The minimum withdrawal is $50", "WITHDRAWAL_BELOW_MINIMUM");
+  const minimumStars = Math.ceil(PAYOUT_POLICY.requestedMinimumUsd * starsPerUsd);
+  if (amount < minimumStars) throw new ApiError(422, `The minimum withdrawal is $${PAYOUT_POLICY.requestedMinimumUsd}`, "WITHDRAWAL_BELOW_MINIMUM");
   const result = await executeFinancialCommand(
     { user: req.user._id, commandType: "WITHDRAW_CREATOR_INCOME", idempotencyKey: key, requestFingerprint: fingerprint({ starsAmount: amount, starsPerUsd }) },
     async (session, command) => {
@@ -161,7 +165,7 @@ export const withdrawCreatorIncome = asyncHandler(async (req, res) => {
       const clearingLevel = await creatorClearingLevel(req.user._id);
       const cutoff = clearingCutoff(clearingLevel);
       const recentRows = await StarsLedgerEntry.aggregate([
-        { $match: { accountUser: req.user._id, entryType: { $in: CREATOR_EVENTS }, createdAt: { $gt: cutoff } } },
+        { $match: { accountUser: req.user._id, entryType: { $in: CREATOR_EVENTS }, $or: [{ createdAt: { $gt: cutoff } }, { "metadata.availableAt": { $gt: new Date() } }] } },
         { $lookup: { from: StarsLedgerEntry.collection.name, localField: "_id", foreignField: "reversalOf", as: "reversals" } },
         { $match: { reversals: { $size: 0 } } },
         { $group: { _id: null, stars: { $sum: "$signedAmount" } } },

@@ -70,7 +70,10 @@ export function validateProductionEnv() {
   if (insecureSecrets.has(env.refreshSecret) || env.refreshSecret.length < 32) errors.push("JWT_REFRESH_SECRET must be a unique secret of at least 32 characters");
   if (env.accessSecret === env.refreshSecret) errors.push("JWT access and refresh secrets must be different");
   if (!process.env.MAINTENANCE_WORKERS_ENABLED) errors.push("MAINTENANCE_WORKERS_ENABLED must explicitly be true or false in production");
-  try { new URL(env.clientUrl); } catch { errors.push("CLIENT_URL must be a valid URL"); }
+  try {
+    const client = new URL(env.clientUrl);
+    if (client.protocol !== "https:") errors.push("CLIENT_URL must use HTTPS in production");
+  } catch { errors.push("CLIENT_URL must be a valid URL"); }
   if (env.mongoMinPoolSize > env.mongoMaxPoolSize) errors.push("MONGODB_MIN_POOL_SIZE cannot exceed MONGODB_MAX_POOL_SIZE");
   if (env.headersTimeoutMs <= env.requestTimeoutMs) errors.push("HTTP_HEADERS_TIMEOUT_MS must be greater than HTTP_REQUEST_TIMEOUT_MS");
 

@@ -26,7 +26,7 @@ import {
   updatePostReaction,
   updateFeedPost,
 } from "../controllers/postController.js";
-import { protect } from "../middleware/authMiddleware.js";
+import { optionalProtect, protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { uploadFeedPostImages, uploadFeedPostMedia, uploadVoiceMessage } from "../middleware/uploadMiddleware.js";
 import { reportComment } from "../controllers/reportingController.js";
@@ -44,10 +44,10 @@ router.get("/drafts", ...consumerOnly, (req, res, next) => {
 });
 router.post("/", ...consumerOnly, uploadFeedPostMedia.fields([{ name: "media", maxCount: 4 }, { name: "voice", maxCount: 1 }]), createFeedPost);
 router.post("/drafts", ...consumerOnly, uploadFeedPostImages.array("media", 4), createDraftPost);
-router.get("/:id", protect, getFeedPost);
+router.get("/:id", optionalProtect, getFeedPost);
 router.get("/:id/language", ...consumerOnly, wallTranslationLimiter, getWallContentLanguage);
 router.post("/:id/translation", ...consumerOnly, wallTranslationLimiter, translateWallPostContent);
-router.get("/:id/reactions", protect, listPostReactors);
+router.get("/:id/reactions", optionalProtect, listPostReactors);
 router.post("/:id/views", protect, markFeedPostViewed);
 router.put("/:id/reaction", protect, updatePostReaction);
 router.put("/:id/save", protect, togglePostSave);
