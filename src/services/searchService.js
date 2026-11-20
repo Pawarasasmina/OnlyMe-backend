@@ -19,7 +19,7 @@ import { isBookContent } from "./savedService.js";
 import { publicationDeliveryUrl } from "./publicationMediaStorageService.js";
 import ApiError from "../utils/ApiError.js";
 
-export const SEARCH_TYPES = ["all", "people", "seens", "experiences", "worlds", "wall_notes", "posts", "places", "journeys", "saved"];
+export const SEARCH_TYPES = ["all", "people", "seens", "worlds", "wall_notes", "posts", "places", "journeys", "saved"];
 export const SEARCH_SORTS = ["relevant", "newest", "most_saved"];
 export const PRODUCT_TRENDS = ["Fitness", "Paris", "Business", "Mindset", "Tokyo style"];
 export const DEFAULT_CATEGORIES = [
@@ -43,7 +43,6 @@ export const DEFAULT_CATEGORIES = [
 
 const ALL_PREVIEW_LIMITS = {
   people: 6,
-  experiences: 6,
   worlds: 8,
   seens: 8,
   wall_notes: 8,
@@ -721,12 +720,11 @@ export async function getSearchDefaults(user) {
     sort: "relevant",
     user,
   };
-  const [trending, recent, people, seens, experiences, worlds, wallNotes] = await Promise.all([
+  const [trending, recent, people, seens, worlds, wallNotes] = await Promise.all([
     getTrendingSearches({ limit: 8 }),
     getRecentSearches(user._id, 10),
     searchPeople(previewParams),
     searchContent({ ...previewParams, type: "seen" }),
-    searchContent({ ...previewParams, type: "experience" }),
     searchContent({ ...previewParams, type: "world" }),
     searchPosts(previewParams),
   ]);
@@ -738,7 +736,7 @@ export async function getSearchDefaults(user) {
     trending,
     recent,
     categories: DEFAULT_CATEGORIES,
-    sections: { people, seens, experiences, worlds, wall_notes: wallNotes },
+    sections: { people, seens, worlds, wall_notes: wallNotes },
   };
 }
 
@@ -788,21 +786,19 @@ export async function runSearch(user, params) {
   if (params.type === "all") {
     const sections = {};
     const allShared = { ...shared, cursor: 0 };
-    const [people, seens, experiences, worlds, wallNotes] = await Promise.all([
+    const [people, seens, worlds, wallNotes] = await Promise.all([
       searchPeople({ ...allShared, limit: ALL_PREVIEW_LIMITS.people }),
       searchContent({ ...allShared, limit: ALL_PREVIEW_LIMITS.seens, type: "seen" }),
-      searchContent({ ...allShared, limit: ALL_PREVIEW_LIMITS.experiences, type: "experience" }),
       searchContent({ ...allShared, limit: ALL_PREVIEW_LIMITS.worlds, type: "world" }),
       searchPosts({ ...allShared, limit: ALL_PREVIEW_LIMITS.wall_notes }),
     ]);
-    Object.assign(sections, { people, seens, experiences, worlds, wall_notes: wallNotes });
+    Object.assign(sections, { people, seens, worlds, wall_notes: wallNotes });
     return { query: params.q, type: params.type, sections };
   }
 
   const runners = {
     people: () => searchPeople(shared),
     seens: () => searchContent({ ...shared, type: "seen" }),
-    experiences: () => searchContent({ ...shared, type: "experience" }),
     worlds: () => searchContent({ ...shared, type: "world" }),
     wall_notes: () => searchPosts(shared),
     posts: () => searchPosts(shared),
