@@ -117,7 +117,9 @@ export const register = asyncHandler(async (req, res) => {
     User.findOne({ $or: [{ username }, ...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])] }),
     UsernameReservation.exists({ username, expiresAt: { $gt: new Date() } }),
   ]);
-  if (existingUser || reservedUsername) throw new ApiError(409, "A user with that username, email or phone already exists");
+  if (reservedUsername || existingUser?.username === username) throw new ApiError(409, "This username is already taken");
+  if (email && existingUser?.email === email) throw new ApiError(409, "This email is already registered");
+  if (phone && existingUser?.phone === phone) throw new ApiError(409, "This phone number is already registered");
 
   const userData = {
     name,
@@ -144,7 +146,9 @@ export const register = asyncHandler(async (req, res) => {
       const duplicateMemberNumber = error?.code === 11000 && (error?.keyPattern?.memberNumber || error?.keyValue?.memberNumber);
       if (duplicateMemberNumber && attempt < 2) continue;
       if (error?.code === 11000 && (error?.keyPattern?.email || error?.keyPattern?.username || error?.keyPattern?.phone || error?.keyValue?.email || error?.keyValue?.username || error?.keyValue?.phone)) {
-        throw new ApiError(409, "A user with that username, email or phone already exists");
+        if (error?.keyPattern?.email || error?.keyValue?.email) throw new ApiError(409, "This email is already registered");
+        if (error?.keyPattern?.phone || error?.keyValue?.phone) throw new ApiError(409, "This phone number is already registered");
+        throw new ApiError(409, "This username is already taken");
       }
       throw error;
     }
