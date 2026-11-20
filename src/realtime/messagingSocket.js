@@ -25,6 +25,7 @@ function scheduleRingTimeout(io, call, timeoutMs = 30000) {
   timer.unref?.(); callTimers.set(callId, timer);
 }
 const isOnline = (userId) => [...(userSockets.get(userId)?.values() || [])].some(Boolean);
+const cookieValue = (header, name) => String(header || "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1);
 
 async function broadcastPresence(io, userId, payload) {
   const blocks = await UserBlock.find({
@@ -68,7 +69,8 @@ function trackSocketActivity(io, socket, active) {
 export function configureMessagingSocket(io) {
   io.use(async (socket, next) => {
     try {
-      const decoded = jwt.verify(socket.handshake.auth?.token, env.accessSecret);
+      const token = socket.handshake.auth?.token || decodeURIComponent(cookieValue(socket.request.headers.cookie, "accessToken") || "");
+      const decoded = jwt.verify(token, env.accessSecret);
       const user = await User.findOne({ _id: decoded.sub, status: "active", role: { $in: ["fan", "creator"] } });
       if (!user || (decoded.authVersion || 0) !== (user.authVersion || 0)) return next(new Error("Unauthorized"));
       socket.user = user;

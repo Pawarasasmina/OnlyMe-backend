@@ -15,6 +15,7 @@ import { notFoundHandler } from "./middleware/notFoundMiddleware.js";
 import { assertPrivateStorageConfiguration } from "./services/privateDocumentStorageService.js";
 import mongoose from "mongoose";
 import { uptimeAlertMiddleware } from "./middleware/uptimeAlertMiddleware.js";
+import { csrfProtection } from "./middleware/csrfMiddleware.js";
 
 assertPrivateStorageConfiguration();
 
@@ -66,6 +67,7 @@ app.post("/api/identity/webhook", express.raw({ type: "application/json", limit:
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+app.use(csrfProtection);
 app.use("/uploads", express.static(path.resolve("uploads"), {
   etag: true,
   lastModified: true,

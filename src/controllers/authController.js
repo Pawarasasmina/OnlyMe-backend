@@ -32,6 +32,23 @@ const refreshCookieOptions = {
   path: "/api/auth",
   maxAge: 30 * 24 * 60 * 60 * 1000,
 };
+const accessCookieOptions = {
+  httpOnly: true,
+  sameSite: env.nodeEnv === "production" ? "none" : "lax",
+  secure: env.nodeEnv === "production",
+  path: "/",
+  maxAge: 15 * 60 * 1000,
+};
+
+function setAuthCookies(res, tokens) {
+  res.cookie("accessToken", tokens.accessToken, accessCookieOptions);
+  res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
+}
+
+function clearAuthCookies(res) {
+  res.clearCookie("accessToken", accessCookieOptions);
+  res.clearCookie("refreshToken", refreshCookieOptions);
+}
 
 function sanitizeUser(user) {
   const effectiveRole = user.role === "admin" ? "admin" : user.creatorApprovalStatus === "approved" ? "creator" : "fan";
@@ -162,11 +179,10 @@ export const register = asyncHandler(async (req, res) => {
   if (user.email) sendWelcomeEmail(user).catch((error) => console.error("Welcome email delivery failed", { userId: String(user._id), error: error.message }));
 
   const tokens = issueAuthTokens(user);
-  res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
+  setAuthCookies(res, tokens);
   await recordAuthAnalytics(req, user, "LOGIN");
   return sendResponse(res, 201, "Registration successful", {
     user: sanitizeUser(user),
-    accessToken: tokens.accessToken,
   });
 });
 export const login = asyncHandler(async (req, res) => {
@@ -215,12 +231,11 @@ export const login = asyncHandler(async (req, res) => {
 
   const tokens = issueAuthTokens(user);
 
-  res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
+  setAuthCookies(res, tokens);
   await recordAuthAnalytics(req, user, "LOGIN");
 
   return sendResponse(res, 200, "Login successful", {
     user: sanitizeUser(user),
-    accessToken: tokens.accessToken,
   });
 });
 
@@ -265,7 +280,7 @@ export const resetPassword = asyncHandler(async (req, res) => {
   user.resetPasswordExpires = undefined;
   user.authVersion = (user.authVersion || 0) + 1;
   await user.save();
-  res.clearCookie("refreshToken", refreshCookieOptions);
+  clearAuthCookies(res);
   return sendResponse(res, 200, "Password reset successfully", {});
 });
 
@@ -309,19 +324,19 @@ export const googleCallback = asyncHandler(async (req, res) => {
   if (user.status !== "active") return googleFailure(res, "This account is not available");
   if (user.twoFactorEnabled) return googleFailure(res, "This account uses two-factor authentication. Sign in with your password and authenticator code.");
   const tokens = issueAuthTokens(user);
-  res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
+  setAuthCookies(res, tokens);
   return res.redirect(`${env.clientUrl.replace(/\/+$/u, "")}/login?google=success`);
 });
 
 export const logout = asyncHandler(async (_req, res) => {
-  res.clearCookie("refreshToken", refreshCookieOptions);
+  clearAuthCookies(res);
   return sendResponse(res, 200, "Logout successful");
 });
 
 export const deleteAccount = asyncHandler(async (req, res) => {
   const user = await changeAccountOwnership(req.user, "delete", req.body?.acknowledgeEarningsLoss === true);
   req.app.get("io")?.in(`user:${req.user._id}`).disconnectSockets(true);
-  res.clearCookie("refreshToken", refreshCookieOptions);
+  clearAuthCookies(res);
   return sendResponse(res, 200, "Account deletion requested", {
     deletionRequestedAt: user.deletionRequestedAt,
     deletionScheduledAt: user.deletionScheduledAt,
@@ -332,7 +347,7 @@ export const getAccountOwnership = asyncHandler(async (req, res) => sendResponse
 export const deactivateAccount = asyncHandler(async (req, res) => {
   await changeAccountOwnership(req.user, "deactivate");
   req.app.get("io")?.in(`user:${req.user._id}`).disconnectSockets(true);
-  res.clearCookie("refreshToken", refreshCookieOptions);
+  clearAuthCookies(res);
   return sendResponse(res, 200, "Account deactivated");
 });
 
@@ -346,21 +361,19 @@ export const refreshSession = asyncHandler(async (req, res) => {
   try {
     decoded = jwt.verify(refreshToken, env.refreshSecret);
   } catch {
-    res.clearCookie("refreshToken", refreshCookieOptions);
+    clearAuthCookies(res);
     throw new ApiError(401, "Refresh token is invalid or expired");
   }
 
   const user = await User.findById(decoded.sub);
   if (!user || user.status !== "active" || (decoded.authVersion || 0) !== (user.authVersion || 0) || (user.loginRestrictedUntil && user.loginRestrictedUntil > new Date())) {
-    res.clearCookie("refreshToken", refreshCookieOptions);
+    clearAuthCookies(res);
     throw new ApiError(401, user?.loginRestrictedUntil > new Date() ? `Account access is restricted until ${user.loginRestrictedUntil.toISOString()}` : "User is not available");
   }
 
   const tokens = issueAuthTokens(user);
-  res.cookie("refreshToken", tokens.refreshToken, refreshCookieOptions);
-  return sendResponse(res, 200, "Session refreshed", {
-    accessToken: tokens.accessToken,
-  });
+  setAuthCookies(res, tokens);
+  return sendResponse(res, 200, "Session refreshed", {});
 });
 
 export const getMe = asyncHandler(async (req, res) => {
