@@ -68,10 +68,14 @@ messageReportSchema.post("save", async function autoHideUrgent(doc) {
   if (doc.scope === "FEED_POST" && doc.source === "USER_REPORT") return;
   if (!doc.$locals.wasNew || !doc.$locals.autoHide || doc.autoHiddenAt) return;
   if (doc.feedPost && doc.scope === "FEED_POST") { const { default: FeedPost } = await import("./FeedPost.js"); await FeedPost.updateOne({ _id: doc.feedPost }, { $set: { moderationHiddenAt: new Date() } }); }
-  if (doc.publication) { const { default: Publication } = await import("./Publication.js"); await Publication.updateOne({ _id: doc.publication }, { $set: { status: "ARCHIVED", archivedAt: new Date() } }); }
+  if (doc.publication && doc.scope !== "COMMENT") { const { default: Publication } = await import("./Publication.js"); await Publication.updateOne({ _id: doc.publication }, { $set: { status: "ARCHIVED", archivedAt: new Date() } }); }
   if (doc.story) { const { default: Story } = await import("./Story.js"); await Story.updateOne({ _id: doc.story }, { $set: { audience: "only_me" } }); }
   if (doc.message) { const { default: Message } = await import("./Message.js"); await Message.updateOne({ _id: doc.message }, { $set: { deletedAt: new Date() } }); }
   if (doc.groupMessage) { const { default: GroupMessage } = await import("./GroupMessage.js"); await GroupMessage.updateOne({ _id: doc.groupMessage }, { $set: { deletedAt: new Date() } }); }
+  if (doc.scope === "COMMENT" && doc.publication && doc.commentId) {
+    const { removeSeenCommentThread } = await import("../services/seenCommentService.js");
+    await removeSeenCommentThread(doc.publication, doc.commentId);
+  }
   if (doc.commentId && doc.feedPost) { const { default: FeedPost } = await import("./FeedPost.js"); await FeedPost.updateOne({ _id: doc.feedPost, "comments._id": doc.commentId }, { $set: { "comments.$.deletedAt": new Date() } }); }
   if (doc.scope === "PROFILE" && doc.reportedUser) { const { default: User } = await import("./User.js"); await User.updateOne({ _id: doc.reportedUser }, { $set: { profileModerationHiddenAt: new Date() } }); }
   await mongoose.model("MessageReport").updateOne({ _id: doc._id }, { $set: { autoHiddenAt: new Date() } });

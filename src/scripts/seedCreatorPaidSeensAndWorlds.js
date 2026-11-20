@@ -1,3 +1,4 @@
+import { creatorPaidTitle, PAID_SEED_SOURCE } from "./creatorPaidSeedTitles.js";
 import crypto from "node:crypto";
 import mongoose from "mongoose";
 import { connectDb } from "../config/db.js";
@@ -6,7 +7,7 @@ import Chapter from "../models/Chapter.js";
 import Publication from "../models/Publication.js";
 import User from "../models/User.js";
 
-const SOURCE = "approved-creator-paid-seens-v1";
+const SOURCE = PAID_SEED_SOURCE;
 const PLAN = [
   ["maya@gmail.com", "Maya Senanayake", "Psychology", 3, 2],
   ["noah@gmail.com", "Noah Williams", "Lifestyle", 2, 1],
@@ -29,17 +30,6 @@ const PLAN = [
   ["hana@gmail.com", "Hana Mori", "Fashion", 3, 2],
   ["victor@gmail.com", "Victor Mensah", "Tech", 3, 2],
 ];
-
-const TOPICS = {
-  Psychology: ["A Practical Reset for Overthinking", "Boundaries Without Guilt", "The Five-Minute Emotional Check-In"],
-  Lifestyle: ["Design a Calmer Morning", "A Weekly Reset That Actually Fits", "Make Space for What Matters"],
-  Fashion: ["Build a Signature Look", "Camera-Ready Styling Fundamentals", "A Versatile Capsule Wardrobe"],
-  Finance: ["A Simple Monthly Money System", "Build Your First Safety Fund", "Spend With More Intention"],
-  Business: ["A Simple Monthly Money System", "Build a Profitable Weekly Workflow", "Price Your Work With Confidence"],
-  Tech: ["Use AI Without Losing Your Voice", "Automate One Repetitive Task", "Build a Reliable Personal Tech Stack"],
-  Fitness: ["The Stronger Week Blueprint", "Mobility for Real Life", "Train Consistently Without Burnout"],
-  Wellness: ["A Seven-Day Energy Reset", "Rest Without Falling Behind", "Build a Sustainable Self-Care Rhythm"],
-};
 
 const WORLD_NAMES = {
   Psychology: "The Inner Room", Lifestyle: "The Intentional Life", Fashion: "The Style Studio",
@@ -126,7 +116,7 @@ function metadataForPaidSeen({ category, coverMedia, title }) {
 async function seedPaidSeen(user, entry, index) {
   const [email, name, category] = entry;
   const firstName = name.split(" ")[0];
-  const title = (TOPICS[category] || TOPICS.Lifestyle)[index];
+  const title = creatorPaidTitle(email, index);
   const publicationId = stableId(`${email}:paid-seen:${index + 1}`);
   const chapters = paidSeenChapters(email, firstName, title, index + 1);
   const metadata = metadataForPaidSeen({ category, coverMedia: media(email, index + 1), title });
@@ -146,7 +136,7 @@ async function ensureWorld(user, entry, includedIds) {
   const firstName = name.split(" ")[0];
   let world = await Publication.findOne({ creator: user._id, kind: "PREMIUM_WORLD", status: { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } }).select("+submittedSnapshot");
   if (!world) {
-    const title = WORLD_NAMES[category] || `${firstName}'s World`;
+    const title = `${firstName}: ${WORLD_NAMES[category] || "World"}`;
     const metadata = {
       kind: "PREMIUM_WORLD", title, summary: `Premium guidance, private updates, and closer access to ${firstName}.`,
       description: `Join ${firstName} for member-only Paid Seens, private stories, and practical updates every month.`,

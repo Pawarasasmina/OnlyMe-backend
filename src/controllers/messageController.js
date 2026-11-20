@@ -1,3 +1,4 @@
+import { findConversationState, giftConversationState } from "../services/giftConversationService.js";
 import { publicWallModerationFilter } from "../services/wallModerationAccess.js";
 import Dream from "../models/Dream.js";
 import { referralCodes } from "../services/referralService.js";
@@ -138,13 +139,7 @@ async function assertAllowedShareRecipient(current, otherId) {
 }
 
 async function conversationFor(current, other) {
-  const pair = pairFor(current, other);
-  let conversation = await Conversation.findOne(pair.participantKey ? { $or: [{ participantKey: pair.participantKey }, ...(pair.fan ? [{ fan: pair.fan, creator: pair.creator }] : [])] } : pair);
-  if (!conversation) {
-    const hasMessages = await Message.exists({ $or: [{ sender: pair.fan, recipient: pair.creator }, { sender: pair.creator, recipient: pair.fan }] });
-    if (hasMessages) conversation = await Conversation.findOneAndUpdate({ participantKey: pair.participantKey }, { $setOnInsert: { ...pair, status: "ACTIVE", acceptedAt: new Date(), acceptedByCreator: false } }, { new: true, upsert: true });
-  }
-  return conversation;
+  return findConversationState(pairFor(current, other));
 }
 
 async function prepareConversationForSend(current, other, conversation) {
@@ -612,8 +607,7 @@ export const sendChatGift = asyncHandler(async (req, res) => {
   const key = idempotencyKey(req.body.idempotencyKey);
   const gift = mongoose.isValidObjectId(giftId) ? await Gift.findOne({ _id: giftId, isActive: true }).lean() : null;
   if (!gift) throw new ApiError(400, "Choose an available gift");
-  let conversation = await conversationFor(req.user, other);
-  conversation = await prepareConversationForSend(req.user, other, conversation);
+  const conversation = await giftConversationState(pairFor(req.user, other));
 
   const result = await executeFinancialCommand({
     user: req.user._id,
@@ -646,7 +640,7 @@ export const sendChatGift = asyncHandler(async (req, res) => {
     }], { session });
 const [record] = await ChatGift.create([{ _id: recordId, message: chatMessage._id, sender: req.user._id, recipient: other._id, gift: gift._id, giftName: gift.name, giftCaption: gift.caption || "", giftImageUrl: gift.image.url, giftAnimation: animation, sourceType, messageText, visibility, starsAmount: gift.stars, debitLedgerEntry: moved.debit.entry._id, creditLedgerEntry: moved.credit.entry._id, idempotencyKey: key }], { session });
     await Notification.create([{ user: other._id, type: "chat_gift", title: `${req.user.name} sent you ${gift.name} (${gift.stars} coins)`, dedupeKey: `chat-gift:${record._id}` }], { session });
-return { resultReference: record._id, gift: { id: gift._id, name: gift.name, caption: gift.caption || "", stars: gift.stars, imageUrl: gift.image.url, displayScale: gift.displayScale, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0, ...animation }, sourceType, note: messageText, visibility, wallet: safeWallet(moved.debit.wallet, command.financialMode), message: serializedMessage(chatMessage), conversationStatus: conversation.status };
+return { resultReference: record._id, gift: { id: gift._id, name: gift.name, caption: gift.caption || "", stars: gift.stars, imageUrl: gift.image.url, displayScale: gift.displayScale, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0, ...animation }, sourceType, note: messageText, visibility, wallet: safeWallet(moved.debit.wallet, command.financialMode), message: serializedMessage(chatMessage), conversationStatus: conversation?.status || null };
   });
   if (result.message) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(result.message), participant: person(req.user), conversationStatus: result.conversationStatus || "ACTIVE" });
   req.app.get("io")?.to(`user:${other._id}`).emit("activity:updated");
