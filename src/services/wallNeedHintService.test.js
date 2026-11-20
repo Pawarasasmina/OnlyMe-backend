@@ -17,7 +17,7 @@ test("Wall hints are read and atomically dismissed only for the authenticated ac
   await dismissWallHint("one", "need_help");
   await dismissWallHint("one", "need_help");
   assert.deepEqual(await getWallHintDismissals("one"), ["need_help"]);
-  assert.deepEqual(accounts.get("one"), ["tip:wk:help"]);
+  assert.deepEqual(accounts.get("one"), ["need_help"]);
   accounts.set("one", ["need_help", "tip:wk:rec"]);
   assert.deepEqual(await getWallHintDismissals("one"), ["need_help", "recommendation"]);
   assert.deepEqual(await getWallHintDismissals("two"), []);
