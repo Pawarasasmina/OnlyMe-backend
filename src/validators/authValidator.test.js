@@ -19,3 +19,7 @@ test("registration stores either a normalized email or phone", () => {
 test("registration rejects a malformed contact identifier", () => {
   assert.throws(() => validateRegisterPayload(registration("not-a-contact")), /valid phone number/i);
 });
+
+test("registration preserves the validated signup birthday", () => {
+  assert.equal(validateRegisterPayload(registration("maya@example.com")).dateOfBirth.toISOString().slice(0, 10), "1995-05-20");
+});

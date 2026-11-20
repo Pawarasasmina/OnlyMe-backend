@@ -128,6 +128,7 @@ export const register = asyncHandler(async (req, res) => {
     ...(phone ? { phone } : {}),
     password,
     dateOfBirth,
+    monetization: { dateOfBirth },
     preferredLanguage: ["en", "ar", "ru", "uk", "es", "pt", "fr", "de"].includes(req.body.preferredLanguage) ? req.body.preferredLanguage : "en",
     profileType: "personal",
     role: "fan",

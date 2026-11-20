@@ -30,6 +30,10 @@ export function isAdult(dateOfBirth, now = new Date()) {
   if (!Number.isFinite(dob.getTime())) return false;
   return dob.getTime() <= Date.UTC(now.getUTCFullYear() - 18, now.getUTCMonth(), now.getUTCDate());
 }
+export function monetizationDateOfBirth(user, verification) {
+  const approvedIdentity = verification?.status === "APPROVED" && !verification.stateSyncPending;
+  return (approvedIdentity ? verification.dateOfBirth : null) || user.monetization?.dateOfBirth || user.dateOfBirth || null;
+}
 export async function monetizationSummary(user) {
   const [policy, verification, gifts, preference, activeCategories, bank, creatorProfile] = await Promise.all([
     getMonetizationPolicy(),
@@ -41,7 +45,7 @@ export async function monetizationSummary(user) {
     CreatorProfile.findOne({ user: user._id }).select("directAccessEnabled").lean(),
   ]);
   const approvedIdentity = verification?.status === "APPROVED" && !verification.stateSyncPending;
-  const dob = (approvedIdentity ? verification.dateOfBirth : null) || user.monetization?.dateOfBirth;
+  const dob = monetizationDateOfBirth(user, verification);
   const country = bank?.status === "APPROVED" && bank.country ? bank.country : user.monetization?.country || (approvedIdentity ? verification.country : "") || "";
   const age = isAdult(dob);
   const countryAllowed = policy.supportedCountries.length
