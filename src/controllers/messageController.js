@@ -72,7 +72,7 @@ const serializedSharedContent = (sharedContent, deletedAt = null) => {
     } : null,
   };
 };
-const serializedMessage = (message) => ({ id: message._id.toString(), clientMessageId: message.clientMessageId || null, senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "This message was deleted" : message.body, mediaType: message.mediaType || "text", messageKind: message.messageKind || "USER_MESSAGE", messageChannel: message.messageChannel || "STANDARD", directAccessWindowId: message.directAccessWindow ? String(message.directAccessWindow) : null, forwarded: Boolean(message.forwardedFrom), deletedAt: message.deletedAt || null, gift: !message.deletedAt && message.mediaType === "gift" && message.gift?.giftId ? { id: String(message.gift.giftId), name: message.gift.name, stars: message.gift.stars, imageUrl: message.gift.imageUrl, displayScale: message.gift.displayScale || 100, imagePositionX: message.gift.imagePositionX || 0, imagePositionY: message.gift.imagePositionY || 0 } : null, image: !message.deletedAt && message.mediaType === "image" && message.image?.assetId ? { url: messageImageUrl(message.image), width: message.image.width, height: message.image.height } : null, audio: !message.deletedAt && message.mediaType === "audio" && message.audio?.assetId ? { url: messageVoiceUrl(message.audio), duration: message.audio.duration, waveform: message.audio.waveform || [] } : null, video: !message.deletedAt && message.mediaType === "video" && message.video?.assetId ? { url: messageVideoUrl(message.video), duration: message.video.duration, width: message.video.width, height: message.video.height } : null, readAt: message.readAt || null, createdAt: message.createdAt, replyTo: serializedReply(message.replyTo), reactions: message.deletedAt ? [] : (message.reactions || []).map((reaction) => ({ userId: String(reaction.user?._id || reaction.user), emoji: reaction.emoji })), storyReply: !message.deletedAt && message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, questionPrompt: message.storyReply.questionPrompt || "", expiresAt: message.storyReply.expiresAt || null } : null, sharedContent: serializedSharedContent(message.sharedContent, message.deletedAt), disappearAfterSeconds: message.disappearAfterSeconds ?? null, openedAt: message.openedAt || null, expiresAt: message.expiresAt || null });
+const serializedMessage = (message) => ({ id: message._id.toString(), clientMessageId: message.clientMessageId || null, senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "This message was deleted" : message.body, mediaType: message.mediaType || "text", messageKind: message.messageKind || "USER_MESSAGE", messageChannel: message.messageChannel || "STANDARD", directAccessWindowId: message.directAccessWindow ? String(message.directAccessWindow) : null, forwarded: Boolean(message.forwardedFrom), deletedAt: message.deletedAt || null, gift: !message.deletedAt && message.mediaType === "gift" && message.gift?.giftId ? { id: String(message.gift.giftId), name: message.gift.name, caption: message.gift.caption || "", stars: message.gift.stars, imageUrl: message.gift.imageUrl, displayScale: message.gift.displayScale || 100, imagePositionX: message.gift.imagePositionX || 0, imagePositionY: message.gift.imagePositionY || 0 } : null, image: !message.deletedAt && message.mediaType === "image" && message.image?.assetId ? { url: messageImageUrl(message.image), width: message.image.width, height: message.image.height } : null, audio: !message.deletedAt && message.mediaType === "audio" && message.audio?.assetId ? { url: messageVoiceUrl(message.audio), duration: message.audio.duration, waveform: message.audio.waveform || [] } : null, video: !message.deletedAt && message.mediaType === "video" && message.video?.assetId ? { url: messageVideoUrl(message.video), duration: message.video.duration, width: message.video.width, height: message.video.height } : null, readAt: message.readAt || null, createdAt: message.createdAt, replyTo: serializedReply(message.replyTo), reactions: message.deletedAt ? [] : (message.reactions || []).map((reaction) => ({ userId: String(reaction.user?._id || reaction.user), emoji: reaction.emoji })), storyReply: !message.deletedAt && message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, questionPrompt: message.storyReply.questionPrompt || "", expiresAt: message.storyReply.expiresAt || null } : null, sharedContent: serializedSharedContent(message.sharedContent, message.deletedAt), disappearAfterSeconds: message.disappearAfterSeconds ?? null, openedAt: message.openedAt || null, expiresAt: message.expiresAt || null });
 const protectedMessage = (payload) => payload.disappearAfterSeconds === null ? payload : { ...payload, body: "Disappearing message", image: null, audio: null, video: null, gift: null, sharedContent: null, storyReply: null, locked: true };
 const validId = (value) => {
   if (!mongoose.isValidObjectId(value)) throw new ApiError(400, "Invalid account id");
@@ -430,7 +430,9 @@ export const listConversations = asyncHandler(async (req, res) => {
       id: String(item._id),
       participant: person(participant),
       lastMessage: item.lastMessage.disappearAfterSeconds !== null && item.lastMessage.disappearAfterSeconds !== undefined ? protectedMessage(serializedMessage(item.lastMessage)) : serializedMessage(item.lastMessage),
-      unreadCount: item.unreadCount,
+      unreadCount: Math.max(item.unreadCount, (stateByOther.get(String(item._id))?.manualUnreadBy || []).some((id) => String(id) === String(me)) ? 1 : 0),
+      manualUnread: (stateByOther.get(String(item._id))?.manualUnreadBy || []).some((id) => String(id) === String(me)),
+      pinned: (stateByOther.get(String(item._id))?.pinnedBy || []).some((id) => String(id) === String(me)),
       hasStoryReply: Boolean(item.hasStoryReply),
       isUnanswered: String(item.lastMessage.sender) !== String(me),
       isWorldMember: memberIds.has(String(item._id)),
@@ -468,6 +470,10 @@ export const listMessages = asyncHandler(async (req, res) => {
     ? String(conversation.requestRecipient) === String(req.user._id)
     : String(conversation.creator) === String(req.user._id));
   if (!requestIsForMe) {
+    if (conversation?.manualUnreadBy?.some((id) => String(id) === String(req.user._id))) {
+      conversation.manualUnreadBy.pull(req.user._id);
+      await conversation.save();
+    }
     const readAt = new Date();
     const result = await Message.updateMany(
       { sender: other._id, recipient: req.user._id, readAt: null },
@@ -626,6 +632,7 @@ export const sendChatGift = asyncHandler(async (req, res) => {
       gift: {
         giftId: gift._id,
         name: gift.name,
+        caption: gift.caption || "",
         stars: gift.stars,
         imageUrl: gift.image.url,
         displayScale: gift.displayScale,
@@ -634,9 +641,9 @@ export const sendChatGift = asyncHandler(async (req, res) => {
         ...animation,
       },
     }], { session });
-    const [record] = await ChatGift.create([{ _id: recordId, message: chatMessage._id, sender: req.user._id, recipient: other._id, gift: gift._id, giftName: gift.name, giftImageUrl: gift.image.url, giftAnimation: animation, sourceType, messageText, visibility, starsAmount: gift.stars, debitLedgerEntry: moved.debit.entry._id, creditLedgerEntry: moved.credit.entry._id, idempotencyKey: key }], { session });
+const [record] = await ChatGift.create([{ _id: recordId, message: chatMessage._id, sender: req.user._id, recipient: other._id, gift: gift._id, giftName: gift.name, giftCaption: gift.caption || "", giftImageUrl: gift.image.url, giftAnimation: animation, sourceType, messageText, visibility, starsAmount: gift.stars, debitLedgerEntry: moved.debit.entry._id, creditLedgerEntry: moved.credit.entry._id, idempotencyKey: key }], { session });
     await Notification.create([{ user: other._id, type: "chat_gift", title: `${req.user.name} sent you ${gift.name} (${gift.stars} coins)`, dedupeKey: `chat-gift:${record._id}` }], { session });
-    return { resultReference: record._id, gift: { id: gift._id, name: gift.name, stars: gift.stars, imageUrl: gift.image.url, displayScale: gift.displayScale, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0, ...animation }, sourceType, note: messageText, visibility, wallet: safeWallet(moved.debit.wallet, command.financialMode), message: serializedMessage(chatMessage), conversationStatus: conversation.status };
+return { resultReference: record._id, gift: { id: gift._id, name: gift.name, caption: gift.caption || "", stars: gift.stars, imageUrl: gift.image.url, displayScale: gift.displayScale, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0, ...animation }, sourceType, note: messageText, visibility, wallet: safeWallet(moved.debit.wallet, command.financialMode), message: serializedMessage(chatMessage), conversationStatus: conversation.status };
   });
   if (result.message) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(result.message), participant: person(req.user), conversationStatus: result.conversationStatus || "ACTIVE" });
   req.app.get("io")?.to(`user:${other._id}`).emit("activity:updated");
@@ -941,6 +948,22 @@ export const muteConversation = asyncHandler(async (req, res) => {
   else conversation.mutedBy.pull(req.user._id);
   await conversation.save();
   return sendResponse(res, 200, muted ? "Conversation muted" : "Conversation unmuted", { muted });
+});
+
+export const updateConversationState = asyncHandler(async (req, res) => {
+  const other = await assertAllowedPair(req.user, req.params.userId, { allowBlocked: true });
+  const conversation = await conversationFor(req.user, other);
+  if (!conversation) throw new ApiError(404, "Conversation not found");
+  if (typeof req.body.pinned === "boolean") req.body.pinned ? conversation.pinnedBy.addToSet(req.user._id) : conversation.pinnedBy.pull(req.user._id);
+  if (typeof req.body.manualUnread === "boolean") {
+    req.body.manualUnread ? conversation.manualUnreadBy.addToSet(req.user._id) : conversation.manualUnreadBy.pull(req.user._id);
+    if (!req.body.manualUnread) await Message.updateMany({ sender: other._id, recipient: req.user._id, readAt: null }, { $set: { readAt: new Date() } });
+  }
+  await conversation.save();
+  return sendResponse(res, 200, "Conversation state updated", {
+    pinned: conversation.pinnedBy.some((id) => String(id) === String(req.user._id)),
+    manualUnread: conversation.manualUnreadBy.some((id) => String(id) === String(req.user._id)),
+  });
 });
 
 export const forwardMessage = asyncHandler(async (req, res) => {

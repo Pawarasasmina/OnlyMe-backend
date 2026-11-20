@@ -2,9 +2,12 @@ import ApiError from "../utils/ApiError.js";
 import { validateDisplayName, validateUsername } from "./profileValidator.js";
 
 export function validateRegisterPayload(payload) {
-  const { name, username, email, password, dateOfBirth } = payload;
+  const { username, email, password, dateOfBirth } = payload;
+  const firstName = String(payload.firstName || "").trim();
+  const lastName = String(payload.lastName || "").trim();
+  const name = String(payload.name || [firstName, lastName].filter(Boolean).join(" ")).trim();
 
-  if (!name || !username || !email || !password || !dateOfBirth) {
+  if (!firstName || !name || !username || !email || !password || !dateOfBirth) {
     throw new ApiError(400, "Name, username, email, password, and birthday are required");
   }
 
@@ -25,6 +28,8 @@ export function validateRegisterPayload(payload) {
 
   return {
     name: validateDisplayName(name),
+    firstName: validateDisplayName(firstName).slice(0, 30),
+    lastName: lastName ? validateDisplayName(lastName).slice(0, 30) : "",
     username: validateUsername(username),
     email: normalizedEmail,
     password,

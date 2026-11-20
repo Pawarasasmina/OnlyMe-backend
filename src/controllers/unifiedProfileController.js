@@ -7,6 +7,7 @@ import { resolveStorySources } from "../services/storySourceService.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
 import User from "../models/User.js";
+import UsernameReservation from "../models/UsernameReservation.js";
 import Publication from "../models/Publication.js";
 import PublicationSeries from "../models/PublicationSeries.js";
 import FeedPost from "../models/FeedPost.js";
@@ -26,6 +27,7 @@ import Repost from "../models/Repost.js";
 import ProfileMedia from "../models/ProfileMedia.js";
 import WallShareEngagement from "../models/WallShareEngagement.js";
 import { serializeUnifiedProfile } from "../services/unifiedProfileService.js";
+import { creatorTypicalReplyHours } from "../services/directAccessService.js";
 import { activeIncludedExperienceIds } from "../services/publicationEntitlementService.js";
 import { attachEntityMetadata } from "../services/contentEntityService.js";
 import { listProfileMediaForUser } from "../services/profileMediaService.js";
@@ -169,14 +171,22 @@ async function loadProfile(owner, viewer) {
     status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] },
     currentPeriodEnd: { $gt: new Date() },
   };
-  const [worldMemberRows, worldMemberPreviewRows] = premiumWorldIds.length ? await Promise.all([
+  const [worldMemberRows, worldMemberPreviewRows, worldOnlineRows] = premiumWorldIds.length ? await Promise.all([
     PremiumMembership.aggregate([
       { $match: activeWorldMemberFilter },
       { $group: { _id: "$premiumPublication", memberCount: { $sum: 1 }, monthlyStars: { $sum: "$starsPerPeriod" } } },
     ]),
     PremiumMembership.find(activeWorldMemberFilter).sort({ createdAt: 1 }).limit(12).populate("user", "name username avatar").lean(),
-  ]) : [[], []];
+    PremiumMembership.aggregate([
+      { $match: activeWorldMemberFilter },
+      { $lookup: { from: "users", localField: "user", foreignField: "_id", as: "memberUser" } },
+      { $unwind: "$memberUser" },
+      { $match: { "memberUser.status": "active", "memberUser.lastSeenAt": { $gte: new Date(Date.now() - 5 * 60 * 1000) } } },
+      { $group: { _id: "$premiumPublication", onlineMemberCount: { $sum: 1 } } },
+    ]),
+  ]) : [[], [], []];
   const worldMemberCounts = new Map(worldMemberRows.map((item) => [String(item._id), Number(item.memberCount) || 0]));
+  const worldOnlineMemberCounts = new Map(worldOnlineRows.map((item) => [String(item._id), Number(item.onlineMemberCount) || 0]));
   const worldMonthlyIncomeUsd = new Map(worldMemberRows.map((item) => [String(item._id), (Number(item.monthlyStars) || 0) / 10]));
   const worldMemberPreviews = new Map();
   for (const membership of worldMemberPreviewRows) {
@@ -322,7 +332,8 @@ async function loadProfile(owner, viewer) {
     const route = source.publication ? `/seen/${source.publication}` : source.post ? `/posts/${source.post}` : "";
     return [{ ...base, title: source.text || "Reply", imageUrl: author.avatar || "", route }];
   });
-  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, entitledSeenIds, seenOwnerCounts, membershipIncludedExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, reposts, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, seenByCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal), activeStoryCount, profileStories, worldMemberCounts, worldMemberPreviews, worldMonthlyIncomeUsd });
+  const typicalReplyHours = roleProfile.directAccessEnabled || roleProfile.directCallEnabled ? await creatorTypicalReplyHours(owner._id) : null;
+  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, entitledSeenIds, seenOwnerCounts, membershipIncludedExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, reposts, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, seenByCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal), activeStoryCount, profileStories, worldMemberCounts, worldMemberPreviews, worldOnlineMemberCounts, worldMonthlyIncomeUsd, typicalReplyHours });
 }
 
 async function relationshipTarget(username) {
@@ -568,7 +579,11 @@ export const getProfileConnections = asyncHandler(async (req, res) => {
 
 export const getUnifiedProfileByUsername = asyncHandler(async (req, res) => {
   const username = normalizeUsername(req.params.username);
-  const owner = await User.findOne({ username, role: { $in: ["fan", "creator"] }, status: "active", profileModerationHiddenAt: null });
+  let owner = await User.findOne({ username, role: { $in: ["fan", "creator"] }, status: "active", profileModerationHiddenAt: null });
+  if (!owner) {
+    const reservation = await UsernameReservation.findOne({ username, expiresAt: { $gt: new Date() } }).select("user").lean();
+    if (reservation) owner = await User.findOne({ _id: reservation.user, role: { $in: ["fan", "creator"] }, status: "active", profileModerationHiddenAt: null });
+  }
   if (!owner) throw new ApiError(404, "Profile not found");
   const Model = profileModelFor(owner);
   const visibility = await Model.findOne({ user: owner._id }).select("profileVisibility").lean();

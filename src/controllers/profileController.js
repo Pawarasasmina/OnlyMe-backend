@@ -1,6 +1,7 @@
 import Conversation from "../models/Conversation.js";
 import GroupConversation from "../models/GroupConversation.js";
 import mongoose from "mongoose";
+import UsernameReservation from "../models/UsernameReservation.js";
 import AdminProfile from "../models/AdminProfile.js";
 import CreatorProfile from "../models/CreatorProfile.js";
 import FanProfile from "../models/FanProfile.js";
@@ -77,6 +78,8 @@ function accountDetails(user) {
   return {
     id: user._id,
     displayName: user.name,
+    firstName: user.firstName || user.name?.trim().split(/\s+/)[0] || "",
+    lastName: user.lastName || user.name?.trim().split(/\s+/).slice(1).join(" ") || "",
     username: user.username,
     email: user.email,
     role: user.role,
@@ -558,8 +561,23 @@ export const updateMyProfile = asyncHandler(async (req, res) => {
   const profileUpdates = stripUndefined(profile);
 
   if (commonUpdates.username && commonUpdates.username !== req.user.username) {
-    const usernameTaken = await User.exists({ username: commonUpdates.username, _id: { $ne: req.user._id } });
-    if (usernameTaken) throw new ApiError(409, "That username is already taken");
+    const changedAt = req.user.usernameChangedAt ? new Date(req.user.usernameChangedAt) : null;
+    const nextAllowedAt = changedAt ? new Date(changedAt.getTime() + 14 * 24 * 60 * 60 * 1000) : null;
+    if (nextAllowedAt && nextAllowedAt > new Date()) {
+      throw new ApiError(429, `You can change your username again after ${nextAllowedAt.toISOString()}`, "USERNAME_CHANGE_COOLDOWN");
+    }
+    const [usernameTaken, usernameReserved] = await Promise.all([
+      User.exists({ username: commonUpdates.username, _id: { $ne: req.user._id } }),
+      UsernameReservation.exists({ username: commonUpdates.username, user: { $ne: req.user._id }, expiresAt: { $gt: new Date() } }),
+    ]);
+    if (usernameTaken || usernameReserved) throw new ApiError(409, "That username is already taken");
+    const oldUsername = req.user.username;
+    commonUpdates.usernameChangedAt = new Date();
+    await UsernameReservation.findOneAndUpdate(
+      { username: oldUsername },
+      { $set: { user: req.user._id, expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) } },
+      { upsert: true, setDefaultsOnInsert: true }
+    );
   }
   if (commonUpdates.email && commonUpdates.email !== req.user.email) {
     const emailTaken = await User.exists({ email: commonUpdates.email, _id: { $ne: req.user._id } });
@@ -689,11 +707,14 @@ export const removeMyCover = asyncHandler(async (req, res) => {
 export const checkUsernameAvailability = asyncHandler(async (req, res) => {
   const username = validateUsername(req.query.username);
   const currentUserId = req.user?._id ?? new mongoose.Types.ObjectId();
-  const existingUser = await User.findOne({ username, _id: { $ne: currentUserId } }).select("_id");
+  const [existingUser, reservation] = await Promise.all([
+    User.findOne({ username, _id: { $ne: currentUserId } }).select("_id"),
+    UsernameReservation.exists({ username, user: { $ne: currentUserId }, expiresAt: { $gt: new Date() } }),
+  ]);
 
   return sendResponse(res, 200, "Username availability checked", {
     username,
-    available: !existingUser,
+    available: !existingUser && !reservation,
   });
 });
 

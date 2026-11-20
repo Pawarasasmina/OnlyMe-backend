@@ -18,6 +18,8 @@ const userSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    firstName: { type: String, trim: true, maxlength: 30, default: "" },
+    lastName: { type: String, trim: true, maxlength: 30, default: "" },
     username: {
       type: String,
       required: true,
@@ -25,6 +27,7 @@ const userSchema = new mongoose.Schema(
       trim: true,
       lowercase: true,
     },
+    usernameChangedAt: { type: Date, default: null },
     email: {
       type: String,
       required: true,

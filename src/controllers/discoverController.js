@@ -1,4 +1,5 @@
 import { publicWallModerationFilter } from "../services/wallModerationAccess.js";
+import { discoverCardReason } from "../services/discoverReasonService.js";
 import mongoose from "mongoose";
 import { filterStoryAccess } from "../services/storySourceService.js";
 import CreatorProfile from "../models/CreatorProfile.js";
@@ -70,7 +71,7 @@ const slidesCache = new Map();
 const REPORT_REASONS = new Set(["SPAM", "HARASSMENT", "HATE", "SEXUAL_CONTENT", "VIOLENCE", "SCAM", "OTHER"]);
 
 function slidesCacheKey(req) {
-  return [req.user?._id, req.query.filter || "for_you", req.query.topic || "", req.query.cursor || "0", req.query.limit || DEFAULT_LIMIT].join(":");
+  return [req.user?._id, req.query.filter || "for_you", req.query.topic || "", req.query.cursor || "0", req.query.limit || DEFAULT_LIMIT, req.query.search || "", req.discoverEligibilityKey || ""].join(":");
 }
 
 function readSlidesCache(req) {
@@ -88,6 +89,33 @@ function writeSlidesCache(req, data) {
   if (req.query.view !== "slides" || req.query.refreshToken) return;
   if (slidesCache.size >= 200) slidesCache.delete(slidesCache.keys().next().value);
   slidesCache.set(slidesCacheKey(req), { data, expiresAt: Date.now() + SLIDES_CACHE_TTL });
+}
+
+export function refreshCachedDiscoverRelationships(data, followedIds) {
+  const update = person => {
+    const following = followedIds.has(String(person.userId || person.creator?.id || person.creatorId || person.id || person._id));
+    return {
+      ...person, following, isFollowing: following,
+      ...(person.creator ? { creator: { ...person.creator, following, isFollowing: following } } : {}),
+      ...(person.actions ? { actions: { ...person.actions, following } } : {}),
+    };
+  };
+  return {
+    ...data,
+    recommendations: (data.recommendations || []).map(update),
+    following: (data.following || []).map(update).filter(person => person.following),
+    suggestedUsers: (data.suggestedUsers || []).map(update).filter(person => !person.following),
+  };
+}
+
+export function paginateDiscoverRecommendations(items, { followedIds = new Set(), excludedIds = new Set(), cursor = 0, limit = DEFAULT_LIMIT } = {}) {
+  const eligible = items.filter(item => {
+    const id = String(item.userId || item.creator?.id || item.creatorId || item.id || item._id);
+    return !followedIds.has(id) && !excludedIds.has(id) &&
+      !item.isFollowing && !item.following && !item.creator?.following && !item.creator?.isFollowing && !item.actions?.following;
+  });
+  const next = cursor + limit;
+  return { items: eligible.slice(cursor, next), nextCursor: next < eligible.length ? String(next) : null };
 }
 
 function roleProfileModel(role, creatorApprovalStatus = null) {
@@ -432,7 +460,25 @@ function buildSlide(profile, index, meta) {
     reason,
     quote: cleanText(profile.orbitQuote, 180),
     dream: serializeDream(meta.dreamByCreator.get(creatorId)),
+    cardReason: discoverCardReason({
+      id: creatorId,
+      dream: meta.dreamByCreator.get(creatorId),
+      savedSeen: meta.savedSeenByCreator.get(creatorId),
+      city: location.city,
+      viewerCity: meta.viewerCity,
+      activeStatus: user.activeStatus,
+      followedBy: meta.followedByCreator.get(creatorId) || [],
+    }),
     featuredSeen,
+    preview: {
+      cover: profile.coverPhoto || (media.type === "video" ? media.poster : media.url) || user.avatar || "",
+      activeStatus: serializeProfileStatus(user.activeStatus),
+      happeningNow: cleanText(profile.orbitQuote, 240),
+      quote: cleanText(profile.bio, 240),
+      seens: (meta.previewSeensByCreator.get(creatorId) || []).slice(0, 3),
+      sharedWalk: meta.sharedWalks.find(walk => String(walk.person.id) === creatorId)?.world || null,
+      hasIncomingSignal: meta.incomingSignalIds.has(creatorId),
+    },
     featuredOffer: serializeOffer(featuredWorld, {
       viewerId: meta.viewerId,
       entitledPublicationIds: meta.entitledPublicationIds,
@@ -742,6 +788,17 @@ export function serializeDiscoverSeen(publication, engagementCounts = new Map())
   };
 }
 
+export function buildDiscoverPreviewSeens(publications, engagementCounts = new Map()) {
+  const byCreator = new Map();
+  for (const publication of publications) {
+    if (!publication.creator?._id || publication.pricing?.mode === "ONE_TIME" || publication.publishedSnapshot?.metadata?.pricing?.mode === "ONE_TIME") continue;
+    const id = String(publication.creator._id);
+    const seens = byCreator.get(id) || [];
+    if (seens.length < 3) byCreator.set(id, [...seens, serializeDiscoverSeen(publication, engagementCounts)]);
+  }
+  return byCreator;
+}
+
 function serializeDiscoverActivity(profiles = []) {
   const recentThreshold = Date.now() - 24 * 60 * 60 * 1000;
   const active = profiles
@@ -812,18 +869,23 @@ async function discoverSidebar(viewer, profiles) {
 }
 
 export const getDiscover = asyncHandler(async (req, res) => {
-  const cachedSlides = readSlidesCache(req);
-  if (cachedSlides) return sendResponse(res, 200, "Discover fetched", cachedSlides);
   const viewerModel = roleProfileModel(req.user.role, req.user.creatorApprovalStatus);
   const slidesOnly = req.query.view === "slides";
-  const [viewerProfile, initialBlockedIds, followingCount] = await Promise.all([
+  const [viewerProfile, initialBlockedIds, viewerFollowing] = await Promise.all([
     ["fan", "creator"].includes(req.user.role) ? viewerModel.findOne({ user: req.user._id }).lean() : null,
     blockedIdsFor(req.user._id),
-    ProfileRelationship.countDocuments({ actor: req.user._id, type: "FOLLOW" }),
+    ProfileRelationship.find({ actor: req.user._id, type: "FOLLOW" }).select("target").lean(),
   ]);
+  const followingCount = viewerFollowing.length;
+  const followedIds = new Set(viewerFollowing.map(row => String(row.target)));
   const settings = discoverSettings(viewerProfile);
   const blockedIds = initialBlockedIds;
   settings.hiddenCreators.forEach((id) => blockedIds.add(String(id)));
+  // Cache pages only while the viewer's eligibility/preferences are unchanged.
+  // A follow/unfollow, block or hide must rebuild pagination, not shrink a stale page.
+  req.discoverEligibilityKey = JSON.stringify([ [...followedIds].sort(), [...blockedIds].sort(), settings, viewerProfile?.updatedAt ]);
+  const cachedSlides = readSlidesCache(req);
+  if (cachedSlides) return sendResponse(res, 200, "Discover fetched", cachedSlides);
   const excludedIds = objectIdList([req.user._id, ...blockedIds]);
   const search = cleanText(req.query.search, 80);
   const requestedFilter = cleanText(req.query.filter, 40).toLowerCase();
@@ -837,7 +899,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
     profileVisibility: "public",
     "privacySettings.allowDiscovery": { $ne: false },
   })
-    .populate({ path: "user", match: { role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified role creatorApprovalStatus status createdAt lastSeenAt" })
+    .populate({ path: "user", match: { role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified role creatorApprovalStatus status activeStatus createdAt lastSeenAt" })
     .sort({ updatedAt: -1 })
     .limit(80)
     .lean();
@@ -859,7 +921,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
     countsBy(ProfileRelationship, { target: { $in: creatorIds }, type: "FOLLOW" }, "target"),
     slidesOnly ? Promise.resolve(new Map()) : countsBy(Subscription, { creator: { $in: creatorIds }, status: { $in: ["active", "ACTIVE", "cancel_at_period_end", "CANCEL_AT_PERIOD_END"] } }, "creator"),
     countsBy(WorldEntitlement, { creator: { $in: creatorIds }, status: "ACTIVE" }, "creator"),
-    ProfileRelationship.find({ actor: req.user._id, target: { $in: creatorIds }, type: "FOLLOW" }).select("target").lean(),
+    Promise.resolve(viewerFollowing),
     Publication.find({ creator: { $in: creatorIds }, kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: "PUBLISHED", publishedSnapshot: { $exists: true } })
       .sort({ publishedAt: -1, updatedAt: -1 })
       .limit(36)
@@ -904,14 +966,32 @@ export const getDiscover = asyncHandler(async (req, res) => {
     if (!publicationByCreator.has(key)) publicationByCreator.set(key, publication);
   }
   const visibleSeens = seens.filter((seen) => seen.creator);
-  const [worldsByPublication, entitledPublicationIds, savedOfferRows, seenEngagementCounts, connections, viewerWalks] = await Promise.all([
+  const [worldsByPublication, entitledPublicationIds, savedOfferRows, seenEngagementCounts, connections, viewerWalks, seenSaveCounts, socialFollowRows, incomingSignals] = await Promise.all([
     countsBy(WorldEntitlement, { publication: { $in: publications.map((item) => item._id) }, status: "ACTIVE" }, "publication"),
     entitlementIdsFor(req.user, publications),
     SeenEngagement.find({ user: req.user._id, publication: { $in: publications.map((item) => item._id) }, type: "SAVE" }).select("publication").lean(),
     countsBy(SeenEngagement, { publication: { $in: visibleSeens.map((item) => item._id) } }, "publication"),
     connectionsPromise,
     viewerWalksPromise,
+    countsBy(SeenEngagement, { publication: { $in: visibleSeens.map(item => item._id) }, type: "SAVE" }, "publication"),
+    ProfileRelationship.find({ actor: { $in: viewerFollowing.map(row => row.target).filter(id => !blockedIds.has(String(id))) }, target: { $in: creatorIds }, type: "FOLLOW" })
+      .select("actor target").populate({ path: "actor", match: { status: "active" }, select: "name username" }).lean(),
+    OrbitSignal.find({ targetUser: req.user._id, sender: { $in: creatorIds }, type: "SEE_YOU", status: "active" }).select("sender").lean(),
   ]);
+  const savedSeenByCreator = new Map();
+  for (const seen of visibleSeens) {
+    const id = String(seen.creator._id);
+    const saveCount = seenSaveCounts.get(String(seen._id)) || 0;
+    if (saveCount > (savedSeenByCreator.get(id)?.saveCount || 0)) savedSeenByCreator.set(id, { saveCount });
+  }
+  const followedByCreator = new Map();
+  for (const row of socialFollowRows) {
+    if (!row.actor) continue;
+    const id = String(row.target);
+    const people = followedByCreator.get(id) || [];
+    people.push({ id: String(row.actor._id), name: row.actor.name, username: row.actor.username });
+    followedByCreator.set(id, people);
+  }
   const savedPublicationIds = new Set(savedOfferRows.map((item) => String(item.publication)));
   const creators = visibleProfiles.map((profile, index) => serializeCreator(profile, { ...meta, reason: reasonFor(profile, index, viewerProfile) }));
   const searchedCreators = filterCreators(creators, search);
@@ -925,6 +1005,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const sharedWalks = sharedWalkRows.map((item) => ({ id: item._id, world: { id: item.publication?._id, title: item.publication?.title, emoji: item.publication?.planet?.emoji || "🌍" }, person: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" } }));
   const discoverSeens = visibleSeens.map((publication) => serializeDiscoverSeen(publication, seenEngagementCounts));
   const seenByCreator = new Map();
+  const previewSeensByCreator = buildDiscoverPreviewSeens(visibleSeens, seenEngagementCounts);
   for (const seen of discoverSeens) {
     const key = String(seen.creator?.id || "");
     if (key && !seenByCreator.has(key)) seenByCreator.set(key, seen);
@@ -943,6 +1024,11 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const interestTags = [...new Set([...(viewerProfile?.interests || []), ...(viewerProfile?.categories || []), viewerProfile?.category, ...DISCOVER_TAGS].filter(Boolean))].slice(0, 18);
 
   const slideMeta = {
+    previewSeensByCreator,
+    sharedWalks,
+    incomingSignalIds: new Set(incomingSignals.map(signal => String(signal.sender))),
+    savedSeenByCreator,
+    followedByCreator,
     followerCounts,
     followingSet,
     publicationByCreator,
@@ -974,7 +1060,8 @@ export const getDiscover = asyncHandler(async (req, res) => {
     }], search).length)
     .map(({ profile, slide }) => ({ slide, score: slideScore(profile, slideMeta) }))
     .sort((left, right) => right.score - left.score || left.slide.creator.name.localeCompare(right.slide.creator.name))
-    .map((item) => item.slide);
+    .map((item) => item.slide)
+    .filter(slide => !followedIds.has(String(slide.creator.id)));
   const topicCounts = new Map();
   const topicLabels = new Map();
   allSlides.forEach((slide) => (slide.match?.tags || []).forEach((tag) => {
@@ -999,8 +1086,9 @@ export const getDiscover = asyncHandler(async (req, res) => {
   // recommendation pipeline here repeated several remote database reads and an
   // exposure write, pushing a normal Discover load beyond the client's timeout.
   const personalizedSlides = { items: filteredSlides, recommendation: null };
-  const pageSlides = personalizedSlides.items.slice(filter === "for_you" ? 0 : cursor, filter === "for_you" ? limit : cursor + limit).map(publicSlide);
-  const nextCursor = cursor + limit < filteredSlides.length ? String(cursor + limit) : null;
+  const page = paginateDiscoverRecommendations(personalizedSlides.items, { followedIds, excludedIds: blockedIds, cursor, limit });
+  const pageSlides = page.items.map(publicSlide);
+  const nextCursor = page.nextCursor;
   const cityGroups = new Map();
   visibleProfiles.forEach((profile) => {
     const city = cleanText(profile.city, 80);

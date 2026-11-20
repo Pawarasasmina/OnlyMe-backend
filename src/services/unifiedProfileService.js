@@ -42,7 +42,7 @@ function completion(owner, roleProfile) {
   return { completed, total: checks.length, percentage: Math.round((completed / checks.length) * 100) };
 }
 
-export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], entitledExperienceIds = new Set(), entitledSeenIds = new Set(), experienceOwnerCounts = new Map(), experiences = [], followerCount = 0, followingCount = 0, seenByCount = 0, media = [], membershipIncludedExperienceIds = new Set(), owner, ownWallPosts = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, profileStories = [], publishedContentCount = content.length, reposts = [], roleProfile, seenOwnerCounts = new Map(), seens = [], series = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, viewer, viewerRelationships = [], viewerSeeSignalSent = false, worldMemberCounts = new Map(), worldMemberPreviews = new Map(), worldMonthlyIncomeUsd = new Map() }) {
+export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], entitledExperienceIds = new Set(), entitledSeenIds = new Set(), experienceOwnerCounts = new Map(), experiences = [], followerCount = 0, followingCount = 0, seenByCount = 0, media = [], membershipIncludedExperienceIds = new Set(), owner, ownWallPosts = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, profileStories = [], publishedContentCount = content.length, reposts = [], roleProfile, seenOwnerCounts = new Map(), seens = [], series = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, typicalReplyHours = null, viewer, viewerRelationships = [], viewerSeeSignalSent = false, worldMemberCounts = new Map(), worldMemberPreviews = new Map(), worldOnlineMemberCounts = new Map(), worldMonthlyIncomeUsd = new Map() }) {
   const capabilities = profileViewerCapabilities(owner, viewer, roleProfile);
   const creatorEnabled = owner.creatorApprovalStatus === "approved" || ["creator", "business"].includes(owner.profileType);
   const contentViewer = capabilities.isOwner ? viewer : null;
@@ -89,6 +89,7 @@ export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], en
         callEnabled: Boolean(roleProfile?.directCallEnabled),
         callPriceStars: Number(roleProfile?.directCallPriceStars || 500),
         callDurationMinutes: Number(roleProfile?.directCallDurationMinutes || 5),
+        ...(Number(typicalReplyHours) > 0 ? { typicalReplyHours: Number(typicalReplyHours) } : {}),
       },
     } : {}),
     pinnedMessageGroup: pinnedMessageGroup ? { id: String(pinnedMessageGroup._id), name: pinnedMessageGroup.name, avatarUrl: pinnedMessageGroup.avatar || null, memberCount: pinnedMessageGroup.members?.length || 0 } : null,
@@ -118,7 +119,7 @@ export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], en
     wallPosts: ownWallPosts,
     planets: planets.map((item) => {
       const publication = serializePublication(item, contentViewer, { entitlement: premiumMembershipPublicationId && String(item._id) === String(premiumMembershipPublicationId) ? "ACTIVE_PREMIUM_MEMBER" : null });
-      return publication ? { ...publication, ...(capabilities.isOwner ? { monthlyIncomeUsd: worldMonthlyIncomeUsd.get(String(item._id)) || 0 } : {}), memberCount: worldMemberCounts.get(String(item._id)) || 0, memberPreview: worldMemberPreviews.get(String(item._id)) || [] } : null;
+      return publication ? { ...publication, ...(capabilities.isOwner ? { monthlyIncomeUsd: worldMonthlyIncomeUsd.get(String(item._id)) || 0 } : {}), memberCount: worldMemberCounts.get(String(item._id)) || 0, onlineMemberCount: worldOnlineMemberCounts.get(String(item._id)) || 0, memberPreview: worldMemberPreviews.get(String(item._id)) || [] } : null;
     }).filter(Boolean).slice(0, 3),
     experiences: experiences.map((item) => {
       const publication = serializePublication(item, contentViewer, {

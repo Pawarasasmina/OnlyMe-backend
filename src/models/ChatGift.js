@@ -6,6 +6,7 @@ const schema = new mongoose.Schema({
   recipient: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   gift: { type: mongoose.Schema.Types.ObjectId, ref: "Gift", required: true },
   giftName: { type: String, required: true, maxlength: 80 },
+  giftCaption: { type: String, trim: true, maxlength: 160, default: "" },
   giftImageUrl: { type: String, required: true, maxlength: 2000 },
   giftAnimation: { type: mongoose.Schema.Types.Mixed, default: {} },
   sourceType: { type: String, enum: ["DIRECT", "STORY"], default: "DIRECT", index: true },

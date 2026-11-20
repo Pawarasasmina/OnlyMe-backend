@@ -11,6 +11,7 @@ const messageSchema = new mongoose.Schema(
     gift: {
       giftId: { type: mongoose.Schema.Types.ObjectId, ref: "Gift", default: null },
       name: { type: String, trim: true, maxlength: 80, default: "" },
+      caption: { type: String, trim: true, maxlength: 160, default: "" },
       stars: { type: Number, min: 1, default: undefined },
       imageUrl: { type: String, maxlength: 2000, default: "" },
       displayScale: { type: Number, min: 40, max: 140, default: undefined },
