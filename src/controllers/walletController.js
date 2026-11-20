@@ -23,7 +23,7 @@ import { createBonusGrant, welcomeBonusFor } from "../services/bonusService.js";
 import { coverPreview } from "../services/activitySupplementService.js";
 import { PAYOUT_POLICY } from "../constants/payoutPolicy.js";
 
-const CREATOR_EVENTS = ["WORLD_CREATOR_EARNING", "PREMIUM_CREATOR_EARNING", "DREAM_CREATOR_EARNING", "CHAT_GIFT_EARNING", "DA_CREATOR_EARNING", "CALL_CREATOR_EARNING"];
+const CREATOR_EVENTS = ["WORLD_CREATOR_EARNING", "PREMIUM_CREATOR_EARNING", "DREAM_CREATOR_EARNING", "CHAT_GIFT_EARNING", "DA_CREATOR_EARNING", "CALL_CREATOR_EARNING", "REFERRAL_CREATOR_EARNING"];
 const safePublication = (item) => item ? { id: item._id, title: item.title || item.publishedSnapshot?.metadata?.title || "", kind: item.kind, planet: item.planet || null, ...coverPreview(item) } : null;
 export function withdrawalBalances(earnedBalance, recentIncomeStars) {
   const pendingIncomeStars = Math.min(Math.max(0, Number(earnedBalance || 0)), Math.max(0, Number(recentIncomeStars || 0)));

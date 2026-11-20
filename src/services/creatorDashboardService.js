@@ -15,14 +15,18 @@ import WallEngagement from "../models/WallEngagement.js";
 import WallPost from "../models/WallPost.js";
 import WorldEntitlement from "../models/WorldEntitlement.js";
 import { ACTIVE_MEMBERSHIP_STATUSES } from "../constants/financialConstants.js";
+import { financialModeForAccountType } from "../constants/accountTypeConstants.js";
 import { getStarExchangeRate } from "./starExchangeService.js";
 
 // Earnings are selected by their ledger role rather than a fixed event-type
 // allowlist. This automatically includes future fan-to-creator earning sources,
 // while top-ups, refunds, admin credits, conversions and reversals stay out.
-export const CREATOR_EARNING_ROLE_PATTERN = /^CREATOR_(?:.*_)?EARNING$/;
+export const CREATOR_EARNING_ROLE_PATTERN = /^(?:CREATOR_(?:.*_)?|REFERRER_)EARNING$/;
 const PUBLIC_ACTOR = { actorAccountType: { $ne: "TEST" } };
-const REAL_FINANCE = { financialMode: { $ne: "TEST" } };
+
+export function creatorLedgerMode(accountType) {
+  return financialModeForAccountType(accountType) === "TEST" ? { financialMode: "TEST" } : { financialMode: { $ne: "TEST" } };
+}
 
 const SOURCE_COLORS = {
   Discover: "#9CCBFF",
@@ -112,6 +116,7 @@ export function sourceBucketForEntry(entry = {}) {
   if (["DA_CREATOR_EARNING", "CALL_CREATOR_EARNING"].includes(entry.entryType)) return "directAccess";
   if (entry.entryType === "CHAT_GIFT_EARNING") return "gifts";
   if (entry.entryType === "DREAM_CREATOR_EARNING") return "dreamSupport";
+  if (entry.entryType === "REFERRAL_CREATOR_EARNING") return "other";
   if (entry.entryType === "WORLD_CREATOR_EARNING" && (entry.metadata?.publicationKind === "EXPERIENCE" || entry.referenceType === "EXPERIENCE_PURCHASE")) return "unlocks";
   return "other";
 }
@@ -291,8 +296,10 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
     ProfileMedia.countDocuments({ user: creatorId, type: "image" }),
     ProfileRelationship.find({ ...PUBLIC_ACTOR, target: creatorId, type: "FOLLOW" }).select("actor createdAt").lean(),
     ProfileRelationship.countDocuments({ actor: creatorId, type: "FOLLOW" }),
-    User.findById(creatorId).select("avatar activeStatus").lean(),
+    User.findById(creatorId).select("avatar activeStatus accountType").lean(),
   ]);
+
+  const ledgerMode = creatorLedgerMode(creatorUser?.accountType);
 
   const publishedSeens = publications.filter((item) => item.kind === "SEEN" && item.status === "PUBLISHED");
   const publicationIds = publications.map((item) => item._id);
@@ -330,9 +337,9 @@ export async function buildCreatorDashboard(userId, now = new Date()) {
     AnalyticsEvent.countDocuments({ ...PUBLIC_ACTOR, eventType: "PROFILE_VIEW", entityId: String(creatorId), createdAt: { $gte: start, $lte: now } }),
     AnalyticsEvent.countDocuments({ ...PUBLIC_ACTOR, eventType: "PROFILE_VIEW", entityId: String(creatorId), createdAt: { $gte: previousStart, $lte: previousEnd } }),
     DAWindow.find({ creator: creatorId, openedAt: { $gte: start, $lte: now } }).select("openedAt firstCreatorReplyAt answeredAt status settlementStatus").lean(),
-    StarsLedgerEntry.find({ ...REAL_FINANCE, accountUser: creatorId, direction: "CREDIT", entryRole: CREATOR_EARNING_ROLE_PATTERN, createdAt: { $gte: start, $lte: now } }).lean(),
-    StarsLedgerEntry.find({ ...REAL_FINANCE, accountUser: creatorId, direction: "CREDIT", entryRole: CREATOR_EARNING_ROLE_PATTERN, createdAt: { $gte: previousStart, $lte: previousEnd } }).lean(),
-    StarsLedgerEntry.find({ ...REAL_FINANCE, accountUser: creatorId, direction: "CREDIT", entryRole: CREATOR_EARNING_ROLE_PATTERN }).sort({ createdAt: -1 }).limit(20).populate("counterpartyUser", "name username avatar isVerified").populate("publication", "title kind planet publishedSnapshot.metadata.title").lean(),
+    StarsLedgerEntry.find({ ...ledgerMode, accountUser: creatorId, direction: "CREDIT", entryRole: CREATOR_EARNING_ROLE_PATTERN, createdAt: { $gte: start, $lte: now } }).lean(),
+    StarsLedgerEntry.find({ ...ledgerMode, accountUser: creatorId, direction: "CREDIT", entryRole: CREATOR_EARNING_ROLE_PATTERN, createdAt: { $gte: previousStart, $lte: previousEnd } }).lean(),
+    StarsLedgerEntry.find({ ...ledgerMode, accountUser: creatorId, direction: "CREDIT", entryRole: CREATOR_EARNING_ROLE_PATTERN }).sort({ createdAt: -1 }).limit(20).populate("counterpartyUser", "name username avatar isVerified").populate("publication", "title kind planet publishedSnapshot.metadata.title").lean(),
     PremiumMembership.find({ creator: creatorId, status: { $in: ACTIVE_MEMBERSHIP_STATUSES } }).select("user starsPerPeriod status currentPeriodEnd").lean(),
     WorldEntitlement.distinct("user", { creator: creatorId, status: "ACTIVE", grantedAt: { $gte: weekStart, $lte: now } }),
     bestSeenFor(publishedSeens),

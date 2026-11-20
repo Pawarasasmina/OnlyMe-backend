@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CREATOR_EARNING_ROLE_PATTERN, percentageRows, sourceBucketForEntry, starsToUsd, totalContentViews } from "./creatorDashboardService.js";
+import { CREATOR_EARNING_ROLE_PATTERN, creatorLedgerMode, percentageRows, sourceBucketForEntry, starsToUsd, totalContentViews } from "./creatorDashboardService.js";
+
+test("creator dashboard reads the same financial ledger mode as the wallet", () => {
+  assert.deepEqual(creatorLedgerMode("TEST"), { financialMode: "TEST" });
+  assert.deepEqual(creatorLedgerMode("REAL"), { financialMode: { $ne: "TEST" } });
+  assert.deepEqual(creatorLedgerMode("SEED"), { financialMode: { $ne: "TEST" } });
+});
 
 test("creator dashboard includes every creator earning role and excludes non-earnings", () => {
-  ["CREATOR_EARNING", "CREATOR_DA_EARNING", "CREATOR_CALL_EARNING", "CREATOR_FUTURE_SOURCE_EARNING"]
+  ["CREATOR_EARNING", "CREATOR_DA_EARNING", "CREATOR_CALL_EARNING", "CREATOR_FUTURE_SOURCE_EARNING", "REFERRER_EARNING"]
     .forEach((role) => assert.match(role, CREATOR_EARNING_ROLE_PATTERN));
 
   ["FAN_REFUND", "WALLET_TOPUP", "ADMIN_CREDIT", "CREATOR_REVERSAL", "INCOME_CONVERSION_CREDIT"]
