@@ -23,3 +23,13 @@ test("registration rejects a malformed contact identifier", () => {
 test("registration preserves the validated signup birthday", () => {
   assert.equal(validateRegisterPayload(registration("maya@example.com")).dateOfBirth.toISOString().slice(0, 10), "1995-05-20");
 });
+
+test("registration rejects under-18 users and impossible calendar dates", () => {
+  const payload = registration("maya@example.com");
+  const now = new Date();
+  const minor = new Date(Date.UTC(now.getUTCFullYear() - 17, now.getUTCMonth(), now.getUTCDate()));
+  assert.throws(() => validateRegisterPayload({ ...payload, dateOfBirth: minor.toISOString().slice(0, 10) }), error => error.code === "MINIMUM_AGE_REQUIRED");
+  assert.throws(() => validateRegisterPayload({ ...payload, dateOfBirth: "2000-02-31" }), /valid birthday/);
+  const adult = new Date(Date.UTC(now.getUTCFullYear() - 18, now.getUTCMonth(), now.getUTCDate()));
+  assert.equal(validateRegisterPayload({ ...payload, dateOfBirth: adult.toISOString().slice(0, 10) }).dateOfBirth.getTime(), adult.getTime());
+});

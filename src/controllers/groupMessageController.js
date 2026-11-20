@@ -1,3 +1,4 @@
+import { emitPrivateMessage, emitPrivateMessages } from "../services/responsePrivacyService.js";
 import Publication from "../models/Publication.js";
 import PremiumMembership from "../models/PremiumMembership.js";
 import mongoose from "mongoose";
@@ -102,8 +103,8 @@ export const getGroupMessages = asyncHandler(async (req, res) => {
     if (!message.deliveredBy.some((item) => item.user.equals(req.user._id))) message.deliveredBy.push({ user: req.user._id, deliveredAt: receiptAt });
     if (!message.readBy.some((item) => item.user.equals(req.user._id))) message.readBy.push({ user: req.user._id, readAt: receiptAt });
     await message.save();
-    const payload = { groupId: String(group._id), messageId: String(message._id), deliveredBy: message.deliveredBy.map((item) => ({ userId: String(item.user), deliveredAt: item.deliveredAt })), readBy: message.readBy.map((item) => ({ userId: String(item.user), readAt: item.readAt })) };
-    for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId}`).emit("group:receipt", payload);
+    const payload = { groupId: String(group._id), messageId: String(message._id), senderId: String(message.sender?._id || message.sender), deliveredBy: message.deliveredBy.map((item) => ({ userId: String(item.user), deliveredAt: item.deliveredAt })), readBy: message.readBy.map((item) => ({ userId: String(item.user), readAt: item.readAt })) };
+    await emitPrivateMessages(req.app.get("io"), group.members, "group:receipt", payload);
   }
   const page = rows.slice(0, limit);
   await group.populate("members", "name username avatar role isVerified");
@@ -124,7 +125,7 @@ export const sendGroupMessage = asyncHandler(async (req, res) => {
   group.archivedBy = [];
   await group.save();
   const payload = serializeMediaMessage(message);
-  for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId}`).emit("group:message", { groupId: String(group._id), message: payload });
+  await emitPrivateMessages(req.app.get("io"), group.members, "group:message", { groupId: String(group._id), message: payload });
   return sendResponse(res, 201, "Group message sent", { message: payload });
 });
 
@@ -137,7 +138,7 @@ async function createGroupMedia(req, mediaType, media, body) {
   group.archivedBy = [];
   await group.save();
   const payload = serializeMediaMessage(message);
-  for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId}`).emit("group:message", { groupId: String(group._id), message: payload });
+  await emitPrivateMessages(req.app.get("io"), group.members, "group:message", { groupId: String(group._id), message: payload });
   return payload;
 }
 
@@ -183,7 +184,7 @@ export const updateGroupAvatar = asyncHandler(async (req, res) => {
   await group.save();
   await group.populate("members", "name username avatar role isVerified");
   const payload = serializeGroup(group, req.user._id);
-  for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId._id || memberId}`).emit("group:updated", payload);
+  for (const memberId of group.members) await emitPrivateMessage(req.app.get("io"), memberId._id || memberId, "group:updated", payload);
   return sendResponse(res, 200, "Group image updated", { group: payload });
 });
 
@@ -195,7 +196,7 @@ export const removeGroupAvatar = asyncHandler(async (req, res) => {
   await group.save();
   await group.populate("members", "name username avatar role isVerified");
   const payload = serializeGroup(group, req.user._id);
-  for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId._id || memberId}`).emit("group:updated", payload);
+  for (const memberId of group.members) await emitPrivateMessage(req.app.get("io"), memberId._id || memberId, "group:updated", payload);
   return sendResponse(res, 200, "Group image removed", { group: payload });
 });
 
@@ -256,7 +257,7 @@ export const setGroupMessageReaction = asyncHandler(async (req, res) => {
   message.reactions.push({ user: req.user._id, emoji });
   await message.save();
   const reactions = message.reactions.map((item) => ({ userId: String(item.user), emoji: item.emoji }));
-  for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId}`).emit("group:reaction", { groupId: String(group._id), messageId: String(message._id), reactions });
+  await emitPrivateMessages(req.app.get("io"), group.members, "group:reaction", { groupId: String(group._id), messageId: String(message._id), reactions });
   return sendResponse(res, 200, "Reaction saved", { reactions });
 });
 
@@ -269,8 +270,8 @@ export const markGroupMessageDelivered = asyncHandler(async (req, res) => {
   }
   if (req.body.read === true && !message.readBy.some((item) => item.user.equals(req.user._id))) message.readBy.push({ user: req.user._id, readAt: new Date() });
   await message.save();
-  const payload = { groupId: String(group._id), messageId: String(message._id), deliveredBy: message.deliveredBy.map((item) => ({ userId: String(item.user), deliveredAt: item.deliveredAt })), readBy: message.readBy.map((item) => ({ userId: String(item.user), readAt: item.readAt })) };
-  for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId}`).emit("group:receipt", payload);
+  const payload = { groupId: String(group._id), messageId: String(message._id), senderId: String(message.sender?._id || message.sender), deliveredBy: message.deliveredBy.map((item) => ({ userId: String(item.user), deliveredAt: item.deliveredAt })), readBy: message.readBy.map((item) => ({ userId: String(item.user), readAt: item.readAt })) };
+  await emitPrivateMessages(req.app.get("io"), group.members, "group:receipt", payload);
   return sendResponse(res, 200, req.body.read === true ? "Message seen" : "Message delivered", payload);
 });
 
@@ -283,8 +284,8 @@ export const syncGroupMessageDeliveries = asyncHandler(async (req, res) => {
     message.deliveredBy.push({ user: req.user._id, deliveredAt });
     await message.save();
     const group = groupById.get(String(message.group));
-    const payload = { groupId: String(message.group), messageId: String(message._id), deliveredBy: message.deliveredBy.map((item) => ({ userId: String(item.user), deliveredAt: item.deliveredAt })), readBy: message.readBy.map((item) => ({ userId: String(item.user), readAt: item.readAt })) };
-    for (const memberId of group?.members || []) req.app.get("io")?.to(`user:${memberId}`).emit("group:receipt", payload);
+    const payload = { groupId: String(message.group), messageId: String(message._id), senderId: String(message.sender?._id || message.sender), deliveredBy: message.deliveredBy.map((item) => ({ userId: String(item.user), deliveredAt: item.deliveredAt })), readBy: message.readBy.map((item) => ({ userId: String(item.user), readAt: item.readAt })) };
+    await emitPrivateMessages(req.app.get("io"), group?.members || [], "group:receipt", payload);
   }
   return sendResponse(res, 200, "Group deliveries synchronized", { deliveredCount: messages.length });
 });
@@ -296,7 +297,7 @@ export const removeGroupMessageReaction = asyncHandler(async (req, res) => {
   message.reactions = message.reactions.filter((item) => !item.user.equals(req.user._id));
   await message.save();
   const reactions = message.reactions.map((item) => ({ userId: String(item.user), emoji: item.emoji }));
-  for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId}`).emit("group:reaction", { groupId: String(group._id), messageId: String(message._id), reactions });
+  await emitPrivateMessages(req.app.get("io"), group.members, "group:reaction", { groupId: String(group._id), messageId: String(message._id), reactions });
   return sendResponse(res, 200, "Reaction removed", { reactions });
 });
 
@@ -312,7 +313,7 @@ export const deleteGroupMessage = asyncHandler(async (req, res) => {
   } else message.deletedFor.addToSet(req.user._id);
   await message.save();
   const payload = { groupId: String(group._id), messageId: String(message._id), scope, deletedAt: message.deletedAt || null, hiddenForUserId: scope === "me" ? String(req.user._id) : null };
-  for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId}`).emit("group:message-deleted", payload);
+  await emitPrivateMessages(req.app.get("io"), group.members, "group:message-deleted", payload);
   return sendResponse(res, 200, scope === "everyone" ? "Message unsent" : "Message deleted for you", payload);
 });
 
@@ -340,7 +341,7 @@ export const forwardGroupMessage = asyncHandler(async (req, res) => {
       const group = await getGroup(target.id, req.user._id);
       const message = await GroupMessage.create({ group: group._id, sender: req.user._id, body: source.body, mediaType: source.mediaType, image: source.image, audio: source.audio, video: source.video, sharedAttachment: source.sharedAttachment, forwardedFrom: source._id, deliveredBy: [{ user: req.user._id }], readBy: [{ user: req.user._id }] });
       const payload = serializeMediaMessage(message);
-      for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId}`).emit("group:message", { groupId: String(group._id), message: payload });
+      await emitPrivateMessages(req.app.get("io"), group.members, "group:message", { groupId: String(group._id), message: payload });
       continue;
     }
     if (!mongoose.isValidObjectId(target.id) || String(target.id) === String(req.user._id)) throw new ApiError(400, "Invalid forwarding account");
@@ -358,7 +359,7 @@ export const forwardGroupMessage = asyncHandler(async (req, res) => {
     if (conversation.status === "DECLINED") throw new ApiError(403, "This message request was declined");
     const message = await Message.create({ sender: req.user._id, recipient: other._id, body: source.body, mediaType: source.mediaType, image: source.image, audio: source.audio, video: source.video, sharedAttachment: source.sharedAttachment, forwardedFrom: source._id });
     const payload = { id: String(message._id), senderId: String(req.user._id), recipientId: String(other._id), body: message.body, mediaType: message.mediaType, image: source.image, audio: source.audio, video: source.video, sharedAttachment: source.sharedAttachment, forwarded: true, reactions: [], createdAt: message.createdAt };
-    req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
+    await emitPrivateMessage(req.app.get("io"), other._id, "message:new", { message: payload, participant: person(req.user), conversationStatus: conversation.status });
   }
   return sendResponse(res, 201, "Message forwarded", {});
 });

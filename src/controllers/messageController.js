@@ -1,3 +1,6 @@
+import { isAtSeen } from "../services/presenceService.js";
+import { emitPrivateMessage } from "../services/responsePrivacyService.js";
+import { serializeProfileStatus } from "../services/statusService.js";
 import { findConversationState, giftConversationState } from "../services/giftConversationService.js";
 import { publicWallModerationFilter } from "../services/wallModerationAccess.js";
 import Dream from "../models/Dream.js";
@@ -40,9 +43,9 @@ import { fingerprint, idempotencyKey } from "../validators/financialValidator.js
 import { giftAllowedForRecipient, giftsForRecipient, giftAnimation, serializeGift } from "../services/giftPreferenceService.js";
 import { recordPrivateShare } from "../services/contentShareService.js";
 
-const userFields = "name username avatar role creatorApprovalStatus isVerified status lastSeenAt";
+const userFields = "name username avatar role creatorApprovalStatus isVerified status read_receipts activity_status activeStatus";
 const isApprovedCreator = (user) => user?.creatorApprovalStatus === "approved";
-const person = (user, reason = "") => user && ({ id: user._id.toString(), displayName: user.name, name: user.name, username: user.username, avatarUrl: user.avatar || null, role: user.creatorApprovalStatus === "approved" ? "creator" : "fan", isCreator: user.creatorApprovalStatus === "approved", isVerified: Boolean(user.isVerified), lastSeenAt: user.lastSeenAt || null, reason });
+const person = (user, reason = "") => user && ({ id: user._id.toString(), displayName: user.name, name: user.name, username: user.username, avatarUrl: user.avatar || null, role: user.creatorApprovalStatus === "approved" ? "creator" : "fan", isCreator: user.creatorApprovalStatus === "approved", isVerified: Boolean(user.isVerified), activeStatus: serializeProfileStatus(user.activeStatus), atSeenActive: Boolean(user.activeStatus?.isActive && isAtSeen(user.activeStatus)), reason });
 const REACTION_EMOJIS = ["❤️", "😂", "😮", "😢", "😡", "👍"];
 const DISAPPEARING_SECONDS = new Set([0, 3, 10, 30]);
 const disappearingSeconds = (value) => {
@@ -74,7 +77,7 @@ const serializedSharedContent = (sharedContent, deletedAt = null) => {
     } : null,
   };
 };
-const serializedMessage = (message) => ({ id: message._id.toString(), clientMessageId: message.clientMessageId || null, senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "This message was deleted" : message.body, mediaType: message.mediaType || "text", messageKind: message.messageKind || "USER_MESSAGE", messageChannel: message.messageChannel || "STANDARD", directAccessWindowId: message.directAccessWindow ? String(message.directAccessWindow) : null, forwarded: Boolean(message.forwardedFrom), deletedAt: message.deletedAt || null, gift: !message.deletedAt && message.mediaType === "gift" && message.gift?.giftId ? { id: String(message.gift.giftId), name: message.gift.name, caption: message.gift.caption || "", stars: message.gift.stars, imageUrl: message.gift.imageUrl, displayScale: message.gift.displayScale || 100, imagePositionX: message.gift.imagePositionX || 0, imagePositionY: message.gift.imagePositionY || 0 } : null, image: !message.deletedAt && message.mediaType === "image" && message.image?.assetId ? { url: messageImageUrl(message.image), width: message.image.width, height: message.image.height } : null, audio: !message.deletedAt && message.mediaType === "audio" && message.audio?.assetId ? { url: messageVoiceUrl(message.audio), duration: message.audio.duration, waveform: message.audio.waveform || [] } : null, video: !message.deletedAt && message.mediaType === "video" && message.video?.assetId ? { url: messageVideoUrl(message.video), duration: message.video.duration, width: message.video.width, height: message.video.height } : null, readAt: message.readAt || null, createdAt: message.createdAt, replyTo: serializedReply(message.replyTo), reactions: message.deletedAt ? [] : (message.reactions || []).map((reaction) => ({ userId: String(reaction.user?._id || reaction.user), emoji: reaction.emoji })), storyReply: !message.deletedAt && message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, questionPrompt: message.storyReply.questionPrompt || "", expiresAt: message.storyReply.expiresAt || null } : null, sharedContent: serializedSharedContent(message.sharedContent, message.deletedAt), disappearAfterSeconds: message.disappearAfterSeconds ?? null, openedAt: message.openedAt || null, expiresAt: message.expiresAt || null });
+const serializedMessage = (message) => ({ id: message._id.toString(), clientMessageId: message.clientMessageId || null, senderId: (message.sender?._id || message.sender).toString(), recipientId: (message.recipient?._id || message.recipient).toString(), body: message.deletedAt ? "This message was deleted" : message.body, mediaType: message.mediaType || "text", messageKind: message.messageKind || "USER_MESSAGE", messageChannel: message.messageChannel || "STANDARD", directAccessWindowId: message.directAccessWindow ? String(message.directAccessWindow) : null, forwarded: Boolean(message.forwardedFrom), deletedAt: message.deletedAt || null, gift: !message.deletedAt && message.mediaType === "gift" && message.gift?.giftId ? { id: String(message.gift.giftId), name: message.gift.name, caption: message.gift.caption || "", stars: message.gift.stars, imageUrl: message.gift.imageUrl, displayScale: message.gift.displayScale || 100, imagePositionX: message.gift.imagePositionX || 0, imagePositionY: message.gift.imagePositionY || 0 } : null, image: !message.deletedAt && message.mediaType === "image" && message.image?.assetId ? { url: messageImageUrl(message.image), width: message.image.width, height: message.image.height } : null, audio: !message.deletedAt && message.mediaType === "audio" && message.audio?.assetId ? { url: messageVoiceUrl(message.audio), duration: message.audio.duration, waveform: message.audio.waveform || [] } : null, video: !message.deletedAt && message.mediaType === "video" && message.video?.assetId ? { url: messageVideoUrl(message.video), duration: message.video.duration, width: message.video.width, height: message.video.height } : null, readAt: message.readAt || null, delivered: Boolean(message.deliveredAt || message.readAt), createdAt: message.createdAt, replyTo: serializedReply(message.replyTo), reactions: message.deletedAt ? [] : (message.reactions || []).map((reaction) => ({ userId: String(reaction.user?._id || reaction.user), emoji: reaction.emoji })), storyReply: !message.deletedAt && message.storyReply?.story ? { storyId: String(message.storyReply.story), imageUrl: message.storyReply.imageUrl, caption: message.storyReply.caption, questionPrompt: message.storyReply.questionPrompt || "", expiresAt: message.storyReply.expiresAt || null } : null, sharedContent: serializedSharedContent(message.sharedContent, message.deletedAt), disappearAfterSeconds: message.disappearAfterSeconds ?? null, openedAt: message.openedAt || null, expiresAt: message.expiresAt || null });
 const protectedMessage = (payload) => payload.disappearAfterSeconds === null ? payload : { ...payload, body: "Disappearing message", image: null, audio: null, video: null, gift: null, sharedContent: null, storyReply: null, locked: true };
 const validId = (value) => {
   if (!mongoose.isValidObjectId(value)) throw new ApiError(400, "Invalid account id");
@@ -475,10 +478,11 @@ export const listMessages = asyncHandler(async (req, res) => {
       { sender: other._id, recipient: req.user._id, readAt: null },
       { $set: { readAt } },
     );
-    if (result.modifiedCount > 0) {
-      req.app.get("io")?.to(`user:${other._id}`).emit("messages:read", {
+    if (result.modifiedCount > 0 && req.user.read_receipts !== false && other.read_receipts !== false) {
+      await emitPrivateMessage(req.app.get("io"), other._id, "messages:read", {
         byUserId: req.user._id.toString(),
-        readAt,
+        senderId: String(other._id), recipientId: String(req.user._id),
+        readAt: true,
       });
     }
   }
@@ -642,9 +646,9 @@ const [record] = await ChatGift.create([{ _id: recordId, message: chatMessage._i
     await Notification.create([{ user: other._id, type: "chat_gift", title: `${req.user.name} sent you ${gift.name} (${gift.stars} coins)`, dedupeKey: `chat-gift:${record._id}` }], { session });
 return { resultReference: record._id, gift: { id: gift._id, name: gift.name, caption: gift.caption || "", stars: gift.stars, imageUrl: gift.image.url, displayScale: gift.displayScale, imagePositionX: gift.imagePositionX || 0, imagePositionY: gift.imagePositionY || 0, ...animation }, sourceType, note: messageText, visibility, wallet: safeWallet(moved.debit.wallet, command.financialMode), message: serializedMessage(chatMessage), conversationStatus: conversation?.status || null };
   });
-  if (result.message) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(result.message), participant: person(req.user), conversationStatus: result.conversationStatus || "ACTIVE" });
-  req.app.get("io")?.to(`user:${other._id}`).emit("activity:updated");
-  req.app.get("io")?.to(`user:${req.user._id}`).emit("activity:updated");
+  if (result.message) await emitPrivateMessage(req.app.get("io"), other._id, "message:new", { message: protectedMessage(result.message), participant: person(req.user), conversationStatus: result.conversationStatus || "ACTIVE" });
+  await emitPrivateMessage(req.app.get("io"), other._id, "activity:updated");
+  await emitPrivateMessage(req.app.get("io"), req.user._id, "activity:updated");
   return sendResponse(res, 201, "Gift sent", result);
 });
 
@@ -702,7 +706,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
     if (replyTo && created.populate) await created.populate("replyTo", "sender body deletedAt");
     const payload = serializedMessage(created);
     const conversationStatus = conversation?.status || "ACTIVE";
-    if (createdNow) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus });
+    if (createdNow) await emitPrivateMessage(req.app.get("io"), other._id, "message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus });
     return sendResponse(res, createdNow ? 201 : 200, createdNow ? "Direct Access message sent" : "Message already sent", { message: payload, conversationStatus, directAccessWindow: serializeDAWindow(directAccessWindow), idempotentReplay: !createdNow });
   }
   const directAccess = await reserveDirectAccessMessage({
@@ -732,7 +736,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
   const payload = serializedMessage(created);
   const conversationStatus = conversation?.status || "ACTIVE";
   if (createdNow) {
-    req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus });
+    await emitPrivateMessage(req.app.get("io"), other._id, "message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus });
   }
   return sendResponse(res, createdNow ? 201 : 200, createdNow ? conversationStatus === "REQUEST" ? "Message request sent" : "Message sent" : "Message already sent", { message: payload, conversationStatus, directAccessWindow: serializeDAWindow(directAccessWindow), idempotentReplay: !createdNow });
 });
@@ -756,7 +760,7 @@ export const sendVoiceMessage = asyncHandler(async (req, res) => {
     const committed = await createDirectAccessMessageAtomic({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other, message: { clientMessageId, body: "Voice message", mediaType: "audio", ppm: false, audio: { ...audio, waveform }, disappearAfterSeconds } });
     emitDirectAccessUpdate(req, committed.window);
     const payload = serializedMessage(committed.message);
-    if (!committed.replay) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
+    if (!committed.replay) await emitPrivateMessage(req.app.get("io"), other._id, "message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
     return sendResponse(res, committed.replay ? 200 : 201, committed.replay ? "Voice message already sent" : "Voice message sent", { message: payload, conversationStatus: conversation.status, directAccessWindow: serializeDAWindow(committed.window), idempotentReplay: committed.replay });
   }
   const directAccess = await reserveDirectAccessMessage({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other });
@@ -770,7 +774,7 @@ export const sendVoiceMessage = asyncHandler(async (req, res) => {
   const directAccessWindow = await settleDirectAccessReply(directAccess, req.user);
   emitDirectAccessUpdate(req, directAccessWindow);
   const payload = serializedMessage(created);
-  req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
+  await emitPrivateMessage(req.app.get("io"), other._id, "message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
   return sendResponse(res, 201, conversation.status === "REQUEST" ? "Voice-message request sent" : "Voice message sent", { message: payload, conversationStatus: conversation.status, directAccessWindow: serializeDAWindow(directAccessWindow) });
 });
 
@@ -790,7 +794,7 @@ export const sendVideoNote = asyncHandler(async (req, res) => {
     const committed = await createDirectAccessMessageAtomic({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other, message: { clientMessageId, body: "Video note", mediaType: "video", ppm: false, video, disappearAfterSeconds } });
     emitDirectAccessUpdate(req, committed.window);
     const payload = serializedMessage(committed.message);
-    if (!committed.replay) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
+    if (!committed.replay) await emitPrivateMessage(req.app.get("io"), other._id, "message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
     return sendResponse(res, committed.replay ? 200 : 201, committed.replay ? "Video note already sent" : "Video note sent", { message: payload, conversationStatus: conversation.status, directAccessWindow: serializeDAWindow(committed.window), idempotentReplay: committed.replay });
   }
   const directAccess = await reserveDirectAccessMessage({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other });
@@ -804,7 +808,7 @@ export const sendVideoNote = asyncHandler(async (req, res) => {
   const directAccessWindow = await settleDirectAccessReply(directAccess, req.user);
   emitDirectAccessUpdate(req, directAccessWindow);
   const payload = serializedMessage(created);
-  req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
+  await emitPrivateMessage(req.app.get("io"), other._id, "message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
   return sendResponse(res, 201, conversation.status === "REQUEST" ? "Video-note request sent" : "Video note sent", { message: payload, conversationStatus: conversation.status, directAccessWindow: serializeDAWindow(directAccessWindow) });
 });
 
@@ -827,7 +831,7 @@ export const sendImageMessage = asyncHandler(async (req, res) => {
     const committed = await createDirectAccessMessageAtomic({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other, message: { clientMessageId, body: caption || "Image", mediaType: "image", image, disappearAfterSeconds } });
     emitDirectAccessUpdate(req, committed.window);
     const payload = serializedMessage(committed.message);
-    if (!committed.replay) req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
+    if (!committed.replay) await emitPrivateMessage(req.app.get("io"), other._id, "message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
     return sendResponse(res, committed.replay ? 200 : 201, committed.replay ? "Image already sent" : "Image sent", { message: payload, conversationStatus: conversation.status, directAccessWindow: serializeDAWindow(committed.window), idempotentReplay: committed.replay });
   }
   const directAccess = await reserveDirectAccessMessage({ windowId: req.body.directAccessWindowId, sender: req.user, recipient: other });
@@ -841,7 +845,7 @@ export const sendImageMessage = asyncHandler(async (req, res) => {
   const directAccessWindow = await settleDirectAccessReply(directAccess, req.user);
   emitDirectAccessUpdate(req, directAccessWindow);
   const payload = serializedMessage(created);
-  req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
+  await emitPrivateMessage(req.app.get("io"), other._id, "message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
   return sendResponse(res, 201, conversation.status === "REQUEST" ? "Image-message request sent" : "Image sent", { message: payload, conversationStatus: conversation.status, directAccessWindow: serializeDAWindow(directAccessWindow) });
 });
 
@@ -855,7 +859,7 @@ export const openDisappearingMessage = asyncHandler(async (req, res) => {
     message.expiresAt = new Date(now.getTime() + (message.disappearAfterSeconds === 0 ? 5 * 60 : message.disappearAfterSeconds) * 1000);
     await message.save();
   }
-  req.app.get("io")?.to(`user:${message.sender}`).emit("message:disappearing-opened", { messageId: String(message._id), openedAt: message.openedAt, expiresAt: message.expiresAt });
+  await emitPrivateMessage(req.app.get("io"), message.sender, "message:disappearing-opened", { messageId: String(message._id), openedAt: message.openedAt, expiresAt: message.expiresAt });
   return sendResponse(res, 200, "Disappearing message opened", { message: serializedMessage(message) });
 });
 
@@ -890,7 +894,7 @@ export const deleteMessage = asyncHandler(async (req, res) => {
       await message.save();
     }
     const payload = { messageId: String(message._id), hiddenForUserId: String(req.user._id) };
-    req.app.get("io")?.to(`user:${req.user._id}`).emit("message:hidden", payload);
+    await emitPrivateMessage(req.app.get("io"), req.user._id, "message:hidden", payload);
     return sendResponse(res, 200, "Message deleted for you", payload);
   }
   if (!message.sender.equals(req.user._id) || message.deletedAt) {
@@ -921,7 +925,7 @@ export const deleteConversation = asyncHandler(async (req, res) => {
     hiddenForUserId: String(req.user._id),
     hiddenMessageCount: result.modifiedCount,
   };
-  req.app.get("io")?.to(`user:${req.user._id}`).emit("conversation:hidden", payload);
+  await emitPrivateMessage(req.app.get("io"), req.user._id, "conversation:hidden", payload);
   return sendResponse(res, 200, "Conversation deleted for you", payload);
 });
 
@@ -979,7 +983,7 @@ export const forwardMessage = asyncHandler(async (req, res) => {
       group.archivedBy = [];
       await group.save();
       const payload = { id: String(forwarded._id), groupId: String(group._id), senderId: String(req.user._id), body: forwarded.body, forwarded: true, reactions: [], createdAt: forwarded.createdAt };
-      for (const memberId of group.members) req.app.get("io")?.to(`user:${memberId}`).emit("group:message", { groupId: String(group._id), message: payload });
+      for (const memberId of group.members) await emitPrivateMessage(req.app.get("io"), memberId, "group:message", { groupId: String(group._id), message: payload });
       results.push({ type: "group", id: String(group._id), message: payload });
       continue;
     }
@@ -988,7 +992,7 @@ export const forwardMessage = asyncHandler(async (req, res) => {
     conversation = await prepareConversationForSend(req.user, other, conversation);
     const forwarded = await Message.create({ sender: req.user._id, recipient: other._id, body: source.body, mediaType: source.mediaType, image: source.image, audio: source.audio, video: source.video, sharedAttachment: source.sharedAttachment, forwardedFrom: source._id });
     const payload = serializedMessage(forwarded);
-    req.app.get("io")?.to(`user:${other._id}`).emit("message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
+    await emitPrivateMessage(req.app.get("io"), other._id, "message:new", { message: protectedMessage(payload), participant: person(req.user), conversationStatus: conversation.status });
     results.push({ type: "direct", id: String(other._id), message: payload });
   }
   return sendResponse(res, 201, "Message forwarded", { results });
@@ -1079,7 +1083,7 @@ export const blockMessageAccount = asyncHandler(async (req, res) => {
     { upsert: true },
   );
   const payload = { otherUserId: String(req.user._id), blocked: true };
-  req.app.get("io")?.to(`user:${other._id}`).emit("account:block", payload);
+  await emitPrivateMessage(req.app.get("io"), other._id, "account:block", payload);
   return sendResponse(res, 200, "Account blocked", { blockedByMe: true, blockedMe: false });
 });
 
@@ -1087,7 +1091,7 @@ export const unblockMessageAccount = asyncHandler(async (req, res) => {
   validId(req.params.userId);
   const result = await UserBlock.deleteOne({ blocker: req.user._id, blocked: req.params.userId });
   if (!result.deletedCount) throw new ApiError(404, "Blocked account not found");
-  req.app.get("io")?.to(`user:${req.params.userId}`).emit("account:block", { otherUserId: String(req.user._id), blocked: false });
+  await emitPrivateMessage(req.app.get("io"), req.params.userId, "account:block", { otherUserId: String(req.user._id), blocked: false });
   return sendResponse(res, 200, "Account unblocked", { blockedByMe: false });
 });
 
@@ -1142,7 +1146,7 @@ export const acceptMessageRequest = asyncHandler(async (req, res) => {
     { new: true },
   );
   if (!conversation) throw new ApiError(404, "Message request not found");
-  req.app.get("io")?.to(`user:${req.params.userId}`).emit("conversation:status", { otherUserId: req.user._id.toString(), status: "ACTIVE" });
+  await emitPrivateMessage(req.app.get("io"), req.params.userId, "conversation:status", { otherUserId: req.user._id.toString(), status: "ACTIVE" });
   return sendResponse(res, 200, "Message request accepted", { status: conversation.status });
 });
 
@@ -1154,7 +1158,7 @@ export const declineMessageRequest = asyncHandler(async (req, res) => {
     { new: true },
   );
   if (!conversation) throw new ApiError(404, "Message request not found");
-  req.app.get("io")?.to(`user:${req.params.userId}`).emit("conversation:status", { otherUserId: req.user._id.toString(), status: "DECLINED" });
+  await emitPrivateMessage(req.app.get("io"), req.params.userId, "conversation:status", { otherUserId: req.user._id.toString(), status: "DECLINED" });
   return sendResponse(res, 200, "Message request declined", { status: conversation.status });
 });
 

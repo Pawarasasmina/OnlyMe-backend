@@ -3,7 +3,7 @@ import { serializeContent } from "./contentAccessService.js";
 import { serializePublication } from "./publicationAccessService.js";
 import { serializeProfileStatus } from "./statusService.js";
 import { profileAccountType, profileCategory } from "../constants/profileCategoryConstants.js";
-import { callsAllowedForCountries } from "./callAvailabilityService.js";
+import { callsAllowedWithPolicy } from "./callAvailabilityService.js";
 
 const safeHttpUrl = (value) => {
   try {
@@ -43,9 +43,9 @@ function completion(owner, roleProfile) {
   return { completed, total: checks.length, percentage: Math.round((completed / checks.length) * 100) };
 }
 
-export function serializeUnifiedProfile({ activeStoryCount = 0, content = [], entitledExperienceIds = new Set(), entitledSeenIds = new Set(), experienceOwnerCounts = new Map(), experiences = [], followerCount = 0, followingCount = 0, seenByCount = 0, media = [], membershipIncludedExperienceIds = new Set(), owner, ownWallPosts = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, profileStories = [], publishedContentCount = content.length, reposts = [], roleProfile, seenOwnerCounts = new Map(), seens = [], series = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, typicalReplyHours = null, viewer, viewerRelationships = [], viewerSeeSignalSent = false, worldMemberCounts = new Map(), worldMemberPreviews = new Map(), worldOnlineMemberCounts = new Map(), worldMonthlyIncomeUsd = new Map() }) {
+export function serializeUnifiedProfile({ blockedCallCountries, activeStoryCount = 0, content = [], entitledExperienceIds = new Set(), entitledSeenIds = new Set(), experienceOwnerCounts = new Map(), experiences = [], followerCount = 0, followingCount = 0, seenByCount = 0, media = [], membershipIncludedExperienceIds = new Set(), owner, ownWallPosts = [], pinnedMessageGroup = null, planets = [], premiumMembershipPublicationId = null, profileStories = [], publishedContentCount = content.length, reposts = [], roleProfile, seenOwnerCounts = new Map(), seens = [], series = [], sharedSeens = [], sharedWallPosts = [], supporterCount = 0, typicalReplyHours = null, viewer, viewerRelationships = [], viewerSeeSignalSent = false, worldMemberCounts = new Map(), worldMemberPreviews = new Map(), worldOnlineMemberCounts = new Map(), worldMonthlyIncomeUsd = new Map() }) {
   const capabilities = profileViewerCapabilities(owner, viewer, roleProfile);
-  const callsAvailable = callsAllowedForCountries(owner.monetization?.country, roleProfile?.country);
+  const callsAvailable = callsAllowedWithPolicy([owner.monetization?.country, roleProfile?.country], blockedCallCountries);
   const creatorEnabled = owner.creatorApprovalStatus === "approved" || ["creator", "business"].includes(owner.profileType);
   const contentViewer = capabilities.isOwner ? viewer : null;
   const socialLinks = creatorEnabled

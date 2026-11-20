@@ -1,5 +1,6 @@
 import ApiError from "../utils/ApiError.js";
 import { validateDisplayName, validateUsername } from "./profileValidator.js";
+import { ageOn } from "../services/monetizationEligibilityService.js";
 
 export function normalizePhone(value) {
   const input = String(value || "").trim();
@@ -37,9 +38,10 @@ export function validateRegisterPayload(payload) {
   }
 
   const birthday = new Date(dateOfBirth);
-  if (Number.isNaN(birthday.getTime()) || birthday > new Date()) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateOfBirth)) || Number.isNaN(birthday.getTime()) || birthday.toISOString().slice(0, 10) !== dateOfBirth || birthday > new Date()) {
     throw new ApiError(400, "Enter a valid birthday");
   }
+  if (ageOn(birthday) < 18) throw new ApiError(400, "You must be 18 or older to use @seen", "MINIMUM_AGE_REQUIRED");
 
   return {
     name: validateDisplayName(name),

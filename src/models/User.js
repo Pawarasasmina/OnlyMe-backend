@@ -135,6 +135,13 @@ const userSchema = new mongoose.Schema(
     shareCountingRestrictedAt: { type: Date, default: null, index: true },
     shareCountingRestrictionReason: { type: String, trim: true, maxlength: 120, default: "" },
     lastSeenAt: { type: Date, default: null },
+    activity_status: { type: Boolean, default: true },
+    read_receipts: { type: Boolean, default: true },
+    presenceState: { type: new mongoose.Schema({
+      foregroundAt: Date, lastActivityAt: Date, pausedAt: Date,
+      offerAtSeen: { type: Boolean, default: false },
+      revision: { type: Number, default: 0 },
+    }, { _id: false }), default: () => ({}), select: false },
     pinnedMessageGroup: { type: mongoose.Schema.Types.ObjectId, ref: "GroupConversation", default: null },
     activeStatus: {
       emoji: { type: String, trim: true, maxlength: 8, default: "" },

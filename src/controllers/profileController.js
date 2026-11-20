@@ -1,3 +1,5 @@
+import { notifyPrivacyRefresh } from "../services/responsePrivacyService.js";
+import { serializeProfileStatus } from "../services/statusService.js";
 import Conversation from "../models/Conversation.js";
 import GroupConversation from "../models/GroupConversation.js";
 import mongoose from "mongoose";
@@ -90,8 +92,9 @@ function accountDetails(user) {
     profilePhoto: user.avatar,
     isVerified: user.isVerified,
     status: user.status,
-    activeStatus: user.activeStatus,
-    lastSeenAt: user.lastSeenAt,
+    activeStatus: serializeProfileStatus(user.activeStatus),
+    activity_status: user.activity_status !== false,
+    read_receipts: user.read_receipts !== false,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
@@ -280,11 +283,28 @@ export const getMyPrivacySettings = asyncHandler(async (req, res) => {
     memberNumber: req.user.memberNumber,
     showMemberNumber: req.user.showMemberNumber !== false,
     profileVisibility: profile.profileVisibility || (effectiveProfileRole(req.user) === "creator" ? "public" : "private"),
-    privacySettings: profile.privacySettings || {},
+    privacySettings: { ...(profile.privacySettings?.toObject?.() || profile.privacySettings || {}), activityStatus: req.user.activity_status !== false, readReceipts: req.user.read_receipts !== false },
   });
 });
 
 export const updateMyPrivacySettings = asyncHandler(async (req, res) => {
+  const input = req.body.privacySettings || req.body;
+  const preferences = {};
+  for (const [key, camel] of [["activity_status", "activityStatus"], ["read_receipts", "readReceipts"]]) {
+    const value = Object.hasOwn(req.body, key) ? req.body[key] : input[camel];
+    if (value !== undefined) {
+      if (typeof value !== "boolean") throw new ApiError(400, "Privacy switches must be true or false");
+      preferences[key] = value;
+    }
+  }
+  if (Object.keys(preferences).length) {
+    await User.updateOne({ _id: req.user._id }, { $set: preferences });
+    Object.assign(req.user, preferences);
+    req.app.get("io")?.to(`user:${req.user._id}`).emit("privacy:updated", preferences);
+    // A payload-free refresh removes cached ticks/presence without exposing who changed a preference.
+    await notifyPrivacyRefresh(req.app.get("io"), req.user._id);
+  }
+
   if (Object.hasOwn(req.body, "showMemberNumber")) {
     if (typeof req.body.showMemberNumber !== "boolean") throw new ApiError(400, "Show my number must be true or false");
     await User.updateOne({ _id: req.user._id }, { $set: { showMemberNumber: req.body.showMemberNumber } });
@@ -294,7 +314,7 @@ export const updateMyPrivacySettings = asyncHandler(async (req, res) => {
       memberNumber: req.user.memberNumber,
       showMemberNumber: req.body.showMemberNumber,
       profileVisibility: profile.profileVisibility,
-      privacySettings: profile.privacySettings || {},
+      privacySettings: { ...(profile.privacySettings?.toObject?.() || profile.privacySettings || {}), activityStatus: req.user.activity_status !== false, readReceipts: req.user.read_receipts !== false },
     });
   }
   const profileRole = effectiveProfileRole(req.user);
@@ -316,7 +336,7 @@ export const updateMyPrivacySettings = asyncHandler(async (req, res) => {
     memberNumber: req.user.memberNumber,
     showMemberNumber: req.user.showMemberNumber !== false,
     profileVisibility: profile.profileVisibility || (effectiveProfileRole(req.user) === "creator" ? "public" : "private"),
-    privacySettings: profile.privacySettings || {},
+    privacySettings: { ...(profile.privacySettings?.toObject?.() || profile.privacySettings || {}), activityStatus: req.user.activity_status !== false, readReceipts: req.user.read_receipts !== false },
   });
 });
 

@@ -1,3 +1,5 @@
+import { deliverMessages } from "../services/messageDeliveryService.js";
+import { ownPresence, touchPresence, presenceForViewer, pauseIdleAtSeen } from "../services/presenceService.js";
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 import UserBlock from "../models/UserBlock.js";
@@ -27,46 +29,56 @@ function scheduleRingTimeout(io, call, timeoutMs = 30000) {
 const isOnline = (userId) => [...(userSockets.get(userId)?.values() || [])].some(Boolean);
 const cookieValue = (header, name) => String(header || "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1);
 
-async function broadcastPresence(io, userId, payload) {
-  const blocks = await UserBlock.find({
-    $or: [{ blocker: userId }, { blocked: userId }],
-  }).select("blocker blocked").lean();
-  const blockedIds = new Set(blocks.flatMap((item) => [String(item.blocker), String(item.blocked)]));
-  for (const connectedUserId of userSockets.keys()) {
-    if (connectedUserId !== String(userId) && !blockedIds.has(connectedUserId)) {
-      io.to(`user:${connectedUserId}`).emit("presence:update", payload);
-    }
+async function broadcastPresence(io, userId) {
+  const watchers = new Set([...io.sockets.sockets.values()].filter(socket => socket.data.presenceTargets?.has(String(userId))).map(socket => String(socket.user._id)));
+  for (const viewerId of watchers) {
+    const [payload] = await presenceForViewer(viewerId, [String(userId)]);
+    if (payload) io.to(`user:${viewerId}`).emit("presence:update", payload);
   }
 }
 
-async function setSocketActivity(io, socket, active) {
-  const userId = socket.user._id.toString();
+async function setSocketActivity(io, socket, active, interaction = false) {
+  const userId = String(socket.user._id);
   const sockets = userSockets.get(userId) || new Map();
-  const wasOnline = [...sockets.values()].some(Boolean);
   sockets.set(socket.id, active);
   userSockets.set(userId, sockets);
-  const online = isOnline(userId);
-  if (online === wasOnline) return;
-  if (online) {
-    await broadcastPresence(io, userId, { userId, online: true, lastSeenAt: socket.user.lastSeenAt || null });
-    return;
+  if (active) {
+    const user = await touchPresence(userId, { foreground: true, interaction });
+    if (user) {
+      const previous = Boolean(socket.user.activeStatus?.isActive);
+      socket.user.activeStatus = user.activeStatus;
+      const state = ownPresence(user);
+      socket.emit("presence:self", state);
+      await deliverMessages(io, userId);
+      if (previous !== Boolean(user.activeStatus?.isActive)) io.emit("status:updated", { userId, activeStatus: state.activeStatus });
+    }
   }
-  const lastSeenAt = new Date();
-  await User.updateOne({ _id: userId }, { $set: { lastSeenAt } }).catch(() => {});
-  await broadcastPresence(io, userId, { userId, online: false, lastSeenAt });
+  await broadcastPresence(io, userId);
 }
 
-function trackSocketActivity(io, socket, active) {
+function trackSocketActivity(io, socket, active, interaction = false) {
   clearTimeout(socket.data.presenceExpiry);
-  socket.data.presenceExpiry = undefined;
-  setSocketActivity(io, socket, active);
+  setSocketActivity(io, socket, active, interaction).catch(() => {});
   if (active) {
-    socket.data.presenceExpiry = setTimeout(() => setSocketActivity(io, socket, false), 20000);
+    socket.data.presenceExpiry = setTimeout(() => setSocketActivity(io, socket, false).catch(() => {}), 120000);
     socket.data.presenceExpiry.unref?.();
   }
 }
 
 export function configureMessagingSocket(io) {
+  const sweep = setInterval(async () => {
+    try {
+      const paused = await pauseIdleAtSeen();
+      for (const row of paused) {
+        io.to(`user:${row.userId}`).emit("presence:self", row);
+        io.emit("status:updated", { userId: row.userId, activeStatus: row.activeStatus });
+      }
+      const targets = new Set([...io.sockets.sockets.values()].flatMap(socket => [...(socket.data.presenceTargets || [])]));
+      for (const userId of targets) await broadcastPresence(io, userId);
+    } catch { /* Next sweep retries; private timestamps are never sent. */ }
+  }, 30000);
+  sweep.unref?.();
+  io.httpServer?.once("close", () => clearInterval(sweep));
   io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth?.token || decodeURIComponent(cookieValue(socket.request.headers.cookie, "accessToken") || "");
@@ -81,20 +93,24 @@ export function configureMessagingSocket(io) {
   io.on("connection", (socket) => {
     const userId = socket.user._id.toString();
     socket.join(`user:${userId}`);
-    setSocketActivity(io, socket, false);
-    socket.on("presence:active", (active) => trackSocketActivity(io, socket, active === true));
-    socket.on("presence:heartbeat", () => trackSocketActivity(io, socket, true));
+    trackSocketActivity(io, socket, false);
+    socket.on("messages:delivered", () => deliverMessages(io, userId).catch(() => {}));
+    socket.on("presence:active", active => trackSocketActivity(io, socket, active === true, active === true));
+    socket.on("presence:heartbeat", (input = {}) => trackSocketActivity(io, socket, true, input?.interaction === true));
     socket.on("presence:query", async (ids = [], reply) => {
-      const safeIds = [...new Set(ids.map(String))].slice(0, 100);
-      const blocks = await UserBlock.find({
-        $or: [
-          { blocker: userId, blocked: { $in: safeIds } },
-          { blocked: userId, blocker: { $in: safeIds } },
-        ],
-      }).select("blocker blocked").lean();
-      const blockedIds = new Set(blocks.flatMap((item) => [String(item.blocker), String(item.blocked)]));
-      const presence = safeIds.filter((id) => !blockedIds.has(id)).map((id) => ({ userId: id, online: isOnline(id) }));
-      if (typeof reply === "function") reply(presence);
+      if (!Array.isArray(ids)) return;
+      try {
+        socket.data.presenceTargets = new Set(ids.map(String).slice(0, 100));
+        if (typeof reply === "function") reply(await presenceForViewer(userId, ids));
+      } catch { if (typeof reply === "function") reply([]); }
+    });
+    socket.on("presence:offer-dismiss", () => User.updateOne({ _id: userId }, { $set: { "presenceState.offerAtSeen": false } }).catch(() => {}));
+    socket.on("presence:at-seen-on", async () => {
+      try {
+      const now = new Date();
+      const user = await User.findOneAndUpdate({ _id: userId, "presenceState.offerAtSeen": true }, { $set: { activeStatus: { isActive: true, presetKey: "at_seen", label: "At seen", emoji: "\uD83D\uDC41", isCustom: false, color: "#9CCBFF", startedAt: now, expiresAt: null }, "presenceState.lastActivityAt": now, "presenceState.offerAtSeen": false, "presenceState.pausedAt": null }, $inc: { "presenceState.revision": 1 } }, { new: true }).select("activeStatus +presenceState");
+      if (user) { socket.emit("presence:self", ownPresence(user)); io.emit("status:updated", { userId, activeStatus: ownPresence(user).activeStatus }); }
+      } catch { /* Keep the current status; the client can retry. */ }
     });
     socket.on("call:start", async (input = {}, reply) => {
       try {
@@ -227,9 +243,7 @@ export function configureMessagingSocket(io) {
       sockets?.delete(socket.id);
       if (!sockets?.size) userSockets.delete(userId);
       if (!wasOnline || isOnline(userId)) return;
-      const lastSeenAt = new Date();
-      await User.updateOne({ _id: userId }, { $set: { lastSeenAt } }).catch(() => {});
-      await broadcastPresence(io, userId, { userId, online: false, lastSeenAt });
+      await broadcastPresence(io, userId);
     });
   });
 }

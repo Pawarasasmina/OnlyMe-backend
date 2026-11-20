@@ -1,4 +1,5 @@
-﻿import mongoose from "mongoose";
+import { serializeProfileStatus } from "../services/statusService.js";
+import mongoose from "mongoose";
 import User from "../models/User.js";
 import { profileAccountType } from "../constants/profileCategoryConstants.js";
 import AdminProfile from "../models/AdminProfile.js";
@@ -75,8 +76,9 @@ function sanitizeUser(user) {
     avatar: user.avatar,
     isVerified: user.isVerified,
     status: user.status,
-    activeStatus: user.activeStatus,
-    lastSeenAt: user.lastSeenAt,
+    activeStatus: serializeProfileStatus(user.activeStatus),
+    activity_status: user.activity_status !== false,
+    read_receipts: user.read_receipts !== false,
     onboarding: user.onboarding,
     onboardingChecklist: user.onboardingChecklist,
     dateOfBirth: user.dateOfBirth,

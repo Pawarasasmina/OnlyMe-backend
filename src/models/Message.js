@@ -55,6 +55,7 @@ const messageSchema = new mongoose.Schema(
     messageKind: { type: String, enum: ["USER_MESSAGE", "CREATOR_ASK", "FAN_FREE_ASK"], default: "USER_MESSAGE" },
     directAccessWindow: { type: mongoose.Schema.Types.ObjectId, ref: "DAWindow", default: null },
     readAt: { type: Date, default: null },
+    deliveredAt: { type: Date, default: null },
     disappearAfterSeconds: { type: Number, enum: [0, 3, 10, 30], default: null },
     openedAt: { type: Date, default: null },
     expiresAt: { type: Date, default: null },
@@ -112,6 +113,7 @@ messageSchema.index(
   { unique: true, partialFilterExpression: { clientMessageId: { $type: "string" } } },
 );
 messageSchema.index({ recipient: 1, readAt: 1, createdAt: -1 });
+messageSchema.index({ recipient: 1, deliveredAt: 1, _id: -1 });
 messageSchema.index({ replyTo: 1 });
 messageSchema.index({ directAccessWindow: 1, createdAt: 1 });
 messageSchema.index({ "sharedContent.contentType": 1, "sharedContent.contentId": 1, createdAt: -1 });

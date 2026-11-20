@@ -20,7 +20,7 @@ const normalizePlainText = (value) => withoutControlCharacters(value).trim();
 
 const sanitizeEmoji = (value) => Array.from(String(value || "").trim()).slice(0, STATUS_EMOJI_MAX_LENGTH).join("");
 
-export const isActiveStatus = (status) => Boolean(status?.isActive && status?.expiresAt && new Date(status.expiresAt).getTime() > Date.now());
+export const isActiveStatus = (status) => Boolean(status?.isActive && ((status.presetKey === "at_seen" || String(status.label).replace(/[^a-z]/gi, "").toLowerCase() === "atseen") || status?.expiresAt && new Date(status.expiresAt).getTime() > Date.now()));
 
 export const isProfileStatusVisible = (status) => Boolean(status?.isActive && String(status.label || "").trim());
 
@@ -33,7 +33,6 @@ export const serializeStatus = (status) => {
     presetKey: status.presetKey || "",
     isCustom: Boolean(status.isCustom),
     color: status.color || preset?.color || "#9CCBFF",
-    startedAt: status.startedAt || null,
     expiresAt: status.expiresAt,
   };
 };
@@ -51,8 +50,6 @@ export function serializeProfileStatus(status) {
     presetKey: status.presetKey || "",
     isCustom: Boolean(status.isCustom),
     color: status.color || preset?.color || "#9CCBFF",
-    startedAt: status.startedAt || null,
-    updatedAt: status.startedAt || null,
   };
 }
 
@@ -114,7 +111,7 @@ export function buildStatusFromPayload(payload = {}, currentStatus = null, now =
       isCustom,
       color,
       startedAt: now,
-      expiresAt: new Date(now.getTime() + durationHours * 60 * 60 * 1000),
+      expiresAt: presetKey === "at_seen" ? null : new Date(now.getTime() + durationHours * 60 * 60 * 1000),
       isActive: true,
     },
     cleared: false,

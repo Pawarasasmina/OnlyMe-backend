@@ -1,3 +1,5 @@
+import { emitPrivateMessage } from "../services/responsePrivacyService.js";
+import { manualPresenceReset } from "../services/presenceService.js";
 import mongoose from "mongoose";
 import Story from "../models/Story.js";
 import StoryArchive from "../models/StoryArchive.js";
@@ -778,10 +780,11 @@ export const updateStoryStatus = asyncHandler(async (req, res) => {
   const { activeStatus, cleared } = buildStatusFromPayload(req.body, currentStatus);
   await User.updateOne(
     { _id: req.user._id },
-    { $set: { activeStatus } },
+    { $set: { activeStatus, ...manualPresenceReset() }, $inc: { "presenceState.revision": 1 } },
     { runValidators: true },
   );
   req.user.activeStatus = activeStatus;
+  req.app.get("io")?.emit("status:updated", { userId: String(req.user._id), activeStatus: serializeProfileStatus(activeStatus) });
   return sendResponse(res, 200, cleared ? "Status cleared" : "Status updated", { activeStatus: serializeStatus(req.user.activeStatus) });
 });
 
@@ -806,7 +809,7 @@ export const reactStory = asyncHandler(async (req, res) => {
       const message = await upsertStoryReactionMessage({ story, senderId: req.user._id, reaction: null });
       await Notification.deleteOne({ dedupeKey: `story-reaction:${story._id}:${req.user._id}` });
       for (const userId of [story.creator, req.user._id]) req.app.get("io")?.to(`user:${userId}`).emit("message:updated", { participantId: String(userId) === String(story.creator) ? String(req.user._id) : String(story.creator), messageId: message?._id });
-      req.app.get("io")?.to(`user:${story.creator}`).emit("activity:updated");
+      await emitPrivateMessage(req.app.get("io"), story.creator, "activity:updated");
     }
     return sendResponse(res, 200, "Reaction removed", { reaction: null, reactedAt: engagement.updatedAt });
   }
@@ -820,7 +823,7 @@ export const reactStory = asyncHandler(async (req, res) => {
     const created = await upsertStoryReactionMessage({ story, senderId: req.user._id, reaction });
     await notifyStory({ req, story, recipient: story.creator, type: "story_reaction", title: `${req.user.name || "Someone"} reacted ${reaction} to your story`, dedupeKey: `story-reaction:${story._id}:${req.user._id}`, reaction });
     for (const userId of [story.creator, req.user._id]) req.app.get("io")?.to(`user:${userId}`).emit("message:updated", { participantId: String(userId) === String(story.creator) ? String(req.user._id) : String(story.creator), messageId: String(created._id) });
-    req.app.get("io")?.to(`user:${story.creator}`).emit("activity:updated", { type: "story_reaction", storyId: String(story._id) });
+    await emitPrivateMessage(req.app.get("io"), story.creator, "activity:updated", { type: "story_reaction", storyId: String(story._id) });
   }
   return sendResponse(res, 200, "Reaction sent", { reaction: engagement.reaction, reactedAt: engagement.updatedAt });
 });
@@ -853,7 +856,7 @@ export const replyStory = asyncHandler(async (req, res) => {
   const serializedReply = { storyId: String(story._id), imageUrl: story.image.url, caption: story.caption, expiresAt: story.expiresAt, questionPrompt };
   const message = { id: String(created._id), senderId: String(created.sender), recipientId: String(created.recipient), body: created.body, mediaType: "text", readAt: null, createdAt: created.createdAt, storyReply: serializedReply };
   await notifyStory({ req, story, recipient: story.creator, type: "story_reply", title: `${req.user.name || "Someone"} ${questionPrompt ? "answered your story question" : "replied to your story"}`, dedupeKey: `story-reply:${created._id}`, messageId: created._id });
-  req.app.get("io")?.to(`user:${story.creator}`).emit("message:new", { message, participant: { id: String(req.user._id), displayName: req.user.name, username: req.user.username, avatarUrl: req.user.avatar || null, role: req.user.role, isVerified: Boolean(req.user.isVerified), lastSeenAt: req.user.lastSeenAt || null }, conversationStatus: conversation.status });
+  await emitPrivateMessage(req.app.get("io"), story.creator, "message:new", { message, participant: { id: String(req.user._id), displayName: req.user.name, username: req.user.username, avatarUrl: req.user.avatar || null, role: req.user.role, isVerified: Boolean(req.user.isVerified), lastSeenAt: req.user.lastSeenAt || null }, conversationStatus: conversation.status });
   return sendResponse(res, 201, "Story reply sent", { message });
 });
 

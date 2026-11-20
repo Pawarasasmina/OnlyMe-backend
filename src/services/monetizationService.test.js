@@ -8,7 +8,7 @@ test("eligibility uses exact birthdays and never assumes adulthood", () => {
   for (const value of [null, "invalid", "2030-01-01"]) assert.equal(isAdult(value, now), false);
 });
 test("admin country and top creator policy is validated and normalized", () => {
-  assert.deepEqual(validateMonetizationPolicy({ enabled: true, supportedCountries: [" Sri Lanka ", "sri lanka", "France"], termsVersion: "v2", topCreatorPayoutThresholdUsd: 1234.567 }), { enabled: true, supportedCountries: ["sri lanka", "France"], termsVersion: "v2", topCreatorPayoutThresholdUsd: 1234.57 });
+  assert.deepEqual(validateMonetizationPolicy({ enabled: true, supportedCountries: [" Sri Lanka ", "sri lanka", "France"], termsVersion: "v2", topCreatorPayoutThresholdUsd: 1234.567 }), { enabled: true, supportedCountries: ["sri lanka", "France"], blockedCallCountries: ["AE"], termsVersion: "v2", topCreatorPayoutThresholdUsd: 1234.57 });
   assert.equal(validateMonetizationPolicy({ enabled: true, supportedCountries: [], termsVersion: "v2" }).topCreatorPayoutThresholdUsd, 1000);
   assert.throws(() => validateMonetizationPolicy({ enabled: true, supportedCountries: [], termsVersion: "v2", topCreatorPayoutThresholdUsd: -1 }));
   assert.throws(() => validateMonetizationPolicy({ enabled: "true", supportedCountries: [], termsVersion: "v2" }));

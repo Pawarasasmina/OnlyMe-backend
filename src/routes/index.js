@@ -1,3 +1,4 @@
+import presenceRoutes from "./presenceRoutes.js";
 ﻿import { Router } from "express";
 import authRoutes from "./authRoutes.js";
 import userRoutes from "./userRoutes.js";
@@ -57,6 +58,7 @@ router.use("/publications", publicationRoutes);
 router.use("/wall", wallRoutes);
 router.use("/stories", storyRoutes);
 router.use("/saved", savedRoutes);
+router.use("/presence", presenceRoutes);
 router.use("/messages", messageRoutes);
 router.use("/calls", callRoutes);
 router.use("/",walletRoutes);

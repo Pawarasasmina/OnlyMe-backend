@@ -11,7 +11,7 @@ import ApiError from "../utils/ApiError.js";
 import { countriesMatch, countryCode } from "../utils/countryCode.js";
 
 export const MONETIZATION_POLICY_KEY = "MONETIZATION_POLICY";
-const defaults = { enabled: true, supportedCountries: [], termsVersion: "monetization-v1", topCreatorPayoutThresholdUsd: 1000 };
+const defaults = { enabled: true, supportedCountries: [], blockedCallCountries: ["AE"], termsVersion: "monetization-v1", topCreatorPayoutThresholdUsd: 1000 };
 export async function getMonetizationPolicy() {
   const record = await PlatformSetting.findOne({ key: MONETIZATION_POLICY_KEY }).lean();
   return { ...defaults, ...record?.value };
@@ -20,11 +20,14 @@ export function validateMonetizationPolicy(payload) {
   if (typeof payload.enabled !== "boolean" || !Array.isArray(payload.supportedCountries) || payload.supportedCountries.length > 250) throw new ApiError(400, "Provide an enabled flag and up to 250 payout countries");
   if (payload.supportedCountries.some(country => typeof country !== "string" || !country.trim() || country.trim().length > 80)) throw new ApiError(400, "Country names must be 1–80 characters");
   const countries = [...new Map(payload.supportedCountries.map(country => [country.trim().toLowerCase(), country.trim()])).values()];
+  const blocked = payload.blockedCallCountries ?? defaults.blockedCallCountries;
+  if (!Array.isArray(blocked) || blocked.length > 250 || blocked.some(value => typeof value !== "string" || !countryCode(value))) throw new ApiError(400, "Choose valid countries for call restrictions");
+  const blockedCallCountries = [...new Set(blocked.map(countryCode))];
   const termsVersion = String(payload.termsVersion || "").trim();
   if (!/^[a-zA-Z0-9._-]{1,60}$/.test(termsVersion)) throw new ApiError(400, "Provide a valid terms version");
   const topCreatorPayoutThresholdUsd = Number(payload.topCreatorPayoutThresholdUsd ?? defaults.topCreatorPayoutThresholdUsd);
   if (!Number.isFinite(topCreatorPayoutThresholdUsd) || topCreatorPayoutThresholdUsd < 0 || topCreatorPayoutThresholdUsd > 10000000) throw new ApiError(400, "Top creator payout threshold must be between $0 and $10,000,000");
-  return { enabled: payload.enabled, supportedCountries: countries, termsVersion, topCreatorPayoutThresholdUsd: Math.round(topCreatorPayoutThresholdUsd * 100) / 100 };
+  return { enabled: payload.enabled, supportedCountries: countries, blockedCallCountries, termsVersion, topCreatorPayoutThresholdUsd: Math.round(topCreatorPayoutThresholdUsd * 100) / 100 };
 }
 export function isAdult(dateOfBirth, now = new Date()) {
   if (!dateOfBirth) return false;
@@ -68,7 +71,8 @@ export async function completeMonetizationEligibility(user, payload) {
   const current = await monetizationSummary(user);
   const policy = current.policy;
   if (!["creator", "business"].includes(current.accountType)) throw new ApiError(403, "Switch to a Creator or Business profile before enabling monetization", "PROFESSIONAL_PROFILE_REQUIRED");
-  if (!current.verified) throw new ApiError(403, "Complete admin verification before enabling monetization", "SELLER_VERIFICATION_REQUIRED");
+  // Details and consent can be saved before verification. Receiving money is
+  // still gated by verified identity and country approval in the summary.
   const country = policy.supportedCountries.length
     ? policy.supportedCountries.find(value => countriesMatch(value, payload.country))
     : countryCode(payload.country);

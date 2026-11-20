@@ -1,3 +1,5 @@
+import { manualPresenceReset } from "../services/presenceService.js";
+import { getMonetizationPolicy } from "../services/monetizationService.js";
 import { publicWallModerationFilter, wallProfileModerationFilter } from "../services/wallModerationAccess.js";
 import mongoose from "mongoose";
 import Content from "../models/Content.js";
@@ -333,7 +335,7 @@ async function loadProfile(owner, viewer) {
     return [{ ...base, title: source.text || "Reply", imageUrl: author.avatar || "", route }];
   });
   const typicalReplyHours = roleProfile.directAccessEnabled || roleProfile.directCallEnabled ? await creatorTypicalReplyHours(owner._id) : null;
-  return serializeUnifiedProfile({ owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, entitledSeenIds, seenOwnerCounts, membershipIncludedExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, reposts, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, seenByCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal), activeStoryCount, profileStories, worldMemberCounts, worldMemberPreviews, worldOnlineMemberCounts, worldMonthlyIncomeUsd, typicalReplyHours });
+  return serializeUnifiedProfile({ blockedCallCountries: (await getMonetizationPolicy()).blockedCallCountries, owner, roleProfile, content, media: profileMedia, pinnedMessageGroup, planets, experiences, entitledExperienceIds, experienceOwnerCounts, entitledSeenIds, seenOwnerCounts, membershipIncludedExperienceIds, premiumMembershipPublicationId: activePremiumMembership?.premiumPublication || null, publishedContentCount, reposts, seens, series, sharedSeens, sharedWallPosts: [...sharedFeedPosts, ...sharedWallPosts], ownWallPosts, supporterCount: supporterRows.length, viewer, followerCount, followingCount, seenByCount, viewerRelationships, viewerSeeSignalSent: Boolean(viewerSeeSignal), activeStoryCount, profileStories, worldMemberCounts, worldMemberPreviews, worldOnlineMemberCounts, worldMonthlyIncomeUsd, typicalReplyHours });
 }
 
 async function relationshipTarget(username) {
@@ -433,10 +435,11 @@ export const updateOwnProfileStatus = asyncHandler(async (req, res) => {
   const { activeStatus, cleared } = buildProfileStatusFromPayload(req.body);
   await User.updateOne(
     { _id: req.user._id },
-    { $set: { activeStatus } },
+    { $set: { activeStatus, ...manualPresenceReset() }, $inc: { "presenceState.revision": 1 } },
     { runValidators: true },
   );
   req.user.activeStatus = activeStatus;
+  req.app.get("io")?.emit("status:updated", { userId: String(req.user._id), activeStatus: serializeProfileStatus(activeStatus) });
   return sendResponse(res, 200, cleared ? "Status cleared" : "Status updated", {
     activeStatus: serializeProfileStatus(req.user.activeStatus),
   });
