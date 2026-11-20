@@ -21,15 +21,17 @@ const validId = (value) => {
 
 export const getDirectAccessOffer = asyncHandler(async (req, res) => {
   validId(req.params.creatorId);
+  const viewerIsOwner = String(req.user._id) === String(req.params.creatorId);
   const profile = await CreatorProfile.findOne({ user: req.params.creatorId }).select("directAccessEnabled directAccessPriceStars directCallEnabled directCallPriceStars directCallDurationMinutes directCallAutoDeclineAway").lean();
   if (!profile) throw new ApiError(404, "Creator profile not found");
   const active = isConsumerAccount(req.user) ? await activeDirectAccessWindow(req.user._id, req.params.creatorId) : null;
-  const [wallet, membership, sellerVerification] = isConsumerAccount(req.user) ? await Promise.all([
-    Wallet.findOne({ user: req.user._id }).select("balance testBalance").lean(),
-    PremiumMembership.findOne({ user: req.user._id, creator: req.params.creatorId, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }).select("currentPeriodStart currentPeriodEnd directAccessAllowancePeriodStart directAccessAllowanceUsedAt").lean(),
+  const [wallet, membership, sellerVerification] = await Promise.all([
+    isConsumerAccount(req.user) ? Wallet.findOne({ user: req.user._id }).select("balance testBalance").lean() : null,
+    isConsumerAccount(req.user) ? PremiumMembership.findOne({ user: req.user._id, creator: req.params.creatorId, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: new Date() } }).select("currentPeriodStart currentPeriodEnd directAccessAllowancePeriodStart directAccessAllowanceUsedAt").lean() : null,
     CreatorVerification.findOne({ creator: req.params.creatorId, purpose: "IDENTITY" }).select("status ageConfirmed dateOfBirth").lean(),
-  ]) : [null, null, null];
-  const sellerAllowed = monetizationEligibility(sellerVerification).allowed;
+  ]);
+  const sellerEligibility = monetizationEligibility(sellerVerification);
+  const sellerAllowed = sellerEligibility.allowed;
   const allowanceAvailable = Boolean(membership && (
     !membership.directAccessAllowanceUsedAt
     || String(membership.directAccessAllowancePeriodStart) !== String(membership.currentPeriodStart)
@@ -49,6 +51,11 @@ export const getDirectAccessOffer = asyncHandler(async (req, res) => {
     typicalReplyHours: await creatorTypicalReplyHours(req.params.creatorId),
     walletBalance: financialModeForAccountType(req.user.accountType) === "TEST" ? wallet?.testBalance ?? null : wallet?.balance ?? null,
     premiumAllowance: membership ? { available: allowanceAvailable, renewsAt: membership.currentPeriodEnd } : null,
+    ...(viewerIsOwner ? {
+      configuredEnabled: Boolean(profile.directAccessEnabled),
+      configuredCallEnabled: Boolean(profile.directCallEnabled),
+      monetizationEligibility: sellerEligibility,
+    } : {}),
   });
 });
 
