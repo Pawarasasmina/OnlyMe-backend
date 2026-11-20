@@ -849,7 +849,7 @@ async function discoverSidebar(viewer, profiles) {
   const creatorIds = profiles.map(profile => profile.user._id);
   const audience = await seenVisibilityFilter(viewer, creatorIds);
   const [following, publications, followerCounts] = await Promise.all([
-    ProfileRelationship.find({ actor: viewer._id, target: { $in: creatorIds }, type: "FOLLOW" }).select("target").lean(),
+    viewer?._id ? ProfileRelationship.find({ actor: viewer._id, target: { $in: creatorIds }, type: "FOLLOW" }).select("target").lean() : [],
     Publication.find({ creator: { $in: creatorIds }, kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true }, ...audience })
       .select("title category coverMedia introMedia publishedSnapshot publishedAt createdAt creator")
       .sort({ publishedAt: -1, updatedAt: -1 }).limit(12)
@@ -869,6 +869,13 @@ async function discoverSidebar(viewer, profiles) {
 }
 
 export const getDiscover = asyncHandler(async (req, res) => {
+  if (!req.user) {
+    if (req.query.view !== "sidebar") throw new ApiError(401, "Sign in to open Discover");
+    const publicProfiles = await CreatorProfile.find({ profileVisibility: "public", "privacySettings.allowDiscovery": { $ne: false } })
+      .populate({ path: "user", match: { role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified role creatorApprovalStatus status activeStatus createdAt lastSeenAt" })
+      .sort({ updatedAt: -1 }).limit(24).lean();
+    return sendResponse(res, 200, "Discover sidebar fetched", await discoverSidebar(null, publicProfiles.filter((profile) => profile.user)));
+  }
   const viewerModel = roleProfileModel(req.user.role, req.user.creatorApprovalStatus);
   const slidesOnly = req.query.view === "slides";
   const [viewerProfile, initialBlockedIds, viewerFollowing] = await Promise.all([

@@ -9,7 +9,7 @@ router.get("/", optionalProtect, listWallPosts);
 router.post("/", protect, authorize("fan", "creator"), uploadProfileImage.single("image"), createWallPost);
 router.get("/saw-you-today", protect, authorize("fan", "creator"), getWallSawYouToday);
 router.post("/saw-you-today/acknowledge", protect, authorize("fan", "creator"), acknowledgeWallSawYouToday);
-router.get("/:id", protect, getWallPost);
+router.get("/:id", optionalProtect, getWallPost);
 router.get("/:id/comments", optionalProtect, getWallComments);
 router.get("/:id/reactions", optionalProtect, getWallReactions);
 router.put("/:id/reaction", protect, authorize("fan", "creator"), toggleWallReaction);

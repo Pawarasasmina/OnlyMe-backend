@@ -8,13 +8,13 @@ import {
   toggleDiscoverOfferSave,
   updateDiscoverSettings,
 } from "../controllers/discoverController.js";
-import { protect } from "../middleware/authMiddleware.js";
+import { optionalProtect, protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 
 const router = Router();
 
+router.get("/", optionalProtect, getDiscover);
 router.use(protect, authorize("fan", "creator"));
-router.get("/", getDiscover);
 router.patch("/settings", updateDiscoverSettings);
 router.post("/settings/reset", resetDiscoverSettings);
 router.post("/hidden-creators/:userId", hideDiscoverCreator);
