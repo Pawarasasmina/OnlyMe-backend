@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import ReferralEarning from "../models/ReferralEarning.js";
 import { referralRewardStars } from "./referralFinancialService.js";
 
-test("referral rewards are five percent of gross spend rounded down", () => {
-  assert.equal(referralRewardStars(190), 9);
-  assert.equal(referralRewardStars(20), 1);
-  assert.equal(referralRewardStars(19), 0);
+test("creator referral rewards are one dollar per ten earned, rounded down", () => {
+  assert.equal(referralRewardStars(190), 19);
+  assert.equal(referralRewardStars(20), 2);
+  assert.equal(referralRewardStars(9), 0);
 });
 
 test("referral earning source identity is unique", () => {

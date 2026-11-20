@@ -20,6 +20,7 @@ import AdminAuditEvent from "../models/AdminAuditEvent.js";
 import { effectiveAdminRole } from "../middleware/adminPermissionMiddleware.js";
 import { getWebCoinTaxRate, setWebCoinTaxRate } from "../services/coinPackService.js";
 import { transitionPayout } from "../services/payoutService.js";
+import { getCreatorReferralPolicy, setCreatorReferralPolicy } from "../services/creatorReferralPolicyService.js";
 
 const financialAudit = (req, action, targetId, reason, after = null) => AdminAuditEvent.create({ actor: req.user._id, actorRole: effectiveAdminRole(req.user), action, targetType: "FINANCIAL_RECORD", targetId: String(targetId), reason: requiredReason(reason), after });
 
@@ -31,6 +32,8 @@ const objectId = (value) => {
 export const getExchangeRate = asyncHandler(async (_req, res) => sendResponse(res, 200, "Star exchange rate fetched", { starsPerUsd: await getStarExchangeRate() }));
 export const getCoinTaxRate = asyncHandler(async (_req, res) => sendResponse(res, 200, "Web coin tax rate fetched", { percent: await getWebCoinTaxRate() }));
 export const updateCoinTaxRate = asyncHandler(async (req, res) => sendResponse(res, 200, "Web coin tax rate updated", { percent: await setWebCoinTaxRate(req.body.percent, req.user._id) }));
+export const getCreatorReferralSettings = asyncHandler(async (_req, res) => sendResponse(res, 200, "Creator referral settings fetched", await getCreatorReferralPolicy()));
+export const updateCreatorReferralSettings = asyncHandler(async (req, res) => sendResponse(res, 200, "Creator referral settings updated", await setCreatorReferralPolicy(req.body, req.user._id)));
 
 export const updateExchangeRate = asyncHandler(async (req, res) => {
   const starsPerUsd = Number(req.body.starsPerUsd);

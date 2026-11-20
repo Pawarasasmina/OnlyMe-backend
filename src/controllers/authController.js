@@ -172,7 +172,7 @@ export const register = asyncHandler(async (req, res) => {
   }
   if (!user) throw new ApiError(503, "Could not reserve a member number. Please try again.");
   await createRoleProfile(user);
-  await attributeReferral({ code: req.body.referralCode, invitee: user, shareIdentity: req.body.referralShareIdentity !== false });
+  await attributeReferral({ code: req.body.referralCode, invitee: user, shareIdentity: req.body.referralShareIdentity !== false, sessionId: readAnalyticsSessionId(req) });
 
   // Email is a post-registration side effect: a provider outage must never
   // roll back an account that was created successfully.
