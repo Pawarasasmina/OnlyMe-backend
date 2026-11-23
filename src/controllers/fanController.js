@@ -285,7 +285,8 @@ function notificationActivity(notification, giftThanksByKey = new Map()) {
     acknowledged: Boolean(notification.acknowledgedAt || notification.readAt),
     read: Boolean(notification.readAt),
     createdAt: notification.createdAt,
-    actionPath: notification.metadata?.appealUrl || (isWarning ? "/settings/support/safety" : notification.type === "membership_cancelled" ? "/memberships" : null),
+    actionPath: notification.type === "creator_announcement" && String(notification.metadata?.actionUrl || "").startsWith("/") ? notification.metadata.actionUrl : notification.metadata?.appealUrl || (isWarning ? "/settings/support/safety" : notification.type === "membership_cancelled" ? "/memberships" : null),
+    metadata: notification.metadata || {},
     dedupeKey: notification.dedupeKey || null,
     canAcknowledge: true,
   });

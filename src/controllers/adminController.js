@@ -80,7 +80,7 @@ export const listUsers = asyncHandler(async (req, res) => {
   const search = String(req.query.search || "").trim().replace(/^@/, "");
   if (search) {
     const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    filter.$or = [{ username: { $regex: escaped, $options: "i" } }, { email: { $regex: escaped, $options: "i" } }, { phone: { $regex: escaped, $options: "i" } }, ...(mongoose.isValidObjectId(search) ? [{ _id: search }] : [])];
+    filter.$or = [{ name: { $regex: escaped, $options: "i" } }, { username: { $regex: escaped, $options: "i" } }, { email: { $regex: escaped, $options: "i" } }, { phone: { $regex: escaped, $options: "i" } }, ...(mongoose.isValidObjectId(search) ? [{ _id: search }] : [])];
   }
 
   const users = await User.find(filter)

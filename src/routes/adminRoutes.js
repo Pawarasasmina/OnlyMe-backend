@@ -22,6 +22,7 @@ import { getWelcomeEmailTemplate, updateWelcomeEmailTemplate } from "../controll
 import { activateRecommendationConfig, createRecommendationDraft, getRecommendationSettings, resetRecommendationConfig } from "../controllers/adminRecommendationController.js";
 import { requireAdminRole } from "../middleware/adminPermissionMiddleware.js";
 import { createAdminStaff, deleteTestAdminStaff, listAdminStaff, resetAdminPassword, updateAdminStaff, updateRoleTwoFactor, updateStaffTwoFactor } from "../controllers/adminStaffController.js";
+import { cancelCreatorAnnouncement, createCreatorAnnouncement, getCreatorAnnouncement, getCreatorAnnouncementOptions, listCreatorAnnouncements, previewCreatorAnnouncementAudience } from "../controllers/adminCreatorAnnouncementController.js";
 
 const router = Router();
 const messageReportScope = (req, _res, next) => { req.reportScopes = ["MESSAGE", "GROUP_MESSAGE", "CONVERSATION"]; next(); };
@@ -44,6 +45,12 @@ router.post("/recommendations/:id/activate", requireAdminRole("MAIN_ADMIN"), act
 router.post("/recommendations/reset", requireAdminRole("MAIN_ADMIN"), resetRecommendationConfig);
 router.get("/email-templates/welcome", requireAdminRole("MAIN_ADMIN"), getWelcomeEmailTemplate);
 router.patch("/email-templates/welcome", requireAdminRole("MAIN_ADMIN"), uploadGiftImage.single("logo"), updateWelcomeEmailTemplate);
+router.get("/creator-announcements/options", getCreatorAnnouncementOptions);
+router.post("/creator-announcements/preview", previewCreatorAnnouncementAudience);
+router.get("/creator-announcements", listCreatorAnnouncements);
+router.post("/creator-announcements", createCreatorAnnouncement);
+router.get("/creator-announcements/:id", getCreatorAnnouncement);
+router.post("/creator-announcements/:id/cancel", cancelCreatorAnnouncement);
 router.get("/gifts", requireAdminRole("MAIN_ADMIN"), listGifts);
 router.post("/gift-categories", requireAdminRole("MAIN_ADMIN"), createGiftCategory);
 router.patch("/gift-categories/reorder", requireAdminRole("MAIN_ADMIN"), reorderGiftCategories);
