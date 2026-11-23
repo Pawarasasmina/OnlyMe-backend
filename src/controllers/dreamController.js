@@ -27,7 +27,7 @@ export const uploadMinePhoto = asyncHandler(async (req, res) => {
   const dream = await Dream.findOne({ _id: req.params.id, creator: req.user._id, status: "ACTIVE" });
   if (!dream) throw new ApiError(404, "Active Dream not found");
   const previous = dream.photo?.assetId ? (dream.photo.toObject?.() || dream.photo) : null;
-  const stored = await storeFile(req.file, { folder: `onlyme/dreams/${req.user._id}`, resourceType: "image" });
+  const stored = await storeFile(req.file, { folder: `atseen/dreams/${req.user._id}`, resourceType: "image" });
   dream.photo = { assetId: stored.id, url: stored.url, resourceType: stored.resourceType || "image" };
   await dream.save();
   if (previous?.assetId) await deleteAsset(previous.assetId, previous.resourceType || "image").catch(() => {});

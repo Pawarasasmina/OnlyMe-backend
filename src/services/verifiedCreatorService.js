@@ -17,7 +17,7 @@ export async function getVerifiedCreatorPlan() {
 
 export async function updateVerifiedCreatorPlan(starsPerMonth, adminId) {
   const amount = Number(starsPerMonth);
-  if (!Number.isSafeInteger(amount) || amount < 1 || amount > 1000000) throw new ApiError(400, "Monthly price must be a whole number from 1 to 1,000,000 Stars");
+  if (!Number.isSafeInteger(amount) || amount < 1 || amount > 1000000) throw new ApiError(400, "Monthly price must be a whole number from 1 to 1,000,000 Coins");
   const setting = await PlatformSetting.findOneAndUpdate({ key: PRICE_SETTING_KEY }, { $set: { value: { starsPerMonth: amount }, updatedBy: adminId }, $setOnInsert: { key: PRICE_SETTING_KEY } }, { new: true, upsert: true, runValidators: true });
   return { starsPerMonth: amount, currency: "STARS", updatedAt: setting.updatedAt };
 }

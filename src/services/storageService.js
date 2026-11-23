@@ -22,7 +22,7 @@ export function createUploadSignature(userId) {
   ensureCloudinaryIsConfigured();
 
   const timestamp = Math.round(Date.now() / 1000);
-  const folder = `onlyme/${userId}`;
+  const folder = `atseen/${userId}`;
   const signature = cloudinary.utils.api_sign_request(
     { folder, timestamp },
     env.cloudinaryApiSecret
@@ -46,7 +46,7 @@ export async function storeFile(file, options = {}) {
   }
 
   const resourceType = options.resourceType || "image";
-  const folder = options.folder || "onlyme/profiles";
+  const folder = options.folder || "atseen/profiles";
 
   try {
     const result = await cloudinary.uploader.upload(file.path, {

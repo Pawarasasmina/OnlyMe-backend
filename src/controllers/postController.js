@@ -989,7 +989,7 @@ export const createPostComment = asyncHandler(async (req, res) => {
   const hasVoiceFile = Boolean(req.file?.buffer?.length);
   const text = String(req.body.text || "").trim();
   if ((!text && !hasVoiceFile) || text.length > 500) throw new ApiError(400, hasVoiceFile ? "Voice comment text must not exceed 500 characters" : "Comment must contain 1 to 500 characters");
-  const audio = hasVoiceFile ? await uploadMessageVoice({ buffer: req.file.buffer, folder: `onlyme/posts/comments/${post._id}`, maxDurationSeconds: 30, purpose: "voice_comment", senderId: req.user._id }) : null;
+  const audio = hasVoiceFile ? await uploadMessageVoice({ buffer: req.file.buffer, folder: `atseen/posts/comments/${post._id}`, maxDurationSeconds: 30, purpose: "voice_comment", senderId: req.user._id }) : null;
   if (audio) {
     try { audio.waveform = JSON.parse(req.body.waveform || "[]").map(Number).filter(Number.isFinite).slice(0, 100); } catch { audio.waveform = []; }
   }

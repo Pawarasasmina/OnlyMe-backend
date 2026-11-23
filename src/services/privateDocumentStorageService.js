@@ -75,7 +75,7 @@ export async function storeVerificationDocument(file, creatorId) {
   const detected = inspectVerificationFile(file);
   ensureCloudinaryIsConfigured();
   const resourceType = detected.mimeType === "application/pdf" ? "raw" : "image";
-  const publicId = `onlyme/private/creator-verifications/${creatorId}/${crypto.randomUUID()}`;
+  const publicId = `atseen/private/creator-verifications/${creatorId}/${crypto.randomUUID()}`;
   let asset;
   try {
     asset = await new Promise((resolve, reject) => {

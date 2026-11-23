@@ -72,7 +72,7 @@ export async function uploadProfileMediaFile({ file, userId }) {
   try {
     const asset = await cloudinary.uploader.upload(file.path, {
       resource_type: resourceType,
-      folder: `onlyme/profile-media/${userId}`,
+      folder: `atseen/profile-media/${userId}`,
       allowed_formats: type === "video" ? ["mp4", "mov", "webm"] : ["jpg", "jpeg", "png", "webp"],
       context: { purpose: "profile_media", user: String(userId), source: "direct" },
     });

@@ -2,6 +2,20 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { passwordResetEmail, welcomeEmail, worldCancellationEmail, worldRenewalReminderEmail } from "./emailService.js";
 
+test("legacy welcome templates use current branding while preserving links and names", () => {
+  const email = welcomeEmail({ name: "Star", template: {
+    subject: "Welcome to OnlyMe",
+    heading: "Hello {{firstName}}",
+    message: "Buy Stars and join a Planet: https://example.com/onlyme/Stars",
+    footer: "OnlyMe support: support@onlyme.example",
+  } });
+  assert.equal(email.subject, "Welcome to @seen");
+  assert.match(email.text, /Hello Star/);
+  assert.match(email.text, /Buy Coins and join a World/);
+  assert.match(email.text, /https:\/\/example.com\/onlyme\/Stars/);
+  assert.match(email.text, /support@onlyme.example/);
+});
+
 test("welcome email is branded and role-aware for fans", () => {
   const email = welcomeEmail({ name: "Pawara Sasmina", role: "fan" });
   assert.match(email.subject, /Welcome to @seen/);

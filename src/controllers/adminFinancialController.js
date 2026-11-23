@@ -29,7 +29,7 @@ const objectId = (value) => {
   return value;
 };
 
-export const getExchangeRate = asyncHandler(async (_req, res) => sendResponse(res, 200, "Star exchange rate fetched", { starsPerUsd: await getStarExchangeRate() }));
+export const getExchangeRate = asyncHandler(async (_req, res) => sendResponse(res, 200, "Coin exchange rate fetched", { starsPerUsd: await getStarExchangeRate() }));
 export const getCoinTaxRate = asyncHandler(async (_req, res) => sendResponse(res, 200, "Web coin tax rate fetched", { percent: await getWebCoinTaxRate() }));
 export const updateCoinTaxRate = asyncHandler(async (req, res) => sendResponse(res, 200, "Web coin tax rate updated", { percent: await setWebCoinTaxRate(req.body.percent, req.user._id) }));
 export const getCreatorReferralSettings = asyncHandler(async (_req, res) => sendResponse(res, 200, "Creator referral settings fetched", await getCreatorReferralPolicy()));
@@ -37,16 +37,16 @@ export const updateCreatorReferralSettings = asyncHandler(async (req, res) => se
 
 export const updateExchangeRate = asyncHandler(async (req, res) => {
   const starsPerUsd = Number(req.body.starsPerUsd);
-  if (!Number.isFinite(starsPerUsd) || starsPerUsd < 0.01 || starsPerUsd > 100000) throw new ApiError(400, "Stars per USD must be between 0.01 and 100,000", "INVALID_STAR_EXCHANGE_RATE");
+  if (!Number.isFinite(starsPerUsd) || starsPerUsd < 0.01 || starsPerUsd > 100000) throw new ApiError(400, "Coins per USD must be between 0.01 and 100,000", "INVALID_STAR_EXCHANGE_RATE");
   const setting = await setStarExchangeRate(Math.round(starsPerUsd * 100) / 100, req.user._id);
-  return sendResponse(res, 200, "Star exchange rate updated", { starsPerUsd: setting.starsPerUsd, updatedAt: setting.updatedAt });
+  return sendResponse(res, 200, "Coin exchange rate updated", { starsPerUsd: setting.starsPerUsd, updatedAt: setting.updatedAt });
 });
 
 export const creditStars = asyncHandler(async (req, res) => {
-  if (!env.enableAdminStarCredits) throw new ApiError(403, "Admin Stars credits are disabled", "ADMIN_CREDITS_DISABLED");
+  if (!env.enableAdminStarCredits) throw new ApiError(403, "Admin Coins credits are disabled", "ADMIN_CREDITS_DISABLED");
   const target = await User.findById(objectId(req.params.userId)).select("+accountType _id role status");
   if (!target) throw new ApiError(404, "User not found", "USER_NOT_FOUND");
-  if (!["fan", "creator"].includes(target.role)) throw new ApiError(400, "Stars can only be added to fan or creator Wallets", "WALLET_ACCOUNT_REQUIRED");
+  if (!["fan", "creator"].includes(target.role)) throw new ApiError(400, "Coins can only be added to fan or creator Wallets", "WALLET_ACCOUNT_REQUIRED");
   if (target.status !== "active") throw new ApiError(409, "The selected account is not active", "WALLET_ACCOUNT_INACTIVE");
   const amount = positiveStars(req.body.starsAmount);
   const reason = requiredReason(req.body.reason);
@@ -62,7 +62,7 @@ export const creditStars = asyncHandler(async (req, res) => {
     return { resultReference: posted.entry._id, wallet: safeWallet(posted.wallet, command.financialMode), credit: { starsAmount: amount, createdAt: posted.entry.createdAt }, legacyReset: reset ? { previousBalance: reset.previous.balance, previousCurrency: reset.previous.currency } : null };
   });
   await financialAudit(req, "ADMIN_STARS_CREDITED", target._id, reason, { starsAmount: amount, resultReference: result.resultReference });
-  return sendResponse(res, 200, "Stars credited", result);
+  return sendResponse(res, 200, "Coins credited", result);
 });
 
 export const listUserWallets = asyncHandler(async (req, res) => {
@@ -125,7 +125,7 @@ export const getPlatformRevenue = asyncHandler(async (_req, res) => {
 });
 
 export const activateFanWallet = asyncHandler(async (req, res) => {
-  if (!env.enableAdminStarCredits) throw new ApiError(403, "Admin Stars credits are disabled", "ADMIN_CREDITS_DISABLED");
+  if (!env.enableAdminStarCredits) throw new ApiError(403, "Admin Coins credits are disabled", "ADMIN_CREDITS_DISABLED");
   const target = await User.findById(objectId(req.params.userId)).select("_id role status");
   if (!target || !["fan", "creator"].includes(target.role)) throw new ApiError(404, "Fan or creator not found", "USER_NOT_FOUND");
   const openingBalance = Number(req.body.openingBalance);

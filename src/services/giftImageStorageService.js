@@ -13,7 +13,7 @@ export async function uploadGiftImage(file, adminId) {
   if (!file?.buffer?.length) throw new ApiError(400, "A gift image is required");
   const asset = await new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream({
-      resource_type: "image", folder: "onlyme/gifts", allowed_formats: ["png", "webp", "jpg", "jpeg", "gif"],
+      resource_type: "image", folder: "atseen/gifts", allowed_formats: ["png", "webp", "jpg", "jpeg", "gif"],
       transformation: [{ width: 1024, height: 1024, crop: "limit" }, { quality: "auto:best" }],
       context: { purpose: "dream_gift", admin: String(adminId) },
     }, (error, result) => error ? reject(error) : resolve(result));

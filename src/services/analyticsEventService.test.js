@@ -62,3 +62,20 @@ test("device type is derived coarsely without fingerprinting", () => {
   assert.equal(analyticsEventServiceTestUtils.deviceTypeFromUserAgent("Mozilla iPad Tablet"), "tablet");
   assert.equal(analyticsEventServiceTestUtils.deviceTypeFromUserAgent("Mozilla Windows"), "desktop");
 });
+
+test("product events deduplicate strict-mode retries but retain separate chapters and sessions", () => {
+  const base={ eventType:"WORLD_OPEN", userId:"u", sessionId:"s", entityType:"world", entityId:"w", metadata:{} };
+  const key=analyticsEventServiceTestUtils.dedupeKeyFor(base);
+  assert.equal(key,analyticsEventServiceTestUtils.dedupeKeyFor({...base}));
+  assert.notEqual(key,analyticsEventServiceTestUtils.dedupeKeyFor({...base,sessionId:"next"}));
+  const chapter={...base,eventType:"CHAPTER_COMPLETE",metadata:{chapterId:"a"}};
+  assert.notEqual(analyticsEventServiceTestUtils.dedupeKeyFor(chapter),analyticsEventServiceTestUtils.dedupeKeyFor({...chapter,metadata:{chapterId:"b"}}));
+  assert.ok(analyticsEventServiceTestUtils.dedupeKeyFor({...chapter,sessionId:"s".repeat(80),metadata:{chapterId:"c".repeat(80)}}).length<220);
+  assert.equal(analyticsEventServiceTestUtils.normalizeEventType("world_open",{client:true}),"WORLD_OPEN");
+  assert.throws(()=>analyticsEventServiceTestUtils.normalizeEventType("SUPPORT_COMPLETED",{client:true}),/recorded by the server/);
+  assert.throws(()=>analyticsEventServiceTestUtils.normalizeEventType("SAVE",{client:true}),/recorded by the server/);
+});
+
+test("chapter metadata keeps its identifier but never persists private access tokens", () => {
+  assert.deepEqual(analyticsEventServiceTestUtils.safeMetadata("CHAPTER_COMPLETE",{chapterId:"chapter-1",accessToken:"secret",text:"private"}),{chapterId:"chapter-1"});
+});

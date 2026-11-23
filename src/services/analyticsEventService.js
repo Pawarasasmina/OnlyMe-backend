@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { createHash } from "node:crypto";
 import AnalyticsEvent, { ANALYTICS_EVENT_TYPES } from "../models/AnalyticsEvent.js";
 import AnalyticsSession from "../models/AnalyticsSession.js";
 import CreatorProfile from "../models/CreatorProfile.js";
@@ -10,6 +11,9 @@ import User from "../models/User.js";
 import ApiError from "../utils/ApiError.js";
 import { normalizeAccountType } from "../constants/accountTypeConstants.js";
 import { updateInterestProfileFromEvent } from "./interestProfileService.js";
+import Publication from "../models/Publication.js";
+import { canAccessPublicationAudience, serializePublication } from "./publicationAccessService.js";
+import { publicationEntitlement } from "./publicationEntitlementService.js";
 
 export const TRACKING_START_DATE = new Date("2026-09-03T00:00:00.000Z");
 export const SESSION_INACTIVITY_MS = 30 * 60 * 1000;
@@ -22,6 +26,8 @@ const CLIENT_EVENT_TYPES = new Set([
   "CONTENT_IMPRESSION",
   "CONTENT_VIEW",
   "CONTENT_OPENED",
+  "WORLD_OPEN",
+  "CHAPTER_COMPLETE",
   "CONTENT_WATCH",
   "CONTENT_COMPLETED",
   "CONTENT_REPLAY",
@@ -30,7 +36,7 @@ const CLIENT_EVENT_TYPES = new Set([
   "HIDE",
 ]);
 const SOURCES = new Set(["home", "discover", "search", "profile", "seen", "saved", "notification", "world", "admin", "unknown"]);
-const ENTITY_TYPES = new Set(["", "user", "profile", "feed_post", "content", "seen", "world", "story", "publication", "comment", "book", "place", "journey", "search_result"]);
+const ENTITY_TYPES = new Set(["", "user", "profile", "feed_post", "content", "seen", "world", "story", "publication", "comment", "book", "place", "journey", "search_result", "wall_post", "wall_share"]);
 
 function clean(value, max = 80) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
@@ -70,7 +76,9 @@ function normalizeQuery(value) {
 function safeMetadata(eventType, metadata = {}) {
   const input = metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata : {};
   const output = {};
-  if (eventType === "SEARCH_PERFORMED") {
+  if (eventType === "CHAPTER_COMPLETE") {
+    output.chapterId = clean(input.chapterId, 80);
+  } else if (eventType === "SEARCH_PERFORMED") {
     output.queryLength = Math.max(0, Math.min(100, Number(input.queryLength) || 0));
     output.resultsCount = Math.max(0, Math.min(10000, Number(input.resultsCount) || 0));
     output.searchCategory = clean(input.searchCategory || "all", 40).toLowerCase();
@@ -113,6 +121,9 @@ function bucketWindow(date, windowMs) {
 }
 
 function dedupeKeyFor({ eventType, userId, sessionId, entityType, entityId, source, metadata, now }) {
+  if (["WORLD_OPEN", "CHAPTER_COMPLETE", "FAST_SKIP"].includes(eventType)) {
+    return `product:${createHash("sha256").update([eventType, userId, sessionId, entityType, entityId, metadata.chapterId || "", metadata.batchId || ""].join(":")).digest("hex")}`;
+  }
   if (eventType === "CONTENT_IMPRESSION") {
     return ["impression", userId, sessionId, entityType, entityId, metadata.placement || source].join(":");
   }
@@ -169,6 +180,18 @@ export async function recordAnalyticsEvent({ client = false, entityId = "", enti
   if (!finalSessionId) throw new ApiError(400, "Analytics session ID is required");
   const finalSource = normalizeSource(source);
   const safe = safeMetadata(type, metadata);
+  if (client && ["WORLD_OPEN", "CHAPTER_COMPLETE"].includes(type)) {
+    if (!mongoose.isValidObjectId(cleanEntityId)) throw new ApiError(400, "A publication ID is required");
+    const publication = await Publication.findById(cleanEntityId).select("+shareToken").lean();
+    if (!publication?.publishedSnapshot || !["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED"].includes(publication.status)) throw new ApiError(404, "Published content not found");
+    if (type === "WORLD_OPEN" && !["WORLD", "PREMIUM_WORLD"].includes(publication.kind)) throw new ApiError(400, "World open requires a World");
+    const viewer = req?.user || { _id: userId };
+    const audienceAllowed = await canAccessPublicationAudience(publication, viewer, { shareToken: metadata?.accessToken });
+    const entitlement = await publicationEntitlement(publication, viewer);
+    const visible = serializePublication(publication, viewer, { audienceAllowed, entitlement });
+    if (!visible) throw new ApiError(403, "Publication is not accessible");
+    if (type === "CHAPTER_COMPLETE" && !visible.chapters?.some(chapter => String(chapter.stableChapterId) === safe.chapterId && !chapter.locked && chapter.blocks?.length)) throw new ApiError(403, "Chapter is not accessible");
+  }
   const deviceType = req ? deviceTypeFromUserAgent(req.get("User-Agent") || "") : "unknown";
   const actorAccountType = normalizeAccountType(req?.user?.accountType || (await User.findById(userId).select("+accountType").lean())?.accountType);
 
@@ -398,4 +421,6 @@ export const analyticsEventServiceTestUtils = {
   normalizeQuery,
   retentionPercent,
   safeMetadata,
+  dedupeKeyFor,
+  normalizeEventType,
 };

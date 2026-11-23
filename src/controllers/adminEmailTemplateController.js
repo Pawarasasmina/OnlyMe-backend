@@ -3,11 +3,12 @@ import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { deleteGiftImage, uploadGiftImage } from "../services/giftImageStorageService.js";
+import { brandCopy } from "../utils/brandCopy.js";
 
 const defaults = { key: "WELCOME" };
 const fields = ["subject", "heading", "message", "buttonLabel", "footer"];
 const limits = { subject: 160, heading: 160, message: 1200, buttonLabel: 80, footer: 500 };
-const serialize = (template) => ({ id: template._id, subject: template.subject, heading: template.heading, message: template.message || "Your space is ready. Discover people, moments, and worlds that feel relevant to you.", buttonLabel: template.buttonLabel || "Start discovering", footer: template.footer, logoUrl: template.logo?.url || "", updatedAt: template.updatedAt });
+const serialize = (template) => ({ id: template._id, subject: brandCopy(template.subject), heading: brandCopy(template.heading), message: brandCopy(template.message || "Your space is ready. Discover people, moments, and worlds that feel relevant to you."), buttonLabel: brandCopy(template.buttonLabel || "Start discovering"), footer: brandCopy(template.footer), logoUrl: template.logo?.url || "", updatedAt: template.updatedAt });
 
 async function getTemplate() {
   return EmailTemplate.findOneAndUpdate({ key: "WELCOME" }, { $setOnInsert: defaults }, { new: true, upsert: true, setDefaultsOnInsert: true });
@@ -19,7 +20,7 @@ export const updateWelcomeEmailTemplate = asyncHandler(async (req, res) => {
   const template = await getTemplate();
   for (const field of fields) {
     if (req.body[field] === undefined) continue;
-    const value = String(req.body[field]).trim();
+    const value = brandCopy(String(req.body[field]).trim());
     if (!value) throw new ApiError(400, `${field} is required`);
     if (value.length > limits[field]) throw new ApiError(400, `${field} is too long`);
     template[field] = value;

@@ -1,0 +1,31 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import Publication from "../models/Publication.js";
+import User from "../models/User.js";
+import PremiumMembership from "../models/PremiumMembership.js";
+import AnalyticsEvent from "../models/AnalyticsEvent.js";
+import AnalyticsSession from "../models/AnalyticsSession.js";
+import { recordAnalyticsEvent } from "./analyticsEventService.js";
+
+test("completion checks published chapter access and discards private access tokens", async t => {
+  const userId="507f1f77bcf86cd799439011", publicationId="507f1f77bcf86cd799439012";
+  const chapter={stableChapterId:"chapter-1",isPreview:false,blocks:[{id:"text",type:"TEXT",text:"Read me"}]};
+  const publication={_id:publicationId,creator:"507f1f77bcf86cd799439013",kind:"PREMIUM_WORLD",status:"PUBLISHED",visibility:"PUBLIC",publishedSnapshot:{metadata:{title:"World"},chapters:[chapter]}};
+  t.mock.method(Publication,"findById",()=>({select:()=>({lean:async()=>publication})}));
+  t.mock.method(User,"findById",()=>({select:()=>({lean:async()=>({status:"active"})})}));
+  t.mock.method(PremiumMembership,"exists",async()=>false);
+  const request={user:{_id:userId,role:"fan",accountType:"REAL"},get:()=>""};
+  const event={client:true,eventType:"CHAPTER_COMPLETE",entityType:"publication",entityId:publicationId,userId,sessionId:"session",metadata:{chapterId:"chapter-1",accessToken:"secret"},req:request};
+  await assert.rejects(recordAnalyticsEvent(event),/Chapter is not accessible/);
+  chapter.isPreview=true;
+  t.mock.method(AnalyticsSession,"findOne",async()=>null);
+  t.mock.method(AnalyticsSession,"create",async input=>input);
+  let stored;
+  t.mock.method(AnalyticsEvent,"create",async input=>{stored=input;return input;});
+  assert.equal((await recordAnalyticsEvent(event)).recorded,true);
+  assert.deepEqual(stored.metadata,{chapterId:"chapter-1"});
+  assert.equal(stored.actorAccountType,"REAL");
+  await assert.rejects(recordAnalyticsEvent({...event,metadata:{chapterId:"missing"}}),/Chapter is not accessible/);
+  publication.status="DRAFT";
+  await assert.rejects(recordAnalyticsEvent(event),/Published content not found/);
+});

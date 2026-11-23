@@ -1,5 +1,6 @@
 import Content from "../models/Content.js";
 import AnalyticsEvent from "../models/AnalyticsEvent.js";
+import { getProductAnalytics, getProductPeakUsage } from "./productAnalyticsService.js";
 import FeedPost from "../models/FeedPost.js";
 import Message from "../models/Message.js";
 import MessageReport from "../models/MessageReport.js";
@@ -332,24 +333,8 @@ async function mostActiveUsers({ limit = 10 }) {
   return sorted.map((row) => ({ ...row, user: userMap.get(row.id) && { name: userMap.get(row.id).name, username: userMap.get(row.id).username, role: userMap.get(row.id).role, avatar: userMap.get(row.id).avatar } })).filter((row) => row.user);
 }
 
-async function activityByTime(startDate, endDate) {
-  const [wallRows, analyticsRows] = await Promise.all([
-    WallEngagement.aggregate([
-      { $match: dateMatch("createdAt", startDate, endDate) },
-      { $group: { _id: { hour: { $hour: { date: "$createdAt", timezone: "UTC" } }, day: { $dayOfWeek: { date: "$createdAt", timezone: "UTC" } } }, count: { $sum: 1 } } },
-    ]),
-    AnalyticsEvent.aggregate([
-      { $match: dateMatch("createdAt", startDate, endDate) },
-      { $group: { _id: { hour: { $hour: { date: "$createdAt", timezone: "UTC" } }, day: { $dayOfWeek: { date: "$createdAt", timezone: "UTC" } } }, count: { $sum: 1 } } },
-    ]),
-  ]);
-  const hours = Array.from({ length: 24 }, (_, hour) => ({ label: `${String(hour).padStart(2, "0")}:00`, count: 0 }));
-  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((label) => ({ label, count: 0 }));
-  for (const row of [...wallRows, ...analyticsRows]) {
-    hours[row._id.hour].count += row.count;
-    days[row._id.day - 1].count += row.count;
-  }
-  return { hours, days };
+async function activityByTime(startDate, endDate, accountType) {
+  return getProductPeakUsage(startDate, endDate, accountType);
 }
 
 export async function getAdminAnalytics(query = {}) {
@@ -363,7 +348,7 @@ export async function getAdminAnalytics(query = {}) {
     totalContent, publishedContent, postsCreated, publicationsCreated, storiesCreated, wallPostsCreated,
     accountRows, contentRows, publicationStatusRows, contentStatusRows, growth, creation, engagement, previousEngagement,
     trend, top, creatorsTable, activeTable, moderationRows, moderationTrend, subscriptions, memberships, transactions, time,
-    sessions, retention, profiles, search, funnel, accountTypeBreakdown,
+    sessions, retention, profiles, search, funnel, accountTypeBreakdown, productEvents,
   ] = await Promise.all([
     User.countDocuments({ deletionRequestedAt: null }),
     User.countDocuments({ role: "fan", deletionRequestedAt: null }),
@@ -397,13 +382,14 @@ export async function getAdminAnalytics(query = {}) {
     Subscription.countDocuments({ status: "active" }),
     PremiumMembership.countDocuments({ status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] } }),
     Transaction.aggregate([{ $match: dateMatch("createdAt", range.startDate, range.endDate) }, { $group: { _id: null, count: { $sum: 1 }, amount: { $sum: "$amount" } } }]),
-    activityByTime(range.startDate, range.endDate),
+    activityByTime(range.startDate, range.endDate, query.productAccountType),
     sessionAnalytics(range.startDate, range.endDate),
     retentionAnalytics(range.endDate),
     profileAnalytics(range.startDate, range.endDate),
     searchAnalytics(range.startDate, range.endDate, range.previousStartDate, range.previousEndDate),
     contentFunnelAnalytics(range.startDate, range.endDate),
     internalAccountTypeBreakdown(range.startDate, range.endDate),
+    getProductAnalytics(range.startDate, range.endDate, query.productAccountType),
   ]);
 
   const behavior = [
@@ -497,6 +483,7 @@ export async function getAdminAnalytics(query = {}) {
     mostActiveUsers: activeTable,
     moderation,
     platformActivity: time,
+    productEvents,
     filters: { contentTypes: SUPPORTED_CONTENT_TYPES, statuses: SUPPORTED_STATUSES, accountTypes: ["REAL", "SEED", "TEST"] },
   };
 }
@@ -513,6 +500,11 @@ export async function exportAdminAnalytics(query = {}) {
       ...report.contentStatus.map((item) => ["content_status", item.label, item.value]),
       ...report.topContent.items.map((item) => ["top_content", item.title, item.engagement]),
       ...report.creatorPerformance.map((item) => ["creator_performance", item.creator.username, item.engagement]),
+      ...Object.entries(report.productEvents.totals).map(([event, count]) => ["product_events", event, count]),
+      ["product_events", "account_scope", report.productEvents.accountType],
+      ["product_events", "support_coins", report.productEvents.supportCoins],
+      ...report.productEvents.trend.flatMap(row => Object.keys(report.productEvents.totals).map(event => ["product_events_daily", `${row.label} ${event} (${report.productEvents.timezone})`, row[event]])),
+      ...report.platformActivity.hours.map(row => ["peak_usage_dubai", row.label, row.count]),
     ];
     return rows.map((row) => row.map((cell) => `"${String(cell).replaceAll("\"", "\"\"")}"`).join(",")).join("\n");
   }
@@ -751,11 +743,25 @@ export function buildAnalyticsPdf(report) {
   ], 40, 452, 520);
   drawSectionTitle(pages[2], "Safety & Moderation", 40, 250, "Reports submitted in the selected period.");
   drawBarChart(pages[2], Object.entries(report.moderation.totals.byScope).map(([label, value]) => ({ label, value })), 40, 95, 245, 130);
-  drawSectionTitle(pages[2], "Platform Activity", 315, 250, "Engagement activity by UTC hour.");
+  drawSectionTitle(pages[2], "Peak Product Usage", 315, 250, `Dubai time (UTC+4). ${report.productEvents?.accountType === "TEST" ? "TEST only." : "TEST excluded."}`);
   drawBarChart(pages[2], report.platformActivity.hours.filter((item) => item.count > 0).slice(0, 8), 315, 95, 245, 130, "count");
   drawSectionTitle(pages[2], "Data Coverage Notes", 40, 60);
   wrapLine(report.dataAvailability?.message || report.supportedMetrics?.notice || "Advanced behavioral analytics tracking is enabled.", 100).slice(0, 2).forEach((line, index) => pages[2].push(textCommand(line, 40, 42 - index * 12, 8, "#64748b")));
 
+  if (report.productEvents) {
+    const commands = [];
+    pages.push(commands);
+    drawHeader(commands, report, "Product events - Dubai time (UTC+4)");
+    drawTable(commands, "Product Events", Object.entries(report.productEvents.totals).map(([event, count]) => ({ event, count })), [
+      { label: "Event", width: 340, value: row => row.event },
+      { label: "Count", width: 180, value: row => formatReportValue(row.count) },
+    ], 40, 672, 520);
+    commands.push(textCommand(`Support: ${formatReportValue(report.productEvents.supportCoins)} coins in successful gifts.`, 40, 420, 11));
+    commands.push(textCommand("World opens and chapter completions are counted once per user/session.", 40, 395, 9));
+    commands.push(textCommand(`Scroll skips reuse fast-skip events. ${report.productEvents.accountType === "TEST" ? "TEST activity only." : "TEST activity is excluded."}`, 40, 378, 9));
+    drawSectionTitle(commands, "Daily Product Events", 40, 340, "Asia/Dubai");
+    drawBarChart(commands, report.productEvents.trend.map(row => ({ label: row.label, count: Object.keys(report.productEvents.totals).reduce((sum, key) => sum + row[key], 0) })), 40, 105, 520, 200, "count");
+  }
   pages.forEach((commands, index) => commands.push(textCommand(`Page ${index + 1} of ${pages.length}`, 520, 24, 8, "#94a3b8")));
   return assemblePdf(pages);
 }

@@ -17,7 +17,7 @@ export async function uploadMessageImage({ buffer, senderId }) {
     const stream = cloudinary.uploader.upload_stream({
       resource_type: "image",
       type: "authenticated",
-      folder: `onlyme/messages/images/${senderId}`,
+      folder: `atseen/messages/images/${senderId}`,
       allowed_formats: ["jpg", "jpeg", "png", "webp"],
       context: { purpose: "private_message_image", sender: String(senderId) },
     }, (error, result) => error ? reject(error) : resolve(result));

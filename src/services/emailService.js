@@ -1,5 +1,6 @@
 import { env } from "../config/env.js";
 import EmailTemplate from "../models/EmailTemplate.js";
+import { brandCopy } from "../utils/brandCopy.js";
 
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
@@ -19,7 +20,7 @@ export async function sendEmail({ html, idempotencyKey, subject, text, to }) {
 export function welcomeEmail({ name, template = {} }) {
   const firstName = String(name || "there").trim().split(/\s+/)[0] || "there";
   const actionUrl = `${env.clientUrl.replace(/\/$/, "")}/discover`;
-  const token = (value, fallback) => String(value || fallback).replaceAll("{{firstName}}", firstName);
+  const token = (value, fallback) => brandCopy(String(value || fallback)).replaceAll("{{firstName}}", firstName);
   const actionLabel = token(template.buttonLabel, "Start discovering");
   const intro = token(template.message, "Your space is ready. Discover people, moments, and worlds that feel relevant to you.");
   const heading = token(template.heading, "We see you, {{firstName}}.");
