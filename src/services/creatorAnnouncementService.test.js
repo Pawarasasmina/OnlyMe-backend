@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { announcementEmail, normalizeAudience, personalizeAnnouncement } from "./creatorAnnouncementService.js";
 
 test("creator announcement audience accepts supported filters and rejects unknown values", () => {
-  const audience = normalizeAudience({ accountTypes: ["creator", "unknown", "creator"], approvalStatuses: ["approved", "other"], verified: false, languages: ["en", "fr"], joinedFrom: "2026-01-01" });
-  assert.deepEqual(audience.accountTypes, ["creator"]);
+  const audience = normalizeAudience({ accountTypes: ["personal", "creator", "unknown", "personal"], approvalStatuses: ["approved", "other"], verified: false, languages: ["en", "fr"], joinedFrom: "2026-01-01" });
+  assert.deepEqual(audience.accountTypes, ["personal", "creator"]);
   assert.deepEqual(audience.approvalStatuses, ["approved"]);
   assert.equal(audience.verified, false);
   assert.deepEqual(audience.languages, ["en", "fr"]);

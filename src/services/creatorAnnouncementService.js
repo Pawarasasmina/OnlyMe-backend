@@ -13,7 +13,7 @@ export function normalizeAudience(input = {}) {
   const throughDate = date(input.joinedTo);
   if (throughDate && /^\d{4}-\d{2}-\d{2}$/.test(String(input.joinedTo))) throughDate.setUTCHours(23, 59, 59, 999);
   return {
-    accountTypes: cleanArray(input.accountTypes).filter((v) => ["creator", "business"].includes(v)),
+    accountTypes: cleanArray(input.accountTypes).filter((v) => ["personal", "creator", "business"].includes(v)),
     approvalStatuses: cleanArray(input.approvalStatuses).filter((v) => ["pending", "approved", "rejected", "suspended"].includes(v)),
     verified: input.verified === true ? true : input.verified === false ? false : null,
     languages: cleanArray(input.languages), countries: cleanArray(input.countries), categories: cleanArray(input.categories),
@@ -26,7 +26,7 @@ export async function creatorAudienceFilter(raw) {
   const filter = { role: { $in: ["fan", "creator"] }, status: "active", deletionRequestedAt: null };
   const creatorClauses = [];
   if (audience.accountTypes.length) creatorClauses.push({ $or: [{ profileAccountType: { $in: audience.accountTypes } }, { profileType: { $in: audience.accountTypes } }] });
-  else creatorClauses.push({ $or: [{ profileAccountType: { $in: ["creator", "business"] } }, { profileType: { $in: ["creator", "business"] } }, { creatorApprovalStatus: { $ne: null } }] });
+  else creatorClauses.push({ $or: [{ profileAccountType: { $in: ["personal", "creator", "business"] } }, { profileType: { $in: ["personal", "creator", "business"] } }, { creatorApprovalStatus: { $ne: null } }] });
   if (audience.approvalStatuses.length) creatorClauses.push({ creatorApprovalStatus: { $in: audience.approvalStatuses } });
   if (audience.verified !== null) creatorClauses.push({ isVerified: audience.verified });
   if (audience.languages.length) creatorClauses.push({ preferredLanguage: { $in: audience.languages } });
