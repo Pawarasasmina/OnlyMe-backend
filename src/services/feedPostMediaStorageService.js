@@ -32,7 +32,7 @@ export async function uploadFeedPostImage({ file, postId, userId, sortOrder = 0 
   try {
     const result = await cloudinary.uploader.upload(file.path, {
       resource_type: "image",
-      folder: `onlyme/feed-posts/${userId}/${postId}`,
+      folder: `atseen/feed-posts/${userId}/${postId}`,
       allowed_formats: ["jpg", "jpeg", "png", "webp"],
       context: { purpose: "feed_post", post: String(postId), user: String(userId) },
     });
@@ -79,7 +79,7 @@ export async function uploadFeedPostVoice({
   try {
     const result = await cloudinary.uploader.upload(file.path, {
       resource_type: "video",
-      folder: `onlyme/feed-posts/${userId}/${postId}/voice`,
+      folder: `atseen/feed-posts/${userId}/${postId}/voice`,
       allowed_formats: ["webm", "ogg", "mp4", "mp3", "wav"],
       context: { purpose: "feed_post_voice", post: String(postId), user: String(userId) },
     });

@@ -328,7 +328,7 @@ export const commentOnSeen = asyncHandler(async (req, res) => {
   }
   const audio = hasVoiceFile ? await uploadMessageVoice({
     buffer: req.file.buffer,
-    folder: `onlyme/publications/comments/${req.params.id}`,
+    folder: `atseen/publications/comments/${req.params.id}`,
     maxDurationSeconds: 30,
     purpose: "voice_comment",
     senderId: req.user._id,

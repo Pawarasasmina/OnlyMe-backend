@@ -1,12 +1,13 @@
 import crypto from "node:crypto";
 import User from "../models/User.js";
 import { deleteAsset } from "./storageService.js";
+import { ownsStoragePath } from "./storageBrand.js";
 
 function ownedAssets(value, ownerId, assets = new Map()) {
   if (!value || typeof value !== "object") return assets;
   // Shared story/Seen references may contain another person's assets. Never delete those.
   if (typeof value.assetId === "string" && value.assetId.split("/").includes(String(ownerId))) {
-    const delivery = value.deliveryType || (value.assetId.startsWith("onlyme/publications/") ? "authenticated" : "upload");
+    const delivery = value.deliveryType || (ownsStoragePath(value.assetId, "publications") ? "authenticated" : "upload");
     const resource = value.resourceType || (value.mediaType === "IMAGE" ? "image" : "video");
     assets.set(`${delivery}:${resource}:${value.assetId}`, { id: value.assetId, resource, delivery });
   }

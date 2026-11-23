@@ -456,7 +456,7 @@ export const createStory = asyncHandler(async (req, res) => {
     throw new ApiError(400, "An original story is required");
   }
   const deliveryType = options.audience === "everyone" ? "upload" : "authenticated";
-  const stored = await storeFile(req.file, { folder: `onlyme/stories/${req.user._id}`, resourceType: mediaType === "video" ? "video" : "image", deliveryType });
+  const stored = await storeFile(req.file, { folder: `atseen/stories/${req.user._id}`, resourceType: mediaType === "video" ? "video" : "image", deliveryType });
   if (mediaType === "video" && stored.duration > 15.1) {
     await deleteAsset(stored.id, stored.resourceType, deliveryType).catch(() => {});
     throw new ApiError(400, "Story videos must be 15 seconds or shorter");
@@ -588,7 +588,7 @@ export const shareSeenAsStory = asyncHandler(async (req, res) => {
   await validateMentions(req, editorMetadata, options.audience);
   const deliveryType = options.audience === "everyone" ? "upload" : "authenticated";
   const uploaded = req.file
-    ? await storeFile(req.file, { folder: `onlyme/stories/${req.user._id}`, resourceType: readMediaType(req.file, req.body.mediaType) === "video" ? "video" : "image", deliveryType })
+    ? await storeFile(req.file, { folder: `atseen/stories/${req.user._id}`, resourceType: readMediaType(req.file, req.body.mediaType) === "video" ? "video" : "image", deliveryType })
     : null;
   const story = await Story.create({
     creator: req.user._id,
