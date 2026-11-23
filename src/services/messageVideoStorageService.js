@@ -17,7 +17,7 @@ export async function uploadMessageVideo({ buffer, senderId }) {
     const stream = cloudinary.uploader.upload_stream({
       resource_type: "video",
       type: "authenticated",
-      folder: `onlyme/messages/video/${senderId}`,
+      folder: `atseen/messages/video/${senderId}`,
       allowed_formats: ["webm", "mp4", "mov"],
       context: { purpose: "private_video_note", sender: String(senderId) },
     }, (error, result) => error ? reject(error) : resolve(result));

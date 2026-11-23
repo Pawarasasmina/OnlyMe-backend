@@ -17,19 +17,19 @@ export const listModeration = asyncHandler(async (req, res) => {
     Publication.find(filter).select("+submittedSnapshot +internalModerationNote").populate("creator", "name username email avatar creatorApprovalStatus status").sort({ submittedAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
     Publication.countDocuments(filter),
   ]);
-  return sendResponse(res, 200, "Planet approval queue fetched", { items: items.map((item) => serializePublication(item, req.user, { admin: true })), pagination: { page, limit, total } });
+  return sendResponse(res, 200, "World approval queue fetched", { items: items.map((item) => serializePublication(item, req.user, { admin: true })), pagination: { page, limit, total } });
 });
 
 export const getModeration = asyncHandler(async (req, res) => {
   const publication = await Publication.findOne(planetFilter(req.params.id)).select("+submittedSnapshot +internalModerationNote").populate("creator", "name username email avatar creatorApprovalStatus status").lean();
-  if (!publication) throw new ApiError(404, "Planet not found");
+  if (!publication) throw new ApiError(404, "World not found");
   const history = await PublicationReviewHistory.find({ publication: publication._id, action: { $nin: ["DRAFT_UPDATED", "CHAPTER_UPDATED"] } }).sort({ createdAt: 1 }).populate("admin", "name username email").lean();
-  return sendResponse(res, 200, "Planet approval detail fetched", { publication: serializePublication(publication, req.user, { admin: true }), history });
+  return sendResponse(res, 200, "World approval detail fetched", { publication: serializePublication(publication, req.user, { admin: true }), history });
 });
 
 export const getHistory = asyncHandler(async (req, res) => {
-  if (!await Publication.exists(planetFilter(req.params.id))) throw new ApiError(404, "Planet not found");
-  return sendResponse(res, 200, "Planet approval history fetched", { history: await PublicationReviewHistory.find({ publication: req.params.id, action: { $nin: ["DRAFT_UPDATED", "CHAPTER_UPDATED"] } }).sort({ createdAt: 1 }).lean() });
+  if (!await Publication.exists(planetFilter(req.params.id))) throw new ApiError(404, "World not found");
+  return sendResponse(res, 200, "World approval history fetched", { history: await PublicationReviewHistory.find({ publication: req.params.id, action: { $nin: ["DRAFT_UPDATED", "CHAPTER_UPDATED"] } }).sort({ createdAt: 1 }).lean() });
 });
 const decide = (decision) => asyncHandler(async (req, res) => sendResponse(res, 200, `Publication ${decision.toLowerCase()}`, { publication: serializePublication(await moderatePublication({ id: req.params.id, adminId: req.user._id, decision, review: req.body }), req.user, { admin: true }) }));
 export const approve = decide("APPROVED"); export const requestChanges = decide("CHANGES_REQUESTED"); export const reject = decide("REJECTED");

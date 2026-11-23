@@ -1,6 +1,7 @@
 import { v2 as cloudinary } from "cloudinary";
 import ApiError from "../utils/ApiError.js";
 import { env } from "../config/env.js";
+import { STORAGE_ROOTS } from "./storageBrand.js";
 
 cloudinary.config({ cloud_name: env.cloudinaryCloudName, api_key: env.cloudinaryApiKey, api_secret: env.cloudinaryApiSecret, secure: true });
 
@@ -10,7 +11,7 @@ export async function uploadGroupAvatar({ buffer, groupId, userId }) {
   const asset = await new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream({
       resource_type: "image",
-      folder: `onlyme/messages/groups/${groupId}`,
+      folder: `atseen/messages/groups/${groupId}`,
       public_id: "avatar",
       overwrite: true,
       invalidate: true,
@@ -24,5 +25,7 @@ export async function uploadGroupAvatar({ buffer, groupId, userId }) {
 
 export async function deleteGroupAvatar(groupId) {
   if (!env.cloudinaryCloudName || !env.cloudinaryApiKey || !env.cloudinaryApiSecret) throw new ApiError(503, "Group-image storage is not configured");
-  await cloudinary.uploader.destroy(`onlyme/messages/groups/${groupId}/avatar`, { resource_type: "image", invalidate: true });
+  for (const root of STORAGE_ROOTS) {
+    await cloudinary.uploader.destroy(`${root}/messages/groups/${groupId}/avatar`, { resource_type: "image", invalidate: true });
+  }
 }

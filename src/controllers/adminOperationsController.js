@@ -30,7 +30,7 @@ const validId = (id, label = "ID") => { if (!mongoose.isValidObjectId(id)) throw
 const defaultPolicy = {
   urgentHours: 4, standardHours: 24, contextMessages: 3,
   autoHideCategories: ["CHILD_SAFETY", "SELF_HARM", "DEFAMATION"],
-  reporterOutcomeText: "We reviewed your report and took the appropriate action. Thank you for helping keep ATSEEN safe.",
+  reporterOutcomeText: "We reviewed your report and took the appropriate action. Thank you for helping keep @seen safe.",
   authorActionText: "We took action because this content or activity violated our community rules. You may submit one appeal.",
   appealInstructions: "Open the moderation notice and submit one appeal with any relevant context.",
 };

@@ -13,6 +13,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { syncRepost } from "../services/repostService.js";
 import { sendCommentResponse as sendResponse } from "../services/commentBadgeService.js";
 import { getActiveRecommendationConfig, personalizeCandidates } from "../services/recommendationService.js";
+import { readAnalyticsSessionId, recordAnalyticsEvent } from "../services/analyticsEventService.js";
 
 export const getWallPost = asyncHandler(async (req, res) => {
   const post = await requirePost(req.params.id);
@@ -56,7 +57,20 @@ export const getWallReactions = asyncHandler(async (req, res) => { await require
 export const toggleWallReaction = asyncHandler(async (req, res) => { await requirePost(req.params.id); const shareId = req.body.shareId; if (shareId) await requireShare(shareId, req.params.id); const reaction = String(req.body.reaction || "like").toLowerCase(); if (!WALL_REACTIONS.includes(reaction)) throw new ApiError(400, "Invalid Wall reaction"); const Model = shareId ? WallShareEngagement : WallEngagement; const filter = { ...(shareId ? { share: shareId } : { post: req.params.id }), user: req.user._id, type: "REACTION" }; const existing = await Model.findOne(filter); let message = "Reaction saved"; if (existing?.reaction === reaction || (existing && !existing.reaction && reaction === "like")) { await existing.deleteOne(); message = "Reaction removed"; } else if (existing) { existing.reaction = reaction; existing.actorAccountType = req.user.accountType; await existing.save(); message = "Reaction changed"; } else await Model.create({ ...filter, actorAccountType: req.user.accountType, reaction }); return sendResponse(res, 200, message, { engagement: shareId ? await engagementForWallShare(shareId, req.user._id) : await engagementForWallPost(req.params.id, req.user._id) }); });
 export const addWallComment = asyncHandler(async (req, res) => { await requirePost(req.params.id); const shareId = req.body.shareId; if (shareId) await requireShare(shareId, req.params.id); const text = String(req.body.text || "").trim(); if (!text || text.length > 500) throw new ApiError(400, "Comment must contain 1 to 500 characters"); const Model = shareId ? WallShareEngagement : WallEngagement; await Model.create({ ...(shareId ? { share: shareId } : { post: req.params.id }), user: req.user._id, actorAccountType: req.user.accountType, type: "COMMENT", text }); return sendResponse(res, 201, "Comment posted", { engagement: shareId ? await engagementForWallShare(shareId, req.user._id) : await engagementForWallPost(req.params.id, req.user._id) }); });
 export const toggleWallShare = asyncHandler(async (req, res) => { const post = await requirePost(req.params.id); if (String(post.creator) === String(req.user._id)) throw new ApiError(409, "You cannot repost your own Wall note"); const filter = { post: req.params.id, user: req.user._id, type: "SHARE" }; const existing = await WallEngagement.findOne(filter); if (existing) { await WallShareEngagement.deleteMany({ share: existing._id }); await existing.deleteOne(); } else { const caption = String(req.body.caption || "").trim(); if (caption.length > 500) throw new ApiError(400, "Share caption must not exceed 500 characters"); await WallEngagement.create({ ...filter, actorAccountType: req.user.accountType, text: caption || undefined }); } await syncRepost({ enabled: !existing, kind: "note", originalAuthor: post.creator, targetId: post._id, targetModel: "WallPost", user: req.user._id }); return sendResponse(res, 200, existing ? "Post removed from profile" : "Post shared to profile", { engagement: await engagementForWallPost(req.params.id, req.user._id) }); });
-export const toggleWallSave = asyncHandler(async (req, res) => { await requirePost(req.params.id); const shareId = req.body.shareId; if (shareId) await requireShare(shareId, req.params.id); const Model = shareId ? WallShareEngagement : WallEngagement; const filter = { ...(shareId ? { share: shareId } : { post: req.params.id }), user: req.user._id, type: "SAVE" }; const existing = await Model.findOne(filter); if (existing) await existing.deleteOne(); else await Model.create({ ...filter, actorAccountType: req.user.accountType }); return sendResponse(res, 200, existing ? "Wall post removed from Saved" : "Wall post saved", { engagement: shareId ? await engagementForWallShare(shareId, req.user._id) : await engagementForWallPost(req.params.id, req.user._id) }); });
+export const toggleWallSave = asyncHandler(async (req, res) => {
+  await requirePost(req.params.id);
+  const shareId = req.body.shareId;
+  if (shareId) await requireShare(shareId, req.params.id);
+  const Model = shareId ? WallShareEngagement : WallEngagement;
+  const filter = { ...(shareId ? { share: shareId } : { post: req.params.id }), user: req.user._id, type: "SAVE" };
+  const existing = await Model.findOne(filter);
+  if (existing) await existing.deleteOne();
+  else {
+    await Model.create({ ...filter, actorAccountType: req.user.accountType });
+    await recordAnalyticsEvent({ req, userId: req.user._id, sessionId: readAnalyticsSessionId(req) || `wall:${req.user._id}`, entityId: String(shareId || req.params.id), entityType: shareId ? "wall_share" : "wall_post", eventType: "SAVE", source: "home" }).catch(() => {});
+  }
+  return sendResponse(res, 200, existing ? "Wall post removed from Saved" : "Wall post saved", { engagement: shareId ? await engagementForWallShare(shareId, req.user._id) : await engagementForWallPost(req.params.id, req.user._id) });
+});
 
 export const getWallSawYouToday = asyncHandler(async (req, res) => {
   const data = await getSawYouToday(req.user, { limit: req.query.limit });

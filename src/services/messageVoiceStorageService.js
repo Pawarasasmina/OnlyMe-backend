@@ -17,7 +17,7 @@ export async function uploadMessageVoice({ buffer, senderId, folder = "", maxDur
     const stream = cloudinary.uploader.upload_stream({
       resource_type: "video",
       type: "authenticated",
-      folder: folder || `onlyme/messages/voice/${senderId}`,
+      folder: folder || `atseen/messages/voice/${senderId}`,
       allowed_formats: ["webm", "ogg", "mp4", "mp3", "wav"],
       context: { purpose, sender: String(senderId) },
     }, (error, result) => error ? reject(error) : resolve(result));

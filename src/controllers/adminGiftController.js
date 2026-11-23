@@ -41,7 +41,7 @@ export const createGift = asyncHandler(async (req, res) => {
   const image = await uploadGiftImage(req.file, req.user._id);
   try {
     const lastGift = await Gift.findOne().sort({ sortOrder: -1 }).select("sortOrder").lean();
-const gift = await Gift.create({ name: nameValue(req.body.name), caption: captionValue(req.body.caption), stars: integer(req.body.stars, "Star value", 1, 1000000), category: await categoryValue(req.body.categoryId), displayScale: integer(req.body.displayScale || 100, "Display scale", 40, 140), imagePositionX: integer(req.body.imagePositionX || 0, "Horizontal position", -50, 50), imagePositionY: integer(req.body.imagePositionY || 0, "Vertical position", -50, 50), ...animationValue(req.body), animationConfigured: true, sortOrder: Math.min((lastGift?.sortOrder || 0) + 1, 100000), isActive: String(req.body.isActive) !== "false", image, createdBy: req.user._id, updatedBy: req.user._id });
+const gift = await Gift.create({ name: nameValue(req.body.name), caption: captionValue(req.body.caption), stars: integer(req.body.stars, "Coin value", 1, 1000000), category: await categoryValue(req.body.categoryId), displayScale: integer(req.body.displayScale || 100, "Display scale", 40, 140), imagePositionX: integer(req.body.imagePositionX || 0, "Horizontal position", -50, 50), imagePositionY: integer(req.body.imagePositionY || 0, "Vertical position", -50, 50), ...animationValue(req.body), animationConfigured: true, sortOrder: Math.min((lastGift?.sortOrder || 0) + 1, 100000), isActive: String(req.body.isActive) !== "false", image, createdBy: req.user._id, updatedBy: req.user._id });
     if (gift.isActive) await GiftPreference.updateMany({}, { $addToSet: { enabledGifts: gift._id } });
     return sendResponse(res, 201, "Gift created", { gift: serialize(gift) });
   } catch (error) { await deleteGiftImage(image.assetId).catch(() => {}); throw error; }
@@ -58,7 +58,7 @@ export const updateGift = asyncHandler(async (req, res) => {
   try {
     if (req.body.name !== undefined) gift.name = nameValue(req.body.name);
     if (req.body.caption !== undefined) gift.caption = captionValue(req.body.caption);
-    if (req.body.stars !== undefined) gift.stars = integer(req.body.stars, "Star value", 1, 1000000);
+    if (req.body.stars !== undefined) gift.stars = integer(req.body.stars, "Coin value", 1, 1000000);
     if (req.body.categoryId !== undefined) gift.category = await categoryValue(req.body.categoryId);
     if (req.body.displayScale !== undefined) gift.displayScale = integer(req.body.displayScale, "Display scale", 40, 140);
     if (req.body.imagePositionX !== undefined) gift.imagePositionX = integer(req.body.imagePositionX, "Horizontal position", -50, 50);

@@ -3,6 +3,7 @@ import { env } from "../config/env.js";
 import { MEDIA_RULES } from "../constants/contentConstants.js";
 import ApiError from "../utils/ApiError.js";
 import fs from "node:fs/promises";
+import { ownsStoragePath } from "./storageBrand.js";
 
 cloudinary.config({ cloud_name: env.cloudinaryCloudName, api_key: env.cloudinaryApiKey, api_secret: env.cloudinaryApiSecret, secure: true });
 const configured = () => {
@@ -11,7 +12,7 @@ const configured = () => {
 export async function uploadContentFile({ file, creatorId, contentId, contentType }) {
   configured(); const rule = MEDIA_RULES[contentType];
   if (!rule || !file?.path) throw new ApiError(400, "A valid content media file is required");
-  const folder = `onlyme/content/${creatorId}/${contentId}`;
+  const folder = `atseen/content/${creatorId}/${contentId}`;
   try {
     const asset = await cloudinary.uploader.upload(file.path, {
       resource_type: rule.resourceType,
@@ -41,8 +42,7 @@ export function authenticatedDeliveryUrl(media) {
 export async function verifyContentAsset({ assetId, creatorId, contentId, contentType }) {
   configured(); const rule = MEDIA_RULES[contentType];
   if (!rule || !assetId) throw new ApiError(400, "Invalid content asset");
-  const expectedPrefix = `onlyme/content/${creatorId}/${contentId}/`;
-  if (!assetId.startsWith(expectedPrefix)) throw new ApiError(400, "Media does not belong to this creator and draft");
+  if (!ownsStoragePath(assetId, `content/${creatorId}/${contentId}`)) throw new ApiError(400, "Media does not belong to this creator and draft");
   let asset;
   try { asset = await cloudinary.api.resource(assetId, { resource_type: rule.resourceType, type: "authenticated" }); }
   catch { throw new ApiError(400, "Uploaded media could not be verified"); }
