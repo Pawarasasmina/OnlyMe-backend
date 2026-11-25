@@ -77,6 +77,17 @@ test("profile contract separates published Seens, planets, and legacy content", 
   assert.equal(result.seens.length, 1); assert.equal(result.planets.length, 1); assert.equal(result.publicContent.length, 0);
 });
 
+test("pending paid Seen is visible only on its creator's own profile", () => {
+  const submittedSnapshot = { metadata: { title: "Awaiting approval", summary: "", description: "", category: "Lifestyle", tags: [], pricing: { mode: "ONE_TIME", starsAmount: 90 } }, chapters: [{ stableChapterId: "preview", order: 0, title: "Preview", isPreview: true, blocks: [] }], version: 1, frozenAt: new Date() };
+  const pending = { _id: "pending-seen", creator: owner._id, kind: "SEEN", status: "PENDING_REVIEW", pricing: { mode: "ONE_TIME", starsAmount: 90 }, submittedSnapshot };
+  const own = serializeUnifiedProfile({ owner, roleProfile, viewer: owner, seens: [pending] });
+  assert.equal(own.seens.length, 1);
+  assert.equal(own.seens[0].status, "PENDING_REVIEW");
+  assert.equal(own.seens[0].title, "Awaiting approval");
+  const visitor = serializeUnifiedProfile({ owner, roleProfile, viewer: { _id: "visitor", role: "fan" }, seens: [pending] });
+  assert.equal(visitor.seens.length, 0);
+});
+
 test("profile contract exposes only intentional Profile Media", () => {
   const result = serializeUnifiedProfile({
     owner: { ...owner, avatar: "https://example.com/avatar.jpg" },
