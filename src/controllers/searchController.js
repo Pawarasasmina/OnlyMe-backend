@@ -58,6 +58,7 @@ export const suggestions = asyncHandler(async (req, res) => {
 
 export const locations = asyncHandler(async (req, res) => {
   const items = await searchLiveLocations({
+    areaOnly: req.query.areaOnly === "true",
     language: req.query.language,
     latitude: req.query.latitude,
     longitude: req.query.longitude,

@@ -1,5 +1,7 @@
+import { normalizeMeetupPolicy, refreshUnsafeAccountRestriction } from "../services/unsafeReportService.js";
 import mongoose from "mongoose";
 import PlatformSetting from "./PlatformSetting.js";
+import { freezeMessageEvidence, isMessageEvidenceScope } from "../services/messageEvidenceService.js";
 
 const messageReportSchema = new mongoose.Schema({
   reporter: { type: mongoose.Schema.Types.ObjectId, ref: "User", required() { const source = this.source || this.getUpdate?.()?.$setOnInsert?.source || this.getUpdate?.()?.$set?.source; return !["UPLOAD_SCAN", "AUTOMATED_DUPLICATE"].includes(source); }, default: null, index: true },
@@ -18,11 +20,11 @@ const messageReportSchema = new mongoose.Schema({
   directAccessWindow: { type: mongoose.Schema.Types.ObjectId, ref: "DAWindow", default: null },
   reason: {
     type: String,
-    enum: ["SPAM", "FALSE_INFORMATION", "DEFAMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "ILLEGAL_CONTENT", "COPYRIGHT", "IMPERSONATION", "CHILD_SAFETY", "SCAM", "OTHER"],
+    enum: ["UNSAFE_MEETUP", "SPAM", "FALSE_INFORMATION", "DEFAMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "ILLEGAL_CONTENT", "COPYRIGHT", "IMPERSONATION", "CHILD_SAFETY", "SCAM", "OTHER"],
     required: true,
   },
   details: { type: String, trim: true, maxlength: 1000, default: "" },
-  snapshot: { type: mongoose.Schema.Types.Mixed, required: true, select: false },
+  snapshot: { type: mongoose.Schema.Types.Mixed, required: true, select: false, immutable: true },
   status: { type: String, enum: ["RECEIVED", "REVIEWING", "RESOLVED", "CLOSED"], default: "RECEIVED", index: true },
   source: { type: String, enum: ["USER_REPORT", "UPLOAD_SCAN", "DIRECT_ACCESS_DISPUTE", "AUTOMATED_DUPLICATE"], default: "USER_REPORT", index: true },
   qualifiesForWallAutoHide: { type: Boolean, default: false },
@@ -49,17 +51,22 @@ messageReportSchema.index(
   { unique: true, partialFilterExpression: { scope: "MESSAGE" } },
 );
 messageReportSchema.index({ status: 1, createdAt: 1 });
+messageReportSchema.pre("validate", async function freezeEvidence() {
+  if (!this.isNew || !this.snapshot || !isMessageEvidenceScope(this.scope) || this.$locals.evidenceCaptured) return;
+  this.snapshot = await freezeMessageEvidence(this.snapshot, this._id);
+  this.$locals.evidenceCaptured = true;
+});
 messageReportSchema.index({ status: 1, priorityRank: -1, dueAt: 1, createdAt: 1 });
 messageReportSchema.pre("validate", async function applySla() {
   if (!this.isNew) return;
   this.$locals.wasNew = true;
-  const urgent = ["CHILD_SAFETY", "SELF_HARM", "DEFAMATION"].includes(this.reason);
+  const urgent = ["UNSAFE_MEETUP", "CHILD_SAFETY", "SELF_HARM", "DEFAMATION"].includes(this.reason);
   const settings = await PlatformSetting.findOne({ key: "moderation-policy" }).select("value").lean();
   const urgentHours = Math.min(24, Math.max(1, Number(settings?.value?.urgentHours) || 4));
   const standardHours = Math.min(168, Math.max(1, Number(settings?.value?.standardHours) || 24));
   this.priority = urgent ? "URGENT" : "STANDARD";
   this.priorityRank = urgent ? 2 : 1;
-  this.dueAt = new Date(Date.now() + (urgent ? urgentHours : standardHours) * 60 * 60 * 1000);
+  this.dueAt = new Date(Date.now() + (this.reason === "UNSAFE_MEETUP" ? normalizeMeetupPolicy(settings?.value).unsafeUrgentHours : urgent ? urgentHours : standardHours) * 60 * 60 * 1000);
   this.$locals.autoHide = (settings?.value?.autoHideCategories || ["CHILD_SAFETY", "SELF_HARM", "DEFAMATION"]).includes(this.reason);
 });
 messageReportSchema.post("save", async function autoHideUrgent(doc) {
@@ -84,6 +91,7 @@ messageReportSchema.post("save", async function updateWallReportState(doc) {
   if (doc.scope !== "FEED_POST") return;
   const { applyWallReportOutcome } = await import("../services/wallReportService.js");
   await applyWallReportOutcome(doc);
+  if (doc.reason === "UNSAFE_MEETUP") await refreshUnsafeAccountRestriction(doc.reportedUser);
 });
 messageReportSchema.index({ scope: 1, reportedUser: 1, status: 1, feedPost: 1 });
 messageReportSchema.index({ scope: 1, reporter: 1, status: 1, "resolution.falseReport": 1 });

@@ -1,3 +1,6 @@
+import { withMessageEvidenceUrls } from "../services/messageEvidenceService.js";
+import { normalizeMeetupPolicy } from "../services/unsafeReportService.js";
+import { assertAccountAge } from "../utils/accountAge.js";
 import { removeSeenCommentThread } from "../services/seenCommentService.js";
 import mongoose from "mongoose";
 import User from "../models/User.js";
@@ -24,7 +27,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { effectiveAdminRole } from "../middleware/adminPermissionMiddleware.js";
 
-const URGENT = new Set(["CHILD_SAFETY", "SELF_HARM", "DEFAMATION"]);
+const URGENT = new Set(["UNSAFE_MEETUP", "CHILD_SAFETY", "SELF_HARM", "DEFAMATION"]);
 const clean = (value, max = 2000) => String(value || "").trim().slice(0, max);
 const validId = (id, label = "ID") => { if (!mongoose.isValidObjectId(id)) throw new ApiError(400, `Invalid ${label}`); return id; };
 const defaultPolicy = {
@@ -37,7 +40,7 @@ const defaultPolicy = {
 
 async function policy() {
   const row = await PlatformSetting.findOne({ key: "moderation-policy" }).lean();
-  return { ...defaultPolicy, ...(row?.value || {}) };
+  return { ...defaultPolicy, ...(row?.value || {}), ...normalizeMeetupPolicy(row?.value) };
 }
 async function audit(req, action, targetType, targetId, reason, before = null, after = null, metadata = {}) {
   return AdminAuditEvent.create({ actor: req.user._id, actorRole: effectiveAdminRole(req.user), action, targetType, targetId: String(targetId), reason, before, after, metadata });
@@ -46,7 +49,7 @@ function normalizedReport(row, model) {
   const reason = row.reason || "OTHER";
   const urgent = row.priority === "URGENT" || URGENT.has(reason);
   const created = new Date(row.createdAt);
-  const dueAt = row.dueAt || new Date(created.getTime() + (urgent ? 4 : 24) * 3600000);
+  const dueAt = reason === "UNSAFE_MEETUP" ? new Date(Math.min(new Date(row.dueAt || Infinity).getTime() || Infinity, created.getTime() + 4 * 3600000)) : row.dueAt || new Date(created.getTime() + (urgent ? 4 : 24) * 3600000);
   const author = model === "MessageReport" ? row.reportedUser : row.creator;
   return { ...row, id: row._id, model, author, priority: urgent ? "URGENT" : "STANDARD", priorityRank: urgent ? 2 : 1, dueAt, overdue: !["RESOLVED", "CLOSED"].includes(row.status) && new Date(dueAt) < new Date() };
 }
@@ -95,7 +98,7 @@ export const getUnifiedReport = asyncHandler(async (req, res) => {
     ModerationAppeal.find({ reportModel: req.params.model, reportId: report._id }).populate("reviewer appellant", "name username").lean(),
     ReportModel.countDocuments({ ...siblingFilter(report, req.params.model), status: { $in: ["RECEIVED", "REVIEWING", "RESOLVED", "CLOSED"] } }),
   ]);
-  return sendResponse(res, 200, "Moderation case fetched", { report: { ...normalizedReport(report.toObject(), req.params.model), reportCount }, history, appeals });
+  return sendResponse(res, 200, "Moderation case fetched", { report: { ...normalizedReport(withMessageEvidenceUrls(report), req.params.model), reportCount }, history, appeals });
 });
 
 async function applyContentAction(report, model, action) {
@@ -187,12 +190,12 @@ export const reviewAppeal = asyncHandler(async (req, res) => {
 
 export const getModerationPolicy = asyncHandler(async (_req, res) => sendResponse(res, 200, "Moderation policy fetched", { policy: await policy() }));
 export const updateModerationPolicy = asyncHandler(async (req, res) => {
-  const current = await policy(); const next = { ...current, urgentHours: Math.min(24, Math.max(1, Number(req.body.urgentHours) || current.urgentHours)), standardHours: Math.min(168, Math.max(1, Number(req.body.standardHours) || current.standardHours)), contextMessages: Math.min(5, Math.max(1, Number(req.body.contextMessages) || current.contextMessages)), autoHideCategories: Array.isArray(req.body.autoHideCategories) ? req.body.autoHideCategories.map((x) => clean(x, 40).toUpperCase()).filter((x) => URGENT.has(x)) : current.autoHideCategories, reporterOutcomeText: clean(req.body.reporterOutcomeText || current.reporterOutcomeText), authorActionText: clean(req.body.authorActionText || current.authorActionText), appealInstructions: clean(req.body.appealInstructions || current.appealInstructions) };
+  const current = await policy(); const next = { ...current, ...normalizeMeetupPolicy({ ...current, ...req.body }), urgentHours: Math.min(24, Math.max(1, Number(req.body.urgentHours) || current.urgentHours)), standardHours: Math.min(168, Math.max(1, Number(req.body.standardHours) || current.standardHours)), contextMessages: Math.min(5, Math.max(1, Number(req.body.contextMessages) || current.contextMessages)), autoHideCategories: Array.isArray(req.body.autoHideCategories) ? req.body.autoHideCategories.map((x) => clean(x, 40).toUpperCase()).filter((x) => URGENT.has(x)) : current.autoHideCategories, reporterOutcomeText: clean(req.body.reporterOutcomeText || current.reporterOutcomeText), authorActionText: clean(req.body.authorActionText || current.authorActionText), appealInstructions: clean(req.body.appealInstructions || current.appealInstructions) };
   await PlatformSetting.findOneAndUpdate({ key: "moderation-policy" }, { $set: { value: next, updatedBy: req.user._id } }, { upsert: true, new: true }); await audit(req, "MODERATION_POLICY_UPDATED", "SETTING", "moderation-policy", clean(req.body.reason) || "Policy settings updated", current, next); return sendResponse(res, 200, "Moderation policy updated", { policy: next });
 });
 
 export const getAdminUserDetail = asyncHandler(async (req, res) => {
-  const user = await User.findById(validId(req.params.id, "user ID")).select("+accountType name username email role profileType accountType status isVerified creatorApprovalStatus createdAt authVersion postingRestrictedUntil postingRestrictionReason sellingRestrictedUntil sellingRestrictionReason messagingRestrictedUntil loginRestrictedUntil").lean(); if (!user || user.role === "admin") throw new ApiError(404, "User not found");
+  const user = await User.findById(validId(req.params.id, "user ID")).select("+accountType name username email dateOfBirth unsafeRestrictedUntil unsafeRestrictionReason role profileType accountType status isVerified creatorApprovalStatus createdAt authVersion postingRestrictedUntil postingRestrictionReason sellingRestrictedUntil sellingRestrictionReason messagingRestrictedUntil loginRestrictedUntil").lean(); if (!user || user.role === "admin") throw new ApiError(404, "User not found");
   const [reports, actions, logins, holds] = await Promise.all([MessageReport.find({ reportedUser: user._id }).select("-snapshot").sort({ createdAt: -1 }).limit(100).lean(), AdminAuditEvent.find({ $or: [{ targetType: "USER", targetId: String(user._id) }, { "metadata.authorId": String(user._id) }] }).populate("actor", "name username").sort({ createdAt: -1 }).lean(), AdminLoginEvent.find({ user: user._id }).sort({ createdAt: -1 }).limit(50).lean(), LegalHold.find({ targetType: "USER", targetId: String(user._id), active: true }).lean()]);
   return sendResponse(res, 200, "Admin user detail fetched", { user, reports, actions, logins, holds });
 });
@@ -203,7 +206,8 @@ export const enforceUser = asyncHandler(async (req, res) => {
   else if (action === "RESTRICT_SELLING") { user.sellingRestrictedUntil = until; user.sellingRestrictionReason = reason; }
   else if (action === "SUSPEND") { user.status = "suspended"; user.authVersion += 1; }
   else if (action === "BAN") { user.status = "banned"; user.authVersion += 1; }
-  else if (action === "UNBAN") { user.status = "active"; user.authVersion += 1; }
+  else if (action === "LIFT_MEETUP_RESTRICTION") { user.unsafeRestrictedUntil = null; user.unsafeRestrictionLiftedAt = new Date(); user.unsafeRestrictionReason = ""; }
+  else if (action === "UNBAN") { assertAccountAge(user); user.status = "active"; user.authVersion += 1; }
   else if (action === "FORCE_LOGOUT") user.authVersion += 1;
   else if (action === "RESET_VERIFICATION") { user.isVerified = false; user.creatorApprovalStatus = null; }
   else throw new ApiError(400, "Invalid user action");

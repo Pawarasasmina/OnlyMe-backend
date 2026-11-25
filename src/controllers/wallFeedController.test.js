@@ -4,6 +4,7 @@ import mongoose from "mongoose";
 import FeedPost from "../models/FeedPost.js";
 import UserBlock from "../models/UserBlock.js";
 import { listFeedPosts, postControllerTestUtils } from "./postController.js";
+test.beforeEach(t => { t.mock.method(postControllerTestUtils, "businessOfferVisibilityFilter", async () => ({})); t.mock.method(postControllerTestUtils, "getRecommendationExclusions", async () => ({ accounts: new Set(), items: new Set() })); });
 
 test("Wall endpoint applies combined filters and preserves aggregate order for posts and shares", async (t) => {
   t.mock.method(postControllerTestUtils, "personalizeCandidates", async ({ items }) => ({ items, recommendation: null }));

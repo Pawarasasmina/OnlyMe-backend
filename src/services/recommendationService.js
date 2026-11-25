@@ -1,3 +1,4 @@
+import { filterRecommendationItems, getRecommendationExclusions } from "./recommendationExclusionService.js";
 import crypto from "node:crypto";
 import AnalyticsEvent from "../models/AnalyticsEvent.js";
 import CreatorProfile from "../models/CreatorProfile.js";
@@ -17,6 +18,7 @@ export const DEFAULT_RECOMMENDATION_CONFIG = Object.freeze({
   },
   signals: { follow: 10, save: 8, share: 8, replay: 7, completion: 6, reaction: 4, profileOpen: 3, longWatch: 3, fastSkip: -6, notInterested: -15 },
   rules: { batchSize: 20, candidateLimit: 200, maxPerCreator: 2, minCategoryDiversity: 3, maxConsecutiveCategory: 2, repeatCooldownDays: 14, recentExposureLimit: 100, recencyHalfLifeHours: 72, fastSkipSeconds: 2 },
+  productRules: { newWorldPosition: 3, newWorldMaxAgeDays: 7, wallCountryWeight: 5, wallCityWeight: 10, missingPhotoPenalty: 12 },
   coldStart: { onboardingInterest: 12, language: 4, location: 5, trending: 5, quality: 6, recency: 4 },
 });
 
@@ -45,6 +47,11 @@ export function validateRecommendationConfig(input = {}) {
   for (const [key, fallback] of Object.entries(config.coldStart)) config.coldStart[key] = number(input.coldStart?.[key], fallback, 0, 100);
   const ranges = { batchSize: [5, 100], candidateLimit: [20, 1000], maxPerCreator: [1, 20], minCategoryDiversity: [1, 20], maxConsecutiveCategory: [1, 10], repeatCooldownDays: [0, 365], recentExposureLimit: [10, 1000], recencyHalfLifeHours: [1, 2160], fastSkipSeconds: [0.25, 30] };
   for (const [key, fallback] of Object.entries(config.rules)) config.rules[key] = number(input.rules?.[key], fallback, ...ranges[key]);
+  const productRanges = { newWorldPosition: [0, 20], newWorldMaxAgeDays: [1, 90], wallCountryWeight: [0, 100], wallCityWeight: [0, 100], missingPhotoPenalty: [0, 100] };
+  for (const [key, fallback] of Object.entries(config.productRules)) {
+    config.productRules[key] = number(input.productRules?.[key], fallback, ...productRanges[key]);
+    if (["newWorldPosition", "newWorldMaxAgeDays"].includes(key)) config.productRules[key] = Math.round(config.productRules[key]);
+  }
   return config;
 }
 
@@ -101,8 +108,8 @@ export async function recentExposureIds(userId, surface, config) {
 }
 
 function candidateData(item, surface) {
-  const creator = item.creator?.id || item.creator?._id || item.creator || item.user?.id || item.user?._id || item.user;
-  const topics = normalized([item.category, item.creator?.category, ...(item.categories || []), ...(item.creator?.categories || []), ...(item.tags || []), ...(item.creator?.tags || []), item.context]);
+  const creator = item.creator?.id || item.creator?._id || item.creator || item.author?.id || item.author?._id || item.author || item.user?.id || item.user?._id || item.user;
+  const topics = normalized([item.category, item.creator?.category, ...(item.categories || []), ...(item.creator?.categories || []), ...(item.tags || []), ...(item.match?.tags || []), ...(item.creator?.tags || []), item.context]);
   const date = item.publishedAt || item.feedCreatedAt || item.createdAt || item.updatedAt;
   const engagement = item.engagement || {};
   const views = Number(item.viewCount || engagement.viewCount || 0);
@@ -117,10 +124,16 @@ function candidateData(item, surface) {
     + shareRateSignal
     + Number(item.commentCount || engagement.commentCount || 0) * 2
     + Number(item.followers || 0);
+  const avatar = item.creator?.avatar || item.creator?.avatarUrl || item.author?.avatar || item.user?.avatar || item.avatar || "";
   const creatorLocation = item.creator?.location;
   const location = String(item.location || (typeof creatorLocation === "string" ? creatorLocation : [creatorLocation?.city, creatorLocation?.country].filter(Boolean).join(" ")) || item.creator?.city || "").toLowerCase();
   const languages = normalized([item.language, ...(item.languages || [])]);
-  return { id: itemId(item) || String(creator || ""), creatorId: String(creator || ""), topics, category: topics[0] || "uncategorized", date, quality: Math.log1p(Math.max(0, quality)), location, languages, surface };
+  return { id: itemId(item) || String(creator || ""), creatorId: String(creator || ""), topics, category: topics[0] || "uncategorized", date, quality: Math.log1p(Math.max(0, quality)), location, languages, surface, avatar };
+}
+
+export function hasRealPhoto(value) {
+  const avatar = String(value || "").trim();
+  return Boolean(avatar && !/data:image\/svg|dicebear|ui-avatars|placeholder|default[-_/]?avatar|avatar[-_/]?default|gravatar.*(?:identicon|mp=|d=)/i.test(avatar));
 }
 
 function seededJitter(seed, id) {
@@ -131,6 +144,7 @@ function seededJitter(seed, id) {
 
 export function rankCandidates(items, { config, exposureIds = new Set(), refreshSeed = "", signals, surface }) {
   const mix = config.mixes[surface];
+  const product = { ...DEFAULT_RECOMMENDATION_CONFIG.productRules, ...config.productRules };
   const topicSet = new Set([...signals.topics.entries()].filter(([, score]) => score > 0).map(([topic]) => topic));
   const scored = items.map((item) => {
     const data = candidateData(item, surface);
@@ -144,12 +158,21 @@ export function rankCandidates(items, { config, exposureIds = new Set(), refresh
     const languageMatch = data.languages.some((value) => signals.languages.includes(value));
     const bucket = interestScore > 0 ? "interest" : relatedScore > 0 ? "related" : "discovery";
     let score = interestScore + relatedScore + discoveryScore + recency(data.date, config.rules.recencyHalfLifeHours) * 8 + data.quality + (locationMatch ? config.coldStart.location : 0) + (languageMatch ? config.coldStart.language : 0);
+    const adjustments = [];
+    if (surface === "WALL") {
+      for (const [field, weight] of [["country", product.wallCountryWeight], ["city", product.wallCityWeight]]) {
+        if (signals.location[field] && data.location.includes(String(signals.location[field]).toLowerCase())) {
+          score += weight; adjustments.push({ rule: `wall_${field}`, weight });
+        }
+      }
+    }
+    if (!hasRealPhoto(data.avatar)) { score -= product.missingPhotoPenalty; adjustments.push({ rule: "missing_photo", weight: -product.missingPhotoPenalty }); }
     if (exposureIds.has(data.id)) score -= 1000;
     // Keep relevance dominant, but rotate candidates with similar scores for each
     // explicit refresh. This also gives a fresh order when the available pool is
     // smaller than the configured repeat-cooldown window.
     score += seededJitter(refreshSeed, data.id) * 3;
-    return { data, item, bucket, score };
+    return { data, item, bucket, score, adjustments };
   });
   const limit = config.rules.batchSize;
   const quotas = { interest: Math.round(limit * mix.interest / 100), related: Math.round(limit * mix.related / 100) };
@@ -179,10 +202,30 @@ export function rankCandidates(items, { config, exposureIds = new Set(), refresh
     if (selected.includes(row) || !canSelect(row)) continue;
     selected.push(row); creatorCounts.set(row.data.creatorId, (creatorCounts.get(row.data.creatorId) || 0) + 1);
   }
-  return selected.map((row) => ({ ...row.item, recommendation: { bucket: row.bucket, reason: row.bucket === "interest" ? "Based on your interests" : row.bucket === "related" ? "Related to creators and topics you like" : "Something new to discover", score: Number(row.score.toFixed(3)) } }));
+  // A pool containing only one topic must still fill the batch. Keep the
+  // creator cap while relaxing consecutive-category diversity as a last resort.
+  for (const row of scored) {
+    if (selected.length >= limit) break;
+    if (selected.includes(row) || (creatorCounts.get(row.data.creatorId) || 0) >= config.rules.maxPerCreator) continue;
+    selected.push(row);
+    creatorCounts.set(row.data.creatorId, (creatorCounts.get(row.data.creatorId) || 0) + 1);
+  }
+  if (surface === "SEEN" && product.newWorldPosition > 0) {
+    const freshWorld = scored.filter(row => ["WORLD", "PREMIUM_WORLD"].includes(row.item.kind) && !exposureIds.has(row.data.id) && new Date(row.data.date).getTime() >= Date.now() - product.newWorldMaxAgeDays * 86400000).sort((a, b) => new Date(b.data.date) - new Date(a.data.date))[0];
+    if (freshWorld && selected.length >= product.newWorldPosition - 1) {
+      const old = selected.indexOf(freshWorld);
+      if (old >= 0) selected.splice(old, 1);
+      selected.splice(product.newWorldPosition - 1, 0, freshWorld);
+      selected.splice(limit);
+      freshWorld.adjustments.push({ rule: "new_world_position", position: product.newWorldPosition });
+    }
+  }
+  return selected.map((row) => ({ ...row.item, recommendation: { bucket: row.bucket, reason: row.bucket === "interest" ? "Based on your interests" : row.bucket === "related" ? "Related to creators and topics you like" : "Something new to discover", score: Number(row.score.toFixed(3)), adjustments: row.adjustments } }));
 }
 
 export async function personalizeCandidates({ exposureLimit, items, req, surface }) {
+  const exclusions = await getRecommendationExclusions();
+  items = filterRecommendationItems(items, exclusions);
   if (!SURFACES.has(surface) || !req.user?._id) return { items, recommendation: null };
   const { config, version } = await getActiveRecommendationConfig();
   const [signals, exposureIds] = await Promise.all([
@@ -192,6 +235,7 @@ export async function personalizeCandidates({ exposureLimit, items, req, surface
   const refreshSeed = String(req.query.refreshToken || crypto.randomUUID()).slice(0, 100);
   const ranked = rankCandidates(items, { config, exposureIds, refreshSeed, signals, surface });
   const exposedItems = Number.isFinite(exposureLimit) ? ranked.slice(0, Math.max(1, exposureLimit)) : ranked;
+  if (req.recommendationPreview) return { items: ranked, recommendation: { configVersion: version, mix: config.mixes[surface], coldStart: signals.coldStart, preview: true } };
   const batch = await RecommendationBatch.create({ user: req.user._id, surface, sessionId: String(req.query.sessionId || "").slice(0, 80), configVersion: version, itemIds: exposedItems.map(itemId).filter(Boolean), reasons: Object.fromEntries(exposedItems.map((item) => [itemId(item), item.recommendation?.bucket]).filter(([id]) => id)), expiresAt: new Date(Date.now() + Math.max(1, config.rules.repeatCooldownDays) * 86_400_000) });
   return { items: ranked, recommendation: { batchId: String(batch._id), configVersion: version, mix: config.mixes[surface], coldStart: signals.coldStart, refreshToken: crypto.randomUUID() } };
 }

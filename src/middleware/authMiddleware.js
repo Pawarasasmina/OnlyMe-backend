@@ -1,3 +1,4 @@
+import { assertAccountAge } from "../utils/accountAge.js";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
 import User from "../models/User.js";
@@ -28,6 +29,8 @@ export const protect = asyncHandler(async (req, _res, next) => {
   }
 
   if ((decoded.authVersion || 0) !== (user.authVersion || 0)) throw new ApiError(401, "Please log in again");
+  assertAccountAge(user);
+  if (user.unsafeRestrictedUntil > new Date()) throw new ApiError(403, "Account temporarily restricted after repeated unsafe meet-up reports. Contact hello@atseen.com for review.", "MEETUP_SAFETY_RESTRICTED");
   if (user.status !== "active") {
     throw new ApiError(403, "This account is suspended");
   }
@@ -64,6 +67,8 @@ export const optionalProtect = asyncHandler(async (req, _res, next) => {
   const user = await User.findById(decoded.sub).select("+accountType");
   if (!user) throw new ApiError(401, "User not found");
   if ((decoded.authVersion || 0) !== (user.authVersion || 0)) throw new ApiError(401, "Please log in again");
+  assertAccountAge(user);
+  if (user.unsafeRestrictedUntil > new Date()) throw new ApiError(403, "Account temporarily restricted after repeated unsafe meet-up reports. Contact hello@atseen.com for review.", "MEETUP_SAFETY_RESTRICTED");
   if (user.status !== "active") throw new ApiError(403, "This account is suspended");
   if (user.loginRestrictedUntil && user.loginRestrictedUntil > new Date()) throw new ApiError(403, `Account access is restricted until ${user.loginRestrictedUntil.toISOString()}`);
   const adminSecuritySelfService = req.originalUrl?.includes("/admin/security/2fa");

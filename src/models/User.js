@@ -84,6 +84,9 @@ const userSchema = new mongoose.Schema(
       default: "personal",
       index: true,
     },
+    unsafeRestrictedUntil: { type: Date, default: null },
+    unsafeRestrictionLiftedAt: { type: Date, default: null },
+    unsafeRestrictionReason: { type: String, default: "", maxlength: 1000 },
     dateOfBirth: { type: Date, default: null },
     preferredLanguage: {
       type: String,

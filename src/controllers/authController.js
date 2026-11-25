@@ -1,3 +1,4 @@
+import { assertAccountAge } from "../utils/accountAge.js";
 import { serializeProfileStatus } from "../services/statusService.js";
 import mongoose from "mongoose";
 import User from "../models/User.js";
@@ -195,6 +196,8 @@ export const login = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Invalid username, email, phone or password");
   }
 
+  assertAccountAge(user);
+  if (user.unsafeRestrictedUntil > new Date()) throw new ApiError(403, "Account temporarily restricted after repeated unsafe meet-up reports. Contact hello@atseen.com for review.", "MEETUP_SAFETY_RESTRICTED");
   if (user.role === "admin" && user.adminTwoFactorEnabled) {
     const profile = await AdminProfile.findOne({ user: user._id }).select("+twoFactorSecret");
     if (!profile?.twoFactorSecret || !verifyTotp(profile.twoFactorSecret, req.body.twoFactorCode)) throw new ApiError(401, "Enter the current six-digit authenticator code", "ADMIN_2FA_REQUIRED");
@@ -323,6 +326,8 @@ export const googleCallback = asyncHandler(async (req, res) => {
     user = await User.create({ name: String(profile.name || email.split("@")[0]).slice(0, 100), username, email, googleId: profile.sub, avatar: profile.picture || "", password: crypto.randomBytes(32).toString("base64url"), role: "fan", profileType: "personal", creatorApprovalStatus: null });
     await FanProfile.create({ user: user._id });
   }
+  assertAccountAge(user);
+  if (user.unsafeRestrictedUntil > new Date()) throw new ApiError(403, "Account temporarily restricted after repeated unsafe meet-up reports. Contact hello@atseen.com for review.", "MEETUP_SAFETY_RESTRICTED");
   if (user.status !== "active") return googleFailure(res, "This account is not available");
   if (user.twoFactorEnabled) return googleFailure(res, "This account uses two-factor authentication. Sign in with your password and authenticator code.");
   const tokens = issueAuthTokens(user);
@@ -368,6 +373,8 @@ export const refreshSession = asyncHandler(async (req, res) => {
   }
 
   const user = await User.findById(decoded.sub);
+  if (user) assertAccountAge(user);
+  if (user?.unsafeRestrictedUntil > new Date()) throw new ApiError(403, "Account temporarily restricted after repeated unsafe meet-up reports. Contact hello@atseen.com for review.", "MEETUP_SAFETY_RESTRICTED");
   if (!user || user.status !== "active" || (decoded.authVersion || 0) !== (user.authVersion || 0) || (user.loginRestrictedUntil && user.loginRestrictedUntil > new Date())) {
     clearAuthCookies(res);
     throw new ApiError(401, user?.loginRestrictedUntil > new Date() ? `Account access is restricted until ${user.loginRestrictedUntil.toISOString()}` : "User is not available");

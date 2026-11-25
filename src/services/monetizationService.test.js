@@ -22,3 +22,8 @@ test("signup birthday reaches monetization and approved identity remains authori
   assert.equal(monetizationDateOfBirth({ dateOfBirth: signupBirthday, monetization: { dateOfBirth: monetizationBirthday } }, null), monetizationBirthday);
   assert.equal(monetizationDateOfBirth({ dateOfBirth: signupBirthday, monetization: { dateOfBirth: monetizationBirthday } }, { status: "APPROVED", stateSyncPending: false, dateOfBirth: verifiedBirthday }), verifiedBirthday);
 });
+
+test("an adult eligibility birthday cannot override a minor signup birthday", () => {
+  const user = { dateOfBirth: "2020-01-01", monetization: { dateOfBirth: "1990-01-01" } };
+  assert.equal(monetizationDateOfBirth(user, { status: "APPROVED", dateOfBirth: "1990-01-01" }), "2020-01-01");
+});

@@ -1,3 +1,7 @@
+import { assertWallLocationSafety, readWallArea } from "../services/wallMeetupSafetyService.js";
+import User from "../models/User.js";
+import { businessOfferVisibilityFilter, enforceBusinessOffer } from "../services/businessPolicyService.js";
+import { filterRecommendationItems, getRecommendationExclusions } from "../services/recommendationExclusionService.js";
 import { assertWallEditAllowed, canEditWallNote, wallEditDeadline, wallNoteVersion } from "../services/wallEditService.js";
 import { canReadWallNote, publicWallModerationFilter } from "../services/wallModerationAccess.js";
 import { wallViewCount } from "../services/wallViewCount.js";
@@ -115,7 +119,7 @@ export function preserveWallTrustOrder(items, rows) {
   return [...items].sort((a, b) => (penalties.get(String(a.id)) || 0) - (penalties.get(String(b.id)) || 0));
 }
 
-export const postControllerTestUtils = { feedFilterQuery, personalizeCandidates };
+export const postControllerTestUtils = { feedFilterQuery, personalizeCandidates, getRecommendationExclusions, businessOfferVisibilityFilter };
 
 async function trackPostEvent(req, eventType, postId, extra = {}) {
   const sessionId = readAnalyticsSessionId(req);
@@ -253,6 +257,8 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
     expiryPromptKind: wallPromptKind(post),
     lifecycleStatus: wallLifecycleStatus(post),
     canBump: authorId === viewerId && post.status === "published" && !post.deletedAt && wallCanBump(post),
+    businessOffer: Boolean(post.businessOffer),
+    offerRulesAccepted: Boolean(post.offerRulesAccepted),
     author: authorPayload(author),
     text: post.text || "",
     resolvedAt: post.resolvedAt || null,
@@ -263,7 +269,8 @@ function serializePostFeedItem(post, viewer = null, activity = {}) {
     postType: post.postType || "",
     topic: post.topic || "",
     context: post.context || "",
-    location: post.location || "",
+    location: post.publicArea || readWallArea(post.location, null, post.countryCode),
+    publicArea: post.publicArea || "",
     countryCode: post.countryCode || "",
     price: post.price ?? null,
     currency: post.currency || "",
@@ -453,6 +460,8 @@ async function createPostRecord({ imageFiles = [], req, status, voiceFile = null
   const context = readContext(req.body.context);
   const entityRefs = await validateEntityRefs(req.body.entityRefs);
   const location = readLocation(req.body.location);
+  if (status === "published") assertWallLocationSafety({ ...req.body, location });
+  const publicArea = readWallArea(location, req.body.wallAreaToken, req.body.countryCode);
   ensureCreatable({ hasVoice: Boolean(voiceFile), imageFiles, status, text });
 
   const post = new FeedPost({
@@ -466,9 +475,11 @@ async function createPostRecord({ imageFiles = [], req, status, voiceFile = null
     rightNow: req.body.rightNow === true || req.body.rightNow === "true",
     postType: cleanString(req.body.postType, 40),
     topic: cleanString(req.body.topic, 40),
+    offerRulesAccepted: req.body.offerRulesAccepted === true || req.body.offerRulesAccepted === "true",
     text,
     context,
-    location,
+    location: status === "published" ? publicArea : location,
+    publicArea,
     countryCode: cleanString(req.body.countryCode, 2).toUpperCase(),
     ...readWallPrice(req.body.price, req.body.postType, location, req.body.countryCode),
     entityRefs,
@@ -478,11 +489,17 @@ async function createPostRecord({ imageFiles = [], req, status, voiceFile = null
     publishedAt: status === "published" ? new Date() : null,
   });
 
+  if (status === "published") {
+    post.offerRulesAccepted = req.body.offerRulesAccepted === true || req.body.offerRulesAccepted === "true";
+    post.businessOffer = await enforceBusinessOffer(req.user, post);
+    if (post.businessOffer) post.offerRulesAcceptedAt = new Date();
+  }
   await post.validate();
   const media = imageFiles.length || voiceFile ? await uploadPostMedia({ imageFiles, post, req, userId: req.user._id, voiceFile }) : [];
   post.media = media;
 
   try {
+    if (status === "published") await enforceBusinessOffer(req.user, post);
     await post.save();
   } catch (error) {
     await deleteFeedPostMedia(media);
@@ -498,7 +515,7 @@ export const getWallNeedCounts = asyncHandler(async (req, res) => {
   const options = readWallFeedFilters({ scope: req.query.scope || "worldwide", location: req.query.location, near: req.query.near });
   const blocks = await UserBlock.find({ $or: [{ blocker: req.user._id }, { blocked: req.user._id }] }).select("blocker blocked").lean();
   const blockedIds = blocks.map((block) => String(block.blocker) === String(req.user._id) ? block.blocked : block.blocker);
-  const categories = ["need_help", "looking_for", "offering", "buy_sell", "question", "recommendation", "event"];
+  const categories = ["company", "need_help", "looking_for", "offering", "buy_sell", "question", "recommendation", "event"];
   const topics = ["meet_people", "work", "services", "housing", "places", "food", "travel", "kids_family", "community"];
   const sellMatch = readWallFeedFilters({ type: "buy_sell" }).match;
   const facets = Object.fromEntries(categories.map((category) => {
@@ -541,18 +558,23 @@ export const getWallNeedCounts = asyncHandler(async (req, res) => {
 });
 
 export const listFeedPosts = asyncHandler(async (req, res) => {
+  const exclusions = await postControllerTestUtils.getRecommendationExclusions();
   const { page, limit } = pageOptions(req);
   const blocks = await UserBlock.find({ $or: [{ blocker: req.user._id }, { blocked: req.user._id }] }).select("blocker blocked").lean();
   const blockedAuthorIds = blocks.map((block) => String(block.blocker) === String(req.user._id) ? block.blocked : block.blocker);
+  blockedAuthorIds.push(...[...exclusions.accounts].map(id => new mongoose.Types.ObjectId(id)));
   const options = readWallFeedFilters(req.query);
   const legacy = feedFilterQuery({ filter: req.query.filter || req.query.context });
+  const businessVisibility = await postControllerTestUtils.businessOfferVisibilityFilter();
   const filter = {
+    ...businessVisibility,
     status: "published",
     deletedAt: null,
     author: { $nin: blockedAuthorIds },
     "hiddenBy.user": { $ne: req.user._id },
     ...legacy,
     ...options.match,
+    _id: { $nin: [...exclusions.items].map(id => new mongoose.Types.ObjectId(id)) },
   };
   const [result] = await FeedPost.aggregate(wallFeedPipeline(filter, options, blockedAuthorIds, page, limit)).allowDiskUse(true);
   const rows = result?.items || [];
@@ -581,7 +603,7 @@ export const listFeedPosts = asyncHandler(async (req, res) => {
   // Recent is chronological, including after a reload. Recommendation ranking
   // must not replace the database order with older posts or shares.
   const personalized = options.sort === "recent"
-    ? { items: feed, recommendation: null }
+    ? { items: filterRecommendationItems(feed, exclusions), recommendation: null }
     : await postControllerTestUtils.personalizeCandidates({ exposureLimit: limit, items: feed, req, surface: "WALL" });
   return sendResponse(res, 200, "Feed posts fetched", {
     items: options.sort === "recent" ? personalized.items : preserveWallTrustOrder(personalized.items, rows),
@@ -592,6 +614,10 @@ export const listFeedPosts = asyncHandler(async (req, res) => {
 
 export const getFeedPost = asyncHandler(async (req, res) => {
   const post = await findPublishedPost(req.params.id, req.user);
+  if (String(post.author?._id || post.author) !== String(req.user?._id || "")) {
+    const owner = await User.findById(post.author?._id || post.author);
+    await enforceBusinessOffer(owner, post);
+  }
   const authorId = post.author?._id || post.author;
   const viewerId = req.user?._id;
   const blocked = viewerId ? await UserBlock.exists({ $or: [{ blocker: viewerId, blocked: authorId }, { blocker: authorId, blocked: viewerId }] }) : false;
@@ -728,6 +754,7 @@ export const bumpFeedPost = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid post ID");
   const now = new Date();
   const current = await FeedPost.findOne({ _id: req.params.id, author: req.user._id, status: "published", deletedAt: null }).lean();
+  if (current) { assertWallLocationSafety(current); await enforceBusinessOffer(req.user, current); }
   if (current?.bumpCount >= 3) throw new ApiError(409, "Bumped 3 times \u2014 post it fresh if it's still on", "WALL_BUMP_LIMIT");
   if (current?.bumpedAt && now - new Date(current.bumpedAt) < 7 * 86400000) {
     const days = Math.ceil((7 * 86400000 - (now - new Date(current.bumpedAt))) / 86400000);
@@ -779,10 +806,12 @@ const updateFeedPostInternal = async (req, res) => {
   post.text = text;
   post.context = context;
   post.entityRefs = entityRefs;
-  post.location = location;
+  if (post.status === "published" || req.body.publish === "true") assertWallLocationSafety({ ...post.toObject(), text, location });
+  post.publicArea = location === previousPost.location && previousPost.publicArea ? previousPost.publicArea : readWallArea(location, req.body.wallAreaToken, req.body.countryCode || post.countryCode);
+  post.location = post.status === "draft" && req.body.publish !== "true" ? location : post.publicArea;
   if (Object.hasOwn(req.body, "countryCode")) post.countryCode = cleanString(req.body.countryCode, 2).toUpperCase();
   else if (Object.hasOwn(req.body, "location")) post.countryCode = "";
-  Object.assign(post, readWallPrice(post.postType === "Buy & Sell" ? (Object.hasOwn(req.body, "price") ? req.body.price : post.price) : null, post.postType, location, post.countryCode));
+  Object.assign(post, readWallPrice(["Buy & Sell", "Offering"].includes(post.postType) ? (Object.hasOwn(req.body, "price") ? req.body.price : post.price) : null, post.postType, location, post.countryCode));
 
   if (req.body.retainedMedia != null || Object.keys(req.files || {}).length) {
     let ids;
@@ -801,6 +830,9 @@ const updateFeedPostInternal = async (req, res) => {
   const content = [text, ...(post.media || []).filter(item => item.type === "audio").map(item => item.transcript || "")].filter(Boolean).join(" ");
   let copyEvidence;
   if (post.status === "published" || publishing) {
+    post.offerRulesAccepted = req.body.offerRulesAccepted === true || req.body.offerRulesAccepted === "true";
+    post.businessOffer = await enforceBusinessOffer(req.user, post);
+    if (post.businessOffer) post.offerRulesAcceptedAt = new Date();
     const media = post.media || [];
     validateWallCreation({ ...req.body, text, postType: post.postType, location: post.location, countryCode: post.countryCode, price: post.price, rightNow: post.rightNow, voiceTranscript: media.filter(item => item.type === "audio").map(item => item.transcript || "").join(" ") }, { media: media.filter(item => item.type === "image"), voice: media.filter(item => item.type === "audio") }, req.user);
     if (publishing || previousPost.text !== text || req.body.retainedMedia != null || req.files?.voice?.length) copyEvidence = await findRecentWallCopy(req.user._id, content);
@@ -939,7 +971,7 @@ export const reportFeedPost = asyncHandler(async (req, res) => {
   const post = await findPublishedPost(req.params.id, req.user);
   if (String(post.author) === String(req.user._id)) throw new ApiError(400, "You cannot report your own post");
   const reason = cleanString(req.body.reason || "OTHER", 80).toUpperCase().replaceAll(/[^A-Z0-9]+/g, "_");
-    const allowed = new Set(["SPAM", "FALSE_INFORMATION", "DEFAMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "IMPERSONATION", "CHILD_SAFETY", "OTHER"]);
+    const allowed = new Set(["UNSAFE_MEETUP", "SPAM", "FALSE_INFORMATION", "DEFAMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "IMPERSONATION", "CHILD_SAFETY", "OTHER"]);
   if (!allowed.has(reason)) throw new ApiError(400, "Select a valid report reason");
   try {
     const report = await MessageReport.create({
@@ -959,6 +991,8 @@ export const reportFeedPost = asyncHandler(async (req, res) => {
         createdAt: post.createdAt,
       },
     });
+    const restricted = await User.findById(post.author).select("unsafeRestrictedUntil").lean();
+    if (restricted?.unsafeRestrictedUntil > new Date()) req.app?.get("io")?.in(`user:${post.author}`).disconnectSockets(true);
     return sendResponse(res, 201, "Post report received", { reportId: String(report._id), status: report.status });
   } catch (error) {
     if (error?.code === 11000) throw new ApiError(409, "You already reported this post");
@@ -988,6 +1022,7 @@ export const createPostComment = asyncHandler(async (req, res) => {
   }
   const hasVoiceFile = Boolean(req.file?.buffer?.length);
   const text = String(req.body.text || "").trim();
+  assertWallLocationSafety({ text });
   if ((!text && !hasVoiceFile) || text.length > 500) throw new ApiError(400, hasVoiceFile ? "Voice comment text must not exceed 500 characters" : "Comment must contain 1 to 500 characters");
   const audio = hasVoiceFile ? await uploadMessageVoice({ buffer: req.file.buffer, folder: `atseen/posts/comments/${post._id}`, maxDurationSeconds: 30, purpose: "voice_comment", senderId: req.user._id }) : null;
   if (audio) {
@@ -1072,6 +1107,9 @@ export const archiveFeedPost = asyncHandler(async (req, res) => {
 });
 
 export const restoreFeedPost = asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid post ID");
+  const currentOffer = await FeedPost.findOne({ _id: req.params.id, author: req.user._id, status: "archived" }).lean();
+  if (currentOffer) { assertWallLocationSafety(currentOffer); await enforceBusinessOffer(req.user, currentOffer); }
   if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid post ID");
   const post = await FeedPost.findOneAndUpdate({ _id: req.params.id, author: req.user._id, status: "archived", moderationStatus: { $nin: ["PENDING_REVIEW", "REJECTED"] }, moderationHiddenAt: null, deletedAt: null }, { $set: { status: "published" }, $unset: { archivedAt: 1 } }, { new: true });
   if (!post) throw new ApiError(404, "Archived post not found");

@@ -1,3 +1,4 @@
+import { messageEvidenceRow } from "../services/messageEvidenceService.js";
 import { emitPrivateMessage, emitPrivateMessages } from "../services/responsePrivacyService.js";
 import Publication from "../models/Publication.js";
 import PremiumMembership from "../models/PremiumMembership.js";
@@ -318,14 +319,14 @@ export const deleteGroupMessage = asyncHandler(async (req, res) => {
 });
 
 export const reportGroupMessage = asyncHandler(async (req, res) => {
-  const message = await GroupMessage.findById(req.params.messageId).lean();
+  const message = await GroupMessage.findOne({_id:req.params.messageId,deletedAt:null,deletedFor:{$ne:req.user._id}}).lean();
   if (!message) throw new ApiError(404, "Message not found");
   await getGroup(message.group, req.user._id);
   if (String(message.sender) === String(req.user._id)) throw new ApiError(400, "You cannot report your own message");
   const reason = String(req.body.reason || "").toUpperCase();
   if (!["SPAM", "HARASSMENT", "HATE", "DEFAMATION", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "SCAM", "COPYRIGHT", "IMPERSONATION", "CHILD_SAFETY", "OTHER"].includes(reason)) throw new ApiError(400, "Select a valid report reason");
   try {
-    const report = await MessageReport.create({ reporter: req.user._id, reportedUser: message.sender, scope: "GROUP_MESSAGE", groupMessage: message._id, reason, details: String(req.body.details || "").slice(0, 1000), snapshot: { groupId: String(message.group), messageId: String(message._id), senderId: String(message.sender), body: message.body, createdAt: message.createdAt } });
+    const report = await MessageReport.create({ reporter: req.user._id, reportedUser: message.sender, scope: "GROUP_MESSAGE", groupMessage: message._id, reason, details: String(req.body.details || "").slice(0, 1000), snapshot: { ...messageEvidenceRow(message), groupId: String(message.group) } });
     return sendResponse(res, 201, "Report received", { reportId: String(report._id), status: report.status });
   } catch (error) { if (error?.code === 11000) throw new ApiError(409, "You already reported this message"); throw error; }
 });

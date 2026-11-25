@@ -3,6 +3,7 @@ import { WALL_UPHELD_ACTIONS } from "./wallReportService.js";
 import ApiError from "../utils/ApiError.js";
 
 export const WALL_TYPES = {
+  company: { value: "Company", legacy: ["Meet people"] },
   buy_sell: { value: "Buy & Sell", legacy: ["Buy/Sell", "Shopping"] },
   looking_for: { value: "Looking for", legacy: ["Looking for"] },
   offering: { value: "Offering", legacy: ["Buy/Sell", "Shopping"] },

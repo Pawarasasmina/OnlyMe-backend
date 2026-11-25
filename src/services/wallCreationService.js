@@ -1,3 +1,5 @@
+import { assertWallLocationSafety } from "./wallMeetupSafetyService.js";
+import { assertAccountAge } from "../utils/accountAge.js";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, unlink } from "node:fs/promises";
 import FeedPost from "../models/FeedPost.js";
@@ -9,8 +11,10 @@ import { readWallPrice } from "./wallPriceService.js";
 import { normalizeWallText, hasWallContacts, wallLinks, wallAccountPolicy, wallCopySimilarity, WALL_DAY_MS } from "./wallPublishingPolicy.js";
 
 export const textHash = (text) => normalizeWallText(text) ? createHash("sha256").update(normalizeWallText(text)).digest("hex") : "";
-const PURPOSES = ["Need Help", "Looking for", "Offering", "Buy & Sell", "Question", "Recommendation", "Event", "Right Now"];
+const PURPOSES = ["Company","Need Help", "Looking for", "Offering", "Buy & Sell", "Question", "Recommendation", "Event", "Right Now"];
 export function validateWallCreation(body, files = {}, user = null) {
+  assertWallLocationSafety(body);
+  if (user) assertAccountAge(user);
   readWallPrice(body.price, body.postType, body.location, body.countryCode);
   if (body.text != null && typeof body.text !== "string") throw new ApiError(400, "Note text must be a string");
   if (body.location != null && typeof body.location !== "string") throw new ApiError(400, "Place must be a string");
@@ -25,6 +29,7 @@ export function validateWallCreation(body, files = {}, user = null) {
   return text;
 }
 export function validateWallPublishingText(text, user = null) {
+  assertWallLocationSafety({ text });
   if (hasWallContacts(text)) throw new ApiError(400, "Keep numbers and messengers out \u2014 people can message you right from the note", "WALL_CONTACT_DETAILS");
   const links = wallLinks(text);
   if (user && wallAccountPolicy(user).isNew && links.length) throw new ApiError(400, "Links open after your first week", "WALL_NEW_ACCOUNT_LINK");

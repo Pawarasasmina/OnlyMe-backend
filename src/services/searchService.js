@@ -1,4 +1,5 @@
 import { publicWallModerationFilter } from "./wallModerationAccess.js";
+import { readWallArea } from "./wallMeetupSafetyService.js";
 import { wallClosedReason, wallExpiresAt, wallLifecycleStatus } from "./wallLifecycleService.js";
 import mongoose from "mongoose";
 import Content from "../models/Content.js";
@@ -547,7 +548,7 @@ async function searchPlaces({ blockedIds, category, cursor = 0, limit, location,
       "privacySettings.showLocation": { $ne: false },
       city: { $ne: "" },
     }).populate({ path: "user", match: { _id: { $nin: blockedObjectIds }, role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified" }).limit(200).lean(),
-    FeedPost.find({ status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null, location: { $ne: "" } }).select("location").limit(200).lean(),
+    FeedPost.find({ status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null, location: { $ne: "" } }).select("location publicArea countryCode").limit(200).lean(),
   ]);
 
   const savedRows = user?._id && cities.length
@@ -566,7 +567,7 @@ async function searchPlaces({ blockedIds, category, cursor = 0, limit, location,
     places.set(key, serializePlace({ category: profile.category || "Creator place", city: profile.city, count: (existing?.metadata?.relatedCount || 0) + 1, country: profile.country, image: profile.coverPhoto, topCreator: profile.user.username }));
   }
   for (const post of posts) {
-    const [city, country = ""] = String(post.location || "").split(",").map((part) => part.trim());
+    const [city, country = ""] = String(post.publicArea || readWallArea(post.location, null, post.countryCode)).split(",").map((part) => part.trim());
     if (!city) continue;
     const key = placeKey(city, country);
     const existing = places.get(key);

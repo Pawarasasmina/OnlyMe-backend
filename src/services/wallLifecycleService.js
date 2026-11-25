@@ -1,5 +1,5 @@
 export const DAY_MS = 86400000;
-export const WALL_LIFETIME_DAYS = { "Need Help": 7, "Looking for": 14, Question: 30, "Buy & Sell": 30, Offering: 30, Recommendation: 104, Event: 7, "Right Now": 1 };
+export const WALL_LIFETIME_DAYS = { Company: 7, "Need Help": 7, "Looking for": 14, Question: 30, "Buy & Sell": 30, Offering: 30, Recommendation: 104, Event: 7, "Right Now": 1 };
 const LEGACY = { RIGHT_NOW: "Right Now", NEED_HELP: "Need Help", "Need help": "Need Help", "Looking for": "Looking for", Advice: "Question", "Buy/Sell": "Buy & Sell", Shopping: "Buy & Sell", Recommendation: "Recommendation", Events: "Event", "Right now": "Right Now" };
 export function wallKind(post) { return post.rightNow || post.postType === "Right Now" || post.context === "Right now" ? "Right Now" : post.postType || LEGACY[post.context] || ""; }
 export function wallLifetimeDays(post) { return WALL_LIFETIME_DAYS[wallKind(post)] || null; }

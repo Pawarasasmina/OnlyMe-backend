@@ -9,6 +9,7 @@ const wallPostSchema = new mongoose.Schema({
   creator: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   text: { type: String, required: true, trim: true, maxlength: 1200 },
   context: { type: String, enum: ["RIGHT_NOW", "COFFEE", "NEED_HELP", "PLACE", "RESTAURANT", "BOOK", "MOVIE", "TRAVEL", "BUSINESS", "FITNESS", "WELLNESS", "LIFESTYLE", "BEAUTY"], default: "RIGHT_NOW" },
+  publicArea: { type: String, default: "", maxlength: 200 },
   location: { type: String, trim: true, maxlength: 100, default: "" },
   entityRefs: { type: [entityRefSchema], default: [] },
   media: [{ assetId: String, url: String }],
