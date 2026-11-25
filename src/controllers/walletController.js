@@ -23,6 +23,7 @@ import { createBonusGrant, welcomeBonusFor } from "../services/bonusService.js";
 import { coverPreview } from "../services/activitySupplementService.js";
 import { PAYOUT_POLICY } from "../constants/payoutPolicy.js";
 import ReferralEarning from "../models/ReferralEarning.js";
+import { requireCountryFeature } from "../services/monetizationService.js";
 
 const CREATOR_EVENTS = ["WORLD_CREATOR_EARNING", "PREMIUM_CREATOR_EARNING", "DREAM_CREATOR_EARNING", "CHAT_GIFT_EARNING", "DA_CREATOR_EARNING", "CALL_CREATOR_EARNING", "REFERRAL_CREATOR_EARNING"];
 const safePublication = (item) => item ? { id: item._id, title: item.title || item.publishedSnapshot?.metadata?.title || "", kind: item.kind, planet: item.planet || null, ...coverPreview(item) } : null;
@@ -146,6 +147,7 @@ export const convertIncomeToCoins = asyncHandler(async (req, res) => {
 });
 
 export const withdrawCreatorIncome = asyncHandler(async (req, res) => {
+  await requireCountryFeature(req.user._id, "payouts");
   if (req.body.method != null && req.body.method !== "standard") throw new ApiError(400, "This payout method is unavailable", "PAYOUT_METHOD_UNAVAILABLE");
   if (req.user.sellingRestrictedUntil && req.user.sellingRestrictedUntil > new Date()) throw new ApiError(403, `Payouts are restricted until ${req.user.sellingRestrictedUntil.toISOString()}`, "PAYOUT_RESTRICTED");
   if (await PayoutHold.exists({ user: req.user._id, active: true })) throw new ApiError(403, "Payouts are currently on administrative hold", "PAYOUT_ON_HOLD");

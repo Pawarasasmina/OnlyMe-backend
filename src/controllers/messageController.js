@@ -42,6 +42,7 @@ import { safeWallet, transferStars } from "../services/walletLedgerService.js";
 import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
 import { giftAllowedForRecipient, giftsForRecipient, giftAnimation, serializeGift } from "../services/giftPreferenceService.js";
 import { recordPrivateShare } from "../services/contentShareService.js";
+import { requireCountryFeature } from "../services/monetizationService.js";
 
 const userFields = "name username avatar role creatorApprovalStatus isVerified status read_receipts activity_status activeStatus";
 const isApprovedCreator = (user) => user?.creatorApprovalStatus === "approved";
@@ -596,6 +597,7 @@ export const listChatGifts = asyncHandler(async (req, res) => {
 });
 
 export const sendChatGift = asyncHandler(async (req, res) => {
+  await requireCountryFeature(req.user._id, "gifts");
   assertMessagingAccess(req.user);
   const other = await assertAllowedPair(req.user, req.params.userId);
   const giftId = String(req.body.giftId || "");

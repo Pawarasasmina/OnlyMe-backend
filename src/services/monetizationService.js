@@ -11,10 +11,18 @@ import ApiError from "../utils/ApiError.js";
 import { countriesMatch, countryCode } from "../utils/countryCode.js";
 
 export const MONETIZATION_POLICY_KEY = "MONETIZATION_POLICY";
-const defaults = { enabled: true, supportedCountries: [], blockedCallCountries: ["AE"], termsVersion: "monetization-v1", topCreatorPayoutThresholdUsd: 1000 };
+export const COUNTRY_FEATURES = ["directAccessCalls", "payouts", "businessAccounts", "buySell", "gifts"];
+const defaults = { enabled: true, supportedCountries: [], blockedCallCountries: ["AE"], countryFeatureOverrides: { AE: { directAccessCalls: false } }, termsVersion: "monetization-v1", topCreatorPayoutThresholdUsd: 1000 };
 export async function getMonetizationPolicy() {
   const record = await PlatformSetting.findOne({ key: MONETIZATION_POLICY_KEY }).lean();
-  return { ...defaults, ...record?.value };
+  const policy = { ...defaults, ...record?.value };
+  policy.countryFeatureOverrides = { ...defaults.countryFeatureOverrides, ...(record?.value?.countryFeatureOverrides || {}) };
+  for (const code of policy.blockedCallCountries || []) policy.countryFeatureOverrides[code] = { ...policy.countryFeatureOverrides[code], directAccessCalls: false };
+  return policy;
+}
+export function countryFeaturePolicy(policy, country) {
+  const code = countryCode(country);
+  return { countryCode: code || "", features: Object.fromEntries(COUNTRY_FEATURES.map((feature) => [feature, policy.countryFeatureOverrides?.[code]?.[feature] !== false])) };
 }
 export function validateMonetizationPolicy(payload) {
   if (typeof payload.enabled !== "boolean" || !Array.isArray(payload.supportedCountries) || payload.supportedCountries.length > 250) throw new ApiError(400, "Provide an enabled flag and up to 250 payout countries");
@@ -23,11 +31,24 @@ export function validateMonetizationPolicy(payload) {
   const blocked = payload.blockedCallCountries ?? defaults.blockedCallCountries;
   if (!Array.isArray(blocked) || blocked.length > 250 || blocked.some(value => typeof value !== "string" || !countryCode(value))) throw new ApiError(400, "Choose valid countries for call restrictions");
   const blockedCallCountries = [...new Set(blocked.map(countryCode))];
+  const rawOverrides = payload.countryFeatureOverrides ?? {};
+  if (!rawOverrides || typeof rawOverrides !== "object" || Array.isArray(rawOverrides) || Object.keys(rawOverrides).length > 250) throw new ApiError(400, "Provide valid per-country feature switches");
+  const countryFeatureOverrides = {};
+  for (const [country, switches] of Object.entries(rawOverrides)) {
+    const code = countryCode(country);
+    if (!code || !switches || typeof switches !== "object" || Array.isArray(switches)) throw new ApiError(400, "Choose valid countries and feature switches");
+    countryFeatureOverrides[code] = {};
+    for (const feature of COUNTRY_FEATURES) if (Object.hasOwn(switches, feature)) {
+      if (typeof switches[feature] !== "boolean") throw new ApiError(400, `${feature} must be on or off`);
+      countryFeatureOverrides[code][feature] = switches[feature];
+    }
+  }
+  for (const code of blockedCallCountries) countryFeatureOverrides[code] = { ...countryFeatureOverrides[code], directAccessCalls: false };
   const termsVersion = String(payload.termsVersion || "").trim();
   if (!/^[a-zA-Z0-9._-]{1,60}$/.test(termsVersion)) throw new ApiError(400, "Provide a valid terms version");
   const topCreatorPayoutThresholdUsd = Number(payload.topCreatorPayoutThresholdUsd ?? defaults.topCreatorPayoutThresholdUsd);
   if (!Number.isFinite(topCreatorPayoutThresholdUsd) || topCreatorPayoutThresholdUsd < 0 || topCreatorPayoutThresholdUsd > 10000000) throw new ApiError(400, "Top creator payout threshold must be between $0 and $10,000,000");
-  return { enabled: payload.enabled, supportedCountries: countries, blockedCallCountries, termsVersion, topCreatorPayoutThresholdUsd: Math.round(topCreatorPayoutThresholdUsd * 100) / 100 };
+  return { enabled: payload.enabled, supportedCountries: countries, blockedCallCountries, countryFeatureOverrides, termsVersion, topCreatorPayoutThresholdUsd: Math.round(topCreatorPayoutThresholdUsd * 100) / 100 };
 }
 export function isAdult(dateOfBirth, now = new Date()) {
   if (!dateOfBirth) return false;
@@ -65,7 +86,17 @@ export async function monetizationSummary(user) {
   const allowedCategories = new Set(activeCategories.map(String));
   const allowedGifts = preference ? new Set(preference.enabledGifts.map(String)) : null;
   const giftsAvailable = gifts.some(gift => (!gift.category || allowedCategories.has(String(gift.category))) && (!allowedGifts || allowedGifts.has(String(gift._id))));
-  return { enabled, policy, accountType: type, category: user.profileCategory || "", country, hasDateOfBirth: Boolean(dob), dateOfBirth: dob ? new Date(dob).toISOString().slice(0, 10) : "", eligibility: { age, country: countryAllowed, terms, standing }, verified, payoutsReady: Boolean(verified && bank?.status === "APPROVED"), tools: { gifts: enabled && giftsAvailable, dream: enabled && giftsAvailable, paidSeens: enabled && seller, directAccess: enabled && seller && type !== "personal" && Boolean(creatorProfile?.directAccessEnabled), world: enabled && seller && type !== "personal", offers: enabled && type === "business" }, sellerReady: seller };
+  const countryPolicy = countryFeaturePolicy(policy, country);
+  return { enabled, policy, countryPolicy, accountType: type, category: user.profileCategory || "", country, hasDateOfBirth: Boolean(dob), dateOfBirth: dob ? new Date(dob).toISOString().slice(0, 10) : "", eligibility: { age, country: countryAllowed, terms, standing }, verified, payoutsReady: Boolean(verified && bank?.status === "APPROVED" && countryPolicy.features.payouts), tools: { gifts: enabled && giftsAvailable && countryPolicy.features.gifts, dream: enabled && giftsAvailable && countryPolicy.features.gifts, paidSeens: enabled && seller, directAccess: enabled && seller && type !== "personal" && Boolean(creatorProfile?.directAccessEnabled), directAccessCalls: enabled && countryPolicy.features.directAccessCalls, world: enabled && seller && type !== "personal", offers: enabled && type === "business" && countryPolicy.features.buySell, businessAccounts: countryPolicy.features.businessAccounts, buySell: countryPolicy.features.buySell, payouts: countryPolicy.features.payouts }, sellerReady: seller };
+}
+
+export async function requireCountryFeature(userId, feature) {
+  if (!COUNTRY_FEATURES.includes(feature)) throw new ApiError(500, "Unknown country feature");
+  const user = await User.findById(userId).select("monetization country");
+  if (!user) throw new ApiError(404, "Account is unavailable");
+  const summary = await monetizationSummary(user);
+  if (summary.countryPolicy.features[feature] === false) throw new ApiError(403, "This feature is unavailable in your country", "FEATURE_NOT_AVAILABLE_IN_COUNTRY");
+  return summary.countryPolicy;
 }
 export async function completeMonetizationEligibility(user, payload) {
   const current = await monetizationSummary(user);

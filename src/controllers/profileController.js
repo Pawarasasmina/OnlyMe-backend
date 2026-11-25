@@ -14,6 +14,7 @@ import InvitationFan from "../models/InvitationFan.js";
 import { referralCodes } from "../services/referralService.js";
 import { profileAccountType, profileCategory } from "../constants/profileCategoryConstants.js";
 import { validateProfileAccountType } from "../validators/profileAccountTypeValidator.js";
+import { requireCountryFeature } from "../services/monetizationService.js";
 import UserBlock from "../models/UserBlock.js";
 import Content from "../models/Content.js";
 import Gift from "../models/Gift.js";
@@ -549,6 +550,7 @@ export const getMyAccountSettings = asyncHandler(async (req, res) => {
 
 export const updateMyAccountSettings = asyncHandler(async (req, res) => {
   if (Object.hasOwn(req.body, "profileAccountType")) {
+    if (String(req.body.profileAccountType).toLowerCase() === "business") await requireCountryFeature(req.user._id, "businessAccounts");
     const updates = validateProfileAccountType(req.user, req.body);
     const user = await User.findByIdAndUpdate(req.user._id, { $set: updates }, { new: true, runValidators: true });
     const profile = await ensureRoleProfile(user);
