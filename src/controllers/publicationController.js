@@ -1,3 +1,4 @@
+import { getRecommendationExclusions } from "../services/recommendationExclusionService.js";
 import crypto from "node:crypto";
 import Chapter from "../models/Chapter.js";
 import AnalyticsEvent from "../models/AnalyticsEvent.js";
@@ -34,7 +35,7 @@ import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendCommentResponse as sendResponse } from "../services/commentBadgeService.js";
 import { getStarExchangeRate } from "../services/starExchangeService.js";
-import { getActiveRecommendationConfig, personalizeCandidates } from "../services/recommendationService.js";
+import { getActiveRecommendationConfig, personalizeCandidates, recentExposureIds } from "../services/recommendationService.js";
 import { admitWorldWaitlist } from "../services/premiumMembershipService.js";
 import { buildSeenPdf } from "../services/seenPdfService.js";
 
@@ -804,6 +805,7 @@ export const removeMedia = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, `${purpose.toLowerCase()} media removed`, { publication: { id: updated._id, statusVersion: updated.statusVersion, draftVersion: updated.draftVersion } });
 });
 export const listPublishedSeens = asyncHandler(async (req, res) => {
+  const exclusions = await getRecommendationExclusions();
   const paging = page(req);
   const filter = { kind: "SEEN", status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true } };
   const requestedCategory = String(req.query.category || "").trim();
@@ -842,6 +844,9 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
         : { $nin: excludedCreatorIds };
     }
     if (hiddenPublicationIds.length) filter._id = { $nin: hiddenPublicationIds };
+  }
+  if (!req.query.creator) {
+    filter.$and = [...(filter.$and || []), { _id: { $nin: [...exclusions.items] }, creator: { $nin: [...exclusions.accounts] } }];
   }
   const recommendationConfig = req.user?._id && !req.query.creator ? await getActiveRecommendationConfig() : null;
   const candidateLimit = recommendationConfig ? recommendationConfig.config.rules.candidateLimit : paging.limit;
@@ -906,7 +911,7 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
       author: { id: row.user?._id, name: row.user?.name, username: row.user?.username, avatar: row.user?.avatar || "" },
     });
   }
-  const itemsWithEngagement = items.map((item) => {
+  let itemsWithEngagement = items.map((item) => {
     const itemCreatorId = String(item.creator?._id || item.creator);
     const includedIds = premiumWorldByCreator.get(itemCreatorId)?.publishedSnapshot?.metadata?.includedExperienceIds || premiumWorldByCreator.get(itemCreatorId)?.includedExperienceIds || [];
     const includedInWorld = Boolean(item.includedInWorld || item.publishedSnapshot?.metadata?.includedInWorld || includedIds.some((id) => String(id) === String(item._id)));
@@ -946,10 +951,24 @@ export const listPublishedSeens = asyncHandler(async (req, res) => {
       previewComment: previewCommentByPublication.get(String(item._id)) || null,
     };
   }).filter(Boolean);
+  if (recommendationConfig && !req.query.creator && !req.query.category && req.query.tab !== "friends" && recommendationConfig.config.productRules.newWorldPosition > 0) {
+    const exposedWorldIds = await recentExposureIds(req.user._id, "SEEN", recommendationConfig.config);
+    const worlds = await Publication.find({ kind: { $in: ["WORLD", "PREMIUM_WORLD"] }, status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] }, publishedSnapshot: { $exists: true }, publishedAt: { $gte: new Date(Date.now() - recommendationConfig.config.productRules.newWorldMaxAgeDays * 86400000) }, creator: { $nin: [...exclusions.accounts] }, _id: { $nin: [...exclusions.items] } }).sort({ publishedAt: -1 }).limit(20).populate("creator", "name username avatar isVerified status").lean();
+    for (const world of worlds) {
+      if (exposedWorldIds.has(String(world._id)) || !world.creator || world.creator.status !== "active" || !(await canAccessPublicationAudience(world, req.user))) continue;
+      const blocked = await UserBlock.exists({ $or: [{ blocker: req.user._id, blocked: world.creator._id }, { blocker: world.creator._id, blocked: req.user._id }] });
+      const muted = await PublicationPreference.exists({ user: req.user._id, creator: world.creator._id, type: "MUTED_CREATOR" });
+      if (blocked || muted) continue;
+      const serialized = serializePublication(world, req.user, { audienceAllowed: true });
+      if (serialized) itemsWithEngagement.push({ ...serialized, kind: world.kind, publishedAt: world.publishedAt, recommendationType: "NEW_WORLD" });
+      break;
+    }
+  }
   const personalized = recommendationConfig ? await personalizeCandidates({ items: itemsWithEngagement, req, surface: "SEEN" }) : { items: itemsWithEngagement, recommendation: null };
   let renderedItems = personalized.items.slice(0, paging.limit);
   if (!req.query.creator && renderedItems.length) {
     const paidRows = await Publication.find({
+      _id: { $nin: [...exclusions.items] },
       creator: { $in: creatorIds },
       kind: "SEEN",
       status: { $in: ["PUBLISHED", "CHANGES_REQUESTED"] },

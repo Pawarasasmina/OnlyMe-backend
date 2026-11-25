@@ -1,3 +1,6 @@
+import { businessOfferVisibilityFilter } from "../services/businessPolicyService.js";
+import { getActiveRecommendationConfig, buildViewerSignals, rankCandidates } from "../services/recommendationService.js";
+import { filterExcludedStorySources, getRecommendationExclusions, isRecommendationExcluded } from "../services/recommendationExclusionService.js";
 import { publicWallModerationFilter } from "../services/wallModerationAccess.js";
 import { discoverCardReason } from "../services/discoverReasonService.js";
 import mongoose from "mongoose";
@@ -75,7 +78,7 @@ function slidesCacheKey(req) {
 }
 
 function readSlidesCache(req) {
-  if (req.query.view !== "slides" || req.query.refreshToken) return null;
+  if (req.recommendationPreview || req.query.view !== "slides" || req.query.refreshToken) return null;
   const key = slidesCacheKey(req);
   const cached = slidesCache.get(key);
   if (!cached || cached.expiresAt <= Date.now()) {
@@ -86,7 +89,7 @@ function readSlidesCache(req) {
 }
 
 function writeSlidesCache(req, data) {
-  if (req.query.view !== "slides" || req.query.refreshToken) return;
+  if (req.recommendationPreview || req.query.view !== "slides" || req.query.refreshToken) return;
   if (slidesCache.size >= 200) slidesCache.delete(slidesCache.keys().next().value);
   slidesCache.set(slidesCacheKey(req), { data, expiresAt: Date.now() + SLIDES_CACHE_TTL });
 }
@@ -846,6 +849,8 @@ export function selectSidebarSeens(seens = []) {
 }
 
 async function discoverSidebar(viewer, profiles) {
+  const exclusions = await getRecommendationExclusions();
+  profiles = profiles.filter(item => !isRecommendationExcluded(item, exclusions));
   const creatorIds = profiles.map(profile => profile.user._id);
   const audience = await seenVisibilityFilter(viewer, creatorIds);
   const [following, publications, followerCounts] = await Promise.all([
@@ -856,7 +861,7 @@ async function discoverSidebar(viewer, profiles) {
       .populate({ path: "creator", match: { role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified" }).lean(),
     countsBy(ProfileRelationship, { target: { $in: creatorIds }, type: "FOLLOW" }, "target"),
   ]);
-  const visible = publications.filter(publication => publication.creator);
+  const visible = publications.filter(publication => publication.creator && !isRecommendationExcluded(publication, exclusions));
   const engagement = await countsBy(SeenEngagement, { publication: { $in: visible.map(item => item._id) } }, "publication");
   const seens = visible.map(publication => serializeDiscoverSeen(publication, engagement));
   const followingSet = new Set(following.map(item => String(item.target)));
@@ -869,12 +874,14 @@ async function discoverSidebar(viewer, profiles) {
 }
 
 export const getDiscover = asyncHandler(async (req, res) => {
+  const exclusions = await getRecommendationExclusions();
+  const activeConfig = await getActiveRecommendationConfig();
   if (!req.user) {
     if (req.query.view !== "sidebar") throw new ApiError(401, "Sign in to open Discover");
     const publicProfiles = await CreatorProfile.find({ profileVisibility: "public", "privacySettings.allowDiscovery": { $ne: false } })
       .populate({ path: "user", match: { role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified role creatorApprovalStatus status activeStatus createdAt lastSeenAt" })
       .sort({ updatedAt: -1 }).limit(24).lean();
-    return sendResponse(res, 200, "Discover sidebar fetched", await discoverSidebar(null, publicProfiles.filter((profile) => profile.user)));
+    return sendResponse(res, 200, "Discover sidebar fetched", await discoverSidebar(null, publicProfiles.filter((profile) => profile.user && !isRecommendationExcluded(profile, exclusions))));
   }
   const viewerModel = roleProfileModel(req.user.role, req.user.creatorApprovalStatus);
   const slidesOnly = req.query.view === "slides";
@@ -887,10 +894,11 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const followedIds = new Set(viewerFollowing.map(row => String(row.target)));
   const settings = discoverSettings(viewerProfile);
   const blockedIds = initialBlockedIds;
+  exclusions.accounts.forEach(id => blockedIds.add(id));
   settings.hiddenCreators.forEach((id) => blockedIds.add(String(id)));
   // Cache pages only while the viewer's eligibility/preferences are unchanged.
   // A follow/unfollow, block or hide must rebuild pagination, not shrink a stale page.
-  req.discoverEligibilityKey = JSON.stringify([ [...followedIds].sort(), [...blockedIds].sort(), settings, viewerProfile?.updatedAt ]);
+  req.discoverEligibilityKey = JSON.stringify([ [...followedIds].sort(), [...blockedIds].sort(), settings, viewerProfile?.updatedAt, [...exclusions.items].sort(), activeConfig.version ]);
   const cachedSlides = readSlidesCache(req);
   if (cachedSlides) return sendResponse(res, 200, "Discover fetched", cachedSlides);
   const excludedIds = objectIdList([req.user._id, ...blockedIds]);
@@ -924,6 +932,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
   // sequential Atlas round trips to every Discover load.
   const connectionsPromise = discoverConnections({ blockedIds, previewByCreator: new Map(), viewerId: req.user._id });
   const viewerWalksPromise = SeenEngagement.find({ user: req.user._id, type: "WALKED" }).select("publication").lean();
+  const businessOffersVisible = await businessOfferVisibilityFilter();
   const [followerCounts, subscriberCounts, worldCounts, following, publications, seens, posts, stories, signalTargetIds, dreamByCreator] = await Promise.all([
     countsBy(ProfileRelationship, { target: { $in: creatorIds }, type: "FOLLOW" }, "target"),
     slidesOnly ? Promise.resolve(new Map()) : countsBy(Subscription, { creator: { $in: creatorIds }, status: { $in: ["active", "ACTIVE", "cancel_at_period_end", "CANCEL_AT_PERIOD_END"] } }, "creator"),
@@ -940,7 +949,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
       .populate({ path: "creator", match: { role: { $in: ["fan", "creator"] }, status: "active", creatorApprovalStatus: "approved" }, select: "name username avatar isVerified role status creatorApprovalStatus" })
       .populate("series", "name")
       .lean(),
-    FeedPost.find({ author: { $in: creatorIds }, status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null })
+    FeedPost.find({ ...businessOffersVisible, author: { $in: creatorIds }, status: "published", visibility: "public", ...publicWallModerationFilter, deletedAt: null })
       .sort({ publishedAt: -1, createdAt: -1 })
       .limit(80)
       .select("author media")
@@ -954,8 +963,12 @@ export const getDiscover = asyncHandler(async (req, res) => {
     publicDreamByCreator(creatorIds),
   ]);
 
+  for (const rows of [publications, seens, posts, stories]) {
+    const allowed = rows.filter(item => !isRecommendationExcluded(item, exclusions));
+    rows.splice(0, rows.length, ...allowed);
+  }
   const followingSet = new Set(following.map((item) => String(item.target)));
-  const permittedStories = await filterStoryAccess(stories, req.user._id);
+  const permittedStories = await filterExcludedStorySources(await filterStoryAccess(stories, req.user._id), exclusions);
   stories.splice(0, stories.length, ...permittedStories);
   const storyCreatorIds = new Set(stories.map((story) => String(story.creator?._id || story.creator)));
   const previewByCreator = new Map();
@@ -1009,7 +1022,7 @@ export const getDiscover = asyncHandler(async (req, res) => {
   const worlds = publications.map((publication) => serializeWorld(publication, { worldMemberCounts: worldsByPublication }));
   const walkedPublicationIds = viewerWalks.map((item) => item.publication);
   const sharedWalkRows = walkedPublicationIds.length ? await SeenEngagement.find({ publication: { $in: walkedPublicationIds }, user: { $in: creatorIds }, type: "WALKED" }).populate("publication", "title planet").populate("user", "name username avatar").limit(12).lean() : [];
-  const sharedWalks = sharedWalkRows.map((item) => ({ id: item._id, world: { id: item.publication?._id, title: item.publication?.title, emoji: item.publication?.planet?.emoji || "🌍" }, person: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" } }));
+  const sharedWalks = sharedWalkRows.filter(item => !exclusions.items.has(String(item.publication?._id || item.publication))).map((item) => ({ id: item._id, world: { id: item.publication?._id, title: item.publication?.title, emoji: item.publication?.planet?.emoji || "🌍" }, person: { id: item.user?._id, name: item.user?.name, username: item.user?.username, avatar: item.user?.avatar || "" } }));
   const discoverSeens = visibleSeens.map((publication) => serializeDiscoverSeen(publication, seenEngagementCounts));
   const seenByCreator = new Map();
   const previewSeensByCreator = buildDiscoverPreviewSeens(visibleSeens, seenEngagementCounts);
@@ -1092,7 +1105,10 @@ export const getDiscover = asyncHandler(async (req, res) => {
   // location, follow graph and engagement counts. Running the generic
   // recommendation pipeline here repeated several remote database reads and an
   // exposure write, pushing a normal Discover load beyond the client's timeout.
-  const personalizedSlides = { items: filteredSlides, recommendation: null };
+  const signals = await buildViewerSignals(req.user, activeConfig.config);
+  // Rank the full pool before cursor pagination, so later pages remain available.
+  const rankedSlides = rankCandidates(filteredSlides, { config: { ...activeConfig.config, rules: { ...activeConfig.config.rules, batchSize: filteredSlides.length } }, signals, surface: "DISCOVER" });
+  const personalizedSlides = { items: rankedSlides, recommendation: { configVersion: activeConfig.version } };
   const page = paginateDiscoverRecommendations(personalizedSlides.items, { followedIds, excludedIds: blockedIds, cursor, limit });
   const pageSlides = page.items.map(publicSlide);
   const nextCursor = page.nextCursor;

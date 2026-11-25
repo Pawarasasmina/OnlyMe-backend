@@ -1,0 +1,67 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import mongoose from "mongoose";
+import { MongoMemoryServer } from "mongodb-memory-server";
+import User from "../models/User.js";
+import FeedPost from "../models/FeedPost.js";
+import BusinessVerification from "../models/BusinessVerification.js";
+import BusinessBooking from "../models/BusinessBooking.js";
+import { getMyBusiness, submitBusiness, reviewBusiness, listBusinessApplications, createBooking, updateBooking, disputeBooking, supportInbox, resolveBookingDispute, businessControllerTestUtils, moderateBusinessOffer } from "../controllers/businessController.js";
+import { createFeedPost } from "../controllers/postController.js";
+import { enforceBusinessOffer, businessOfferVisibilityFilter } from "./businessPolicyService.js";
+import { inspectVerificationFile } from "./privateDocumentStorageService.js";
+
+async function call(handler,req){let result,failure;const res={req,status(){return this;},json(body){result=body.data;return this;}};await handler(req,res,error=>{failure=error;});if(failure)throw failure;return result;}
+test("Business licence gates real offer publication, bookings and disputes reaching the admin support inbox", {skip:process.env.BUSINESS_INTEGRATION!=="1",timeout:120000},async t=>{
+  const server=await MongoMemoryServer.create({binary:{version:"8.2.6"}});
+  try{
+    await mongoose.connect(server.getUri());
+    const admin=await User.create({name:"Business Reviewer",username:"business.admin",email:"admin@business.test",password:"Password123!",role:"admin"});
+    const business=await User.create({name:"Local Studio",username:"local.studio",email:"studio@business.test",password:"Password123!",role:"fan",profileAccountType:"business",profileType:"business",createdAt:new Date("2025-01-01")});
+    const customer=await User.create({name:"Customer",username:"business.customer",email:"customer@business.test",password:"Password123!",role:"fan"});
+    const stranger=await User.create({name:"Stranger",username:"business.stranger",email:"stranger@business.test",password:"Password123!",role:"fan"});
+    const request=(user,body={},params={})=>({user,body,params,query:{},headers:{},files:{},get:()=>undefined,adminRole:"MAIN_ADMIN"});
+    const offer={postType:"Offering",text:"Studio session with clear terms",location:"Dubai, UAE",countryCode:"AE",price:"150",currency:"AED",offerRulesAccepted:"true"};
+    await assert.rejects(enforceBusinessOffer(business,offer),error=>error.code==="BUSINESS_VERIFICATION_REQUIRED");
+    await assert.rejects(call(createFeedPost,request(business,offer)),error=>error.code==="BUSINESS_VERIFICATION_REQUIRED");
+    const file={originalname:"licence.pdf",mimetype:"application/pdf",buffer:Buffer.from("%PDF-1.4 test licence"),size:21};
+    t.mock.method(businessControllerTestUtils,"storeVerificationDocument",async upload=>{inspectVerificationFile(upload);return{storageKey:"private-test-document",mimeType:upload.mimetype,originalName:upload.originalname,size:upload.size};});
+    t.mock.method(businessControllerTestUtils,"cleanupUnreferencedVerificationFile",async()=>{});
+    const application={legalName:"Local Studio LLC",country:"UAE",licenceNumber:"UAE-12345",issuingAuthority:"Trade licence authority",documentType:"TRADE_LICENCE",expiresAt:"2030-12-31"};
+    await assert.rejects(call(submitBusiness,{...request(business,{...application,documentType:"LOCAL_EQUIVALENT"}),file}),/UAE businesses/);
+    const submitted=await call(submitBusiness,{...request(business,application),file});
+    assert.equal(submitted.verification.status,"PENDING");
+    assert.equal(JSON.stringify(submitted).includes("private-test-document"),false);
+    await assert.rejects(call(submitBusiness,{...request(business,application),file}),/awaiting review/);
+    const id=String(submitted.verification._id);
+    await assert.rejects(call(reviewBusiness,request(admin,{status:"APPROVED",reason:"Valid licence"},{id})),/Review the licence/);
+    await call(reviewBusiness,request(admin,{status:"APPROVED",reason:"Current licence and details match",documentReviewed:true,detailsMatch:true},{id}));
+    const listed=await call(listBusinessApplications,request(admin));
+    assert.equal(listed.items[0].documentMetadata.mimeType,"application/pdf");
+    assert.equal(JSON.stringify(listed).includes("private-test-document"),false);
+    assert.equal((await call(getMyBusiness,request(business))).verification.eligible,true);
+    const published=await call(createFeedPost,request(business,offer));
+    assert.equal(published.post.businessOffer,true);
+    const offerId=String(published.post.id);
+    const scheduledAt=new Date(Date.now()+86400000).toISOString();
+    const booking=(await call(createBooking,request(customer,{offerId,scheduledAt,price:1}))).item;
+    assert.equal(booking.price,150,"booking uses the published offer price, not a client override");
+    await assert.rejects(call(updateBooking,request(stranger,{status:"CONFIRMED"},{id:String(booking._id)})),/not found/);
+    await call(updateBooking,request(business,{status:"CONFIRMED"},{id:String(booking._id)}));
+    await call(disputeBooking,request(customer,{reason:"The business did not provide the booked service"},{id:String(booking._id)}));
+    const inbox=await call(supportInbox,request(admin));
+    assert.equal(inbox.items.length,1);assert.equal(String(inbox.items[0]._id),String(booking._id));
+    await call(resolveBookingDispute,request(admin,{resolution:"Customer and business agreed to reschedule"},{id:String(booking._id)}));
+    assert.equal((await call(supportInbox,request(admin))).items.length,0);
+    assert.equal((await call(supportInbox,{...request(admin),query:{resolved:"true"}})).items.length,1);
+    await call(moderateBusinessOffer,request(admin,{hidden:true,reason:"Claims require correction"},{id:offerId}));
+    assert.equal((await FeedPost.findById(offerId)).moderationStatus,"REJECTED");
+    await call(moderateBusinessOffer,request(admin,{hidden:false,reason:"Correction reviewed and price confirmed"},{id:offerId}));
+    await call(reviewBusiness,request(admin,{status:"REVOKED",reason:"Licence withdrawn by issuer"},{id}));
+    await assert.rejects(call(createBooking,request(customer,{offerId,scheduledAt})),error=>error.code==="BUSINESS_VERIFICATION_REQUIRED");
+    assert.equal(await FeedPost.countDocuments(await businessOfferVisibilityFilter()),0,"revoked business offers disappear from public feed queries");
+    await BusinessVerification.updateOne({_id:id},{$set:{status:"APPROVED",expiresAt:new Date("2020-01-01")}});
+    await assert.rejects(enforceBusinessOffer(business,offer),error=>error.code==="BUSINESS_VERIFICATION_REQUIRED");
+    assert.equal(await BusinessBooking.countDocuments(),1);
+  }finally{await mongoose.disconnect();await server.stop();}
+});

@@ -1,3 +1,4 @@
+import { accountAgeBlocked } from "../utils/accountAge.js";
 import PlatformSetting from "../models/PlatformSetting.js";
 import CreatorVerification from "../models/CreatorVerification.js";
 import PayoutBankApplication from "../models/PayoutBankApplication.js";
@@ -58,6 +59,7 @@ export function isAdult(dateOfBirth, now = new Date()) {
 }
 export function monetizationDateOfBirth(user, verification) {
   const approvedIdentity = verification?.status === "APPROVED" && !verification.stateSyncPending;
+  if (accountAgeBlocked(user)) return user.dateOfBirth;
   return (approvedIdentity ? verification.dateOfBirth : null) || user.monetization?.dateOfBirth || user.dateOfBirth || null;
 }
 export async function monetizationSummary(user) {

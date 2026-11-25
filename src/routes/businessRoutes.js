@@ -1,0 +1,14 @@
+import { Router } from "express";
+import { protect } from "../middleware/authMiddleware.js";
+import { authorize } from "../middleware/roleMiddleware.js";
+import { uploadVerificationDocument } from "../middleware/verificationUploadMiddleware.js";
+import { createBooking, disputeBooking, getMyBusiness, listMyBookings, submitBusiness, updateBooking } from "../controllers/businessController.js";
+const router = Router();
+router.use(protect, authorize("fan", "creator"));
+router.get("/verification", getMyBusiness);
+router.post("/verification", uploadVerificationDocument.single("document"), submitBusiness);
+router.get("/bookings", listMyBookings);
+router.post("/bookings", createBooking);
+router.patch("/bookings/:id", updateBooking);
+router.post("/bookings/:id/dispute", disputeBooking);
+export default router;
