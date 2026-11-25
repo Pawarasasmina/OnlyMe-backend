@@ -1,3 +1,4 @@
+import { signWallArea } from "./wallMeetupSafetyService.js";
 import ApiError from "../utils/ApiError.js";
 
 const DEFAULT_PHOTON_URL = "https://photon.komoot.io";
@@ -39,13 +40,27 @@ export function serializePhotonFeature(feature = {}) {
   };
 }
 
-export async function searchLiveLocations({ language = "en", latitude, longitude, query }) {
+export function serializePhotonArea(feature = {}) {
+  const p = feature.properties || {};
+  const name = p.district || p.locality || p.suburb || p.city || p.town || p.county || p.state || p.country;
+  if (!name) return null;
+  const parts = compact([name, p.city || p.town, p.state, p.country]);
+  const label = parts.join(", ");
+  const code = String(p.countrycode || "").toUpperCase();
+  const [longitude, latitude] = feature.geometry?.coordinates || [];
+  // A broad, rounded map centre only; never return the source building/pin coordinates.
+  const mapCenter = Number.isFinite(latitude) && Number.isFinite(longitude)
+    ? { latitude: Math.round(latitude * 10) / 10, longitude: Math.round(longitude * 10) / 10 } : null;
+  return { id: `area-${p.osm_id || label}`, name, label, subtitle: parts.slice(1).join(", "), code, kind: "area", mapCenter, wallAreaToken: signWallArea(label, code) };
+}
+
+export async function searchLiveLocations({ areaOnly = false, language = "en", latitude, longitude, query }) {
   const q = String(query || "").trim().slice(0, 120);
   const lat = cleanCoordinate(latitude, -90, 90);
   const lon = cleanCoordinate(longitude, -180, 180);
   const reverse = !q && lat !== null && lon !== null;
   if (q.length < 2 && !reverse) return [];
-  const cacheKey = `${q.toLowerCase()}|${language}|${lat ?? ""}|${lon ?? ""}`;
+  const cacheKey = `${areaOnly}|${q.toLowerCase()}|${language}|${lat ?? ""}|${lon ?? ""}`;
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.createdAt < CACHE_TTL_MS) return cached.items;
 
@@ -73,12 +88,14 @@ export async function searchLiveLocations({ language = "en", latitude, longitude
   const payload = await response.json();
   const seen = new Set();
   const items = (payload.features || []).map((feature) => {
+    if (areaOnly) return serializePhotonArea(feature);
     if (!reverse) return serializePhotonFeature(feature);
     const properties = feature.properties || {};
     const area = properties.city || properties.locality || properties.district || properties.county || properties.state || properties.country || properties.name;
     // Current area should suggest a city/region, rather than expose a street address.
     return serializePhotonFeature({ ...feature, properties: { ...properties, name: area, street: "", housenumber: "", district: "" } });
   }).filter((item) => {
+    if (!item) return false;
     const key = item.label.toLowerCase();
     if (!item.label || seen.has(key)) return false;
     seen.add(key);

@@ -1,3 +1,4 @@
+import { filterExcludedStorySources, getRecommendationExclusions } from "../services/recommendationExclusionService.js";
 import { emitPrivateMessage } from "../services/responsePrivacyService.js";
 import { manualPresenceReset } from "../services/presenceService.js";
 import mongoose from "mongoose";
@@ -613,6 +614,7 @@ export const shareSeenAsStory = asyncHandler(async (req, res) => {
 });
 
 export const listStories = asyncHandler(async (req, res) => {
+  const exclusions = await getRecommendationExclusions();
   const now = new Date();
   const [follows, followsBack, blocks, hiddenStoryPreferences] = await Promise.all([
     ProfileRelationship.find({ actor: req.user._id, type: "FOLLOW" }).select("target").lean(),
@@ -622,6 +624,7 @@ export const listStories = asyncHandler(async (req, res) => {
   ]);
   const viewerId = String(req.user._id);
   const blockedIds = new Set(blocks.map((item) => (String(item.blocker) === viewerId ? String(item.blocked) : String(item.blocker))));
+  for (const id of exclusions.accounts) blockedIds.add(id);
   for (const preference of hiddenStoryPreferences) if (preference.creator) blockedIds.add(String(preference.creator));
   const followedIds = follows.map((item) => item.target).filter((id) => !blockedIds.has(String(id)));
   const followedSet = new Set(followedIds.map(String));
@@ -640,8 +643,8 @@ export const listStories = asyncHandler(async (req, res) => {
       { audience: "world", creator: { $in: [...memberships, ...unlockedWorlds.filter((item) => item.publication)].map((item) => item.creator) } },
     ],
   };
-  const rawStories = await Story.find({ expiresAt: { $gt: now }, ...creatorFilter }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified role creatorApprovalStatus status activeStatus lastSeenAt").populate({ path: "sourceSeen", populate: [{ path: "creator", select: "name username avatar isVerified" }, { path: "series", select: "name" }] }).lean();
-  const stories = rawStories.filter((story) => story.creator && story.creator.status === "active");
+  const rawStories = await Story.find({ _id: { $nin: [...exclusions.items] }, expiresAt: { $gt: now }, ...creatorFilter }).sort({ createdAt: 1 }).populate("creator", "name username avatar isVerified role creatorApprovalStatus status activeStatus lastSeenAt").populate({ path: "sourceSeen", populate: [{ path: "creator", select: "name username avatar isVerified" }, { path: "series", select: "name" }] }).lean();
+  const stories = await filterExcludedStorySources(rawStories.filter(story => story.creator && story.creator.status === "active"), exclusions);
   await resolveStorySources(stories, req.user._id);
   const storyIds = stories.map((item) => item._id);
   const engagements = await StoryEngagement.find({ fan: req.user._id, story: { $in: storyIds } }).lean();

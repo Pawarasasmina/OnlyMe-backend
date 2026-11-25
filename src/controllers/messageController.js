@@ -1,3 +1,4 @@
+import { messageEvidenceRow } from "../services/messageEvidenceService.js";
 import { isAtSeen } from "../services/presenceService.js";
 import { emitPrivateMessage } from "../services/responsePrivacyService.js";
 import { serializeProfileStatus } from "../services/statusService.js";
@@ -1007,15 +1008,18 @@ export const reportMessage = asyncHandler(async (req, res) => {
   validId(req.params.messageId);
   const message = await Message.findOne({
     _id: req.params.messageId,
+    deletedAt: null, contentPurgedAt: null,
     $nor: [{ expiresAt: { $lte: new Date() } }],
     $or: [{ sender: req.user._id }, { recipient: req.user._id }],
   }).lean();
   if (!message) throw new ApiError(404, "Message not found");
   const reportedUser = String(message.sender) === String(req.user._id) ? message.recipient : message.sender;
+  if ((message.deletedFor || []).some(id => String(id) === String(req.user._id))) throw new ApiError(404, "Message not found");
+  if (await MessageReport.exists({scope:"MESSAGE",message:message._id,reporter:req.user._id})) throw new ApiError(409,"You already reported this message");
   const input = reportInput(req);
-    const pair = { $or: [{ sender: message.sender, recipient: message.recipient }, { sender: message.recipient, recipient: message.sender }] };
+    const pair = { deletedAt:null, contentPurgedAt:null, deletedFor:{$ne:req.user._id}, $nor:[{expiresAt:{$lte:new Date()}}], $or: [{ sender: message.sender, recipient: message.recipient }, { sender: message.recipient, recipient: message.sender }] };
     const [before, after] = await Promise.all([Message.find({ ...pair, createdAt: { $lte: message.createdAt } }).sort({ createdAt: -1 }).limit(4).lean(), Message.find({ ...pair, createdAt: { $gt: message.createdAt } }).sort({ createdAt: 1 }).limit(3).lean()]);
-    const context = [...before.reverse(), ...after].map((item) => ({ messageId: String(item._id), senderId: String(item.sender), body: item.body, mediaType: item.mediaType, createdAt: item.createdAt, reported: String(item._id) === String(message._id) }));
+    const context = [...before.reverse(), ...after].map((item) => ({ ...messageEvidenceRow(item), reported: String(item._id) === String(message._id) }));
   try {
     const report = await MessageReport.create({
       reporter: req.user._id,
@@ -1024,7 +1028,7 @@ export const reportMessage = asyncHandler(async (req, res) => {
       message: message._id,
       ...input,
       snapshot: {
-        messageId: String(message._id),
+        ...messageEvidenceRow(message),
         senderId: String(message.sender),
         recipientId: String(message.recipient),
         body: message.body,
@@ -1048,6 +1052,7 @@ export const reportConversation = asyncHandler(async (req, res) => {
   const other = await assertAllowedPair(req.user, req.params.userId, { allowBlocked: true });
   const input = reportInput(req);
   const rows = await Message.find({
+    deletedAt:null, contentPurgedAt:null, deletedFor:{$ne:req.user._id}, $nor:[{expiresAt:{$lte:new Date()}}],
     $or: [{ sender: req.user._id, recipient: other._id }, { sender: other._id, recipient: req.user._id }],
     }).sort({ _id: -1 }).limit(7).lean();
   if (!rows.length) throw new ApiError(404, "Conversation not found");
@@ -1059,7 +1064,7 @@ export const reportConversation = asyncHandler(async (req, res) => {
     snapshot: {
       participantIds: [String(req.user._id), String(other._id)],
       messages: rows.reverse().map((message) => ({
-        messageId: String(message._id),
+        ...messageEvidenceRow(message),
         senderId: String(message.sender),
         body: message.body,
         mediaType: message.mediaType,

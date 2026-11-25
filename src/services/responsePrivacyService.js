@@ -1,3 +1,5 @@
+import { redactPreciseLocation } from "../utils/wallMeetupSafety.js";
+import { readWallArea } from "./wallMeetupSafetyService.js";
 import mongoose from "mongoose";
 import User from "../models/User.js";
 import Conversation from "../models/Conversation.js";
@@ -47,8 +49,25 @@ async function receiptPreferences(clean, viewers) {
   return new Map(users.map(user => [String(user._id), user.read_receipts !== false]));
 }
 
-export async function privateResponse(data, viewerId) {
-  const clean = stripActivityTimes(data);
+export function protectPublicWallData(value) {
+  if (scalarObject(value)) return value;
+  if (value && typeof value.toJSON === "function") value = value.toJSON();
+  if (Array.isArray(value)) return value.map(protectPublicWallData);
+  if (!value || typeof value !== "object") return value;
+  const result = Object.fromEntries(Object.entries(value).map(([key,item]) => [key,protectPublicWallData(item)]));
+  const wall = (result.text && result.author) || Object.hasOwn(result,"postType") || result.type === "post" || result.entityType === "feed_post" || (result.context && result.text && result.creator && result.media);
+  if (wall && result.status !== "draft") {
+    for (const field of ["text","title","description","summary","shareCaption"]) if (typeof result[field] === "string") result[field] = redactPreciseLocation(result[field]);
+    if (typeof result.location === "string") result.location = result.publicArea || readWallArea(result.location,null,result.countryCode);
+    else if (result.location && typeof result.location === "object") result.location = { city: readWallArea(result.location.city,null,result.countryCode), country: result.location.country || "" };
+    for (const field of ["latitude","longitude","lat","lon","lng","coordinates","liveLocation","exactLocation","address","privateAddress"]) delete result[field];
+    if (Array.isArray(result.media)) result.media = result.media.map(item => ({...item,...(item.transcript ? {transcript:redactPreciseLocation(item.transcript)} : {}), ...(Array.isArray(item.translations) ? {translations:item.translations.map(row=>({...row,text:redactPreciseLocation(row.text)}))} : {})}));
+  }
+  return result;
+}
+
+export async function privateResponse(data, viewerId, { allowWallEvidence = false } = {}) {
+  const clean = stripActivityTimes(allowWallEvidence ? data : protectPublicWallData(data));
   if (!viewerId) return clean;
   const preferences = await receiptPreferences(clean, [viewerId]);
   return preferences ? maskReceipts(clean, viewerId, preferences) : clean;

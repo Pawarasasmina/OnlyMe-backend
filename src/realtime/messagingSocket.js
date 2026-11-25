@@ -1,3 +1,4 @@
+import { assertAccountAge } from "../utils/accountAge.js";
 import { deliverMessages } from "../services/messageDeliveryService.js";
 import { ownPresence, touchPresence, presenceForViewer, pauseIdleAtSeen } from "../services/presenceService.js";
 import jwt from "jsonwebtoken";
@@ -85,6 +86,8 @@ export function configureMessagingSocket(io) {
       const decoded = jwt.verify(token, env.accessSecret);
       const user = await User.findOne({ _id: decoded.sub, status: "active", role: { $in: ["fan", "creator"] } });
       if (!user || (decoded.authVersion || 0) !== (user.authVersion || 0)) return next(new Error("Unauthorized"));
+      assertAccountAge(user);
+      if (user.unsafeRestrictedUntil > new Date()) return next(new Error("Account temporarily restricted for meet-up safety"));
       socket.user = user;
       return next();
     } catch { return next(new Error("Unauthorized")); }

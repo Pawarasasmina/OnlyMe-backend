@@ -1,3 +1,4 @@
+import { listRecommendationExclusions, searchRecommendationTargets, setRecommendationExclusion, previewRecommendations } from "../controllers/adminRecommendationController.js";
 import { Router } from "express";
 import {
   getAdminDashboard,
@@ -38,6 +39,10 @@ router.post("/staff/:id/2fa", requireAdminRole("MAIN_ADMIN"), updateStaffTwoFact
 router.delete("/staff/:id", requireAdminRole("MAIN_ADMIN"), deleteTestAdminStaff);
 router.use(requireAdminRole("MAIN_ADMIN", "MODERATOR"));
 router.get("/dashboard", getAdminDashboard);
+router.get("/recommendations/exclusions", requireAdminRole("MAIN_ADMIN"), listRecommendationExclusions);
+router.get("/recommendations/targets", requireAdminRole("MAIN_ADMIN"), searchRecommendationTargets);
+router.put("/recommendations/exclusions", requireAdminRole("MAIN_ADMIN"), setRecommendationExclusion);
+router.get("/recommendations/preview", requireAdminRole("MAIN_ADMIN"), previewRecommendations);
 router.get("/recommendations", requireAdminRole("MAIN_ADMIN"), getRecommendationSettings);
 router.post("/recommendations/drafts", requireAdminRole("MAIN_ADMIN"), createRecommendationDraft);
 router.post("/recommendations/:id/activate", requireAdminRole("MAIN_ADMIN"), activateRecommendationConfig);

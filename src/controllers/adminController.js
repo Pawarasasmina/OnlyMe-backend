@@ -1,4 +1,6 @@
-﻿import mongoose from "mongoose";
+import { withMessageEvidenceUrls } from "../services/messageEvidenceService.js";
+import { assertAccountAge } from "../utils/accountAge.js";
+import mongoose from "mongoose";
 import Content from "../models/Content.js";
 import Publication from "../models/Publication.js";
 import FeedPost from "../models/FeedPost.js";
@@ -75,16 +77,19 @@ export const listUsers = asyncHandler(async (req, res) => {
     filter.role = "admin";
   }
   if (["active", "suspended"].includes(req.query.status)) filter.status = req.query.status;
+  if (["personal", "creator", "business"].includes(req.query.profileAccountType)) {
+    filter.$and = [...(filter.$and || []), { $or: [{ profileAccountType: req.query.profileAccountType }, { profileAccountType: { $in: [null, ""] }, profileType: req.query.profileAccountType }] }];
+  }
   const requestedAccountType = String(req.query.accountType || "").toUpperCase();
   if (ACCOUNT_TYPES.includes(requestedAccountType)) filter.accountType = requestedAccountType;
   const search = String(req.query.search || "").trim().replace(/^@/, "");
   if (search) {
     const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    filter.$or = [{ username: { $regex: escaped, $options: "i" } }, { email: { $regex: escaped, $options: "i" } }, { phone: { $regex: escaped, $options: "i" } }, ...(mongoose.isValidObjectId(search) ? [{ _id: search }] : [])];
+    filter.$or = [{ name: { $regex: escaped, $options: "i" } }, { username: { $regex: escaped, $options: "i" } }, { email: { $regex: escaped, $options: "i" } }, { phone: { $regex: escaped, $options: "i" } }, ...(mongoose.isValidObjectId(search) ? [{ _id: search }] : [])];
   }
 
   const users = await User.find(filter)
-    .select("+accountType name username email phone role status creatorApprovalStatus isVerified avatar createdAt")
+    .select("+accountType name username email phone dateOfBirth profileAccountType profileType profileCategory role status creatorApprovalStatus isVerified avatar createdAt")
     .sort({ createdAt: -1 })
     .limit(200)
     .lean();
@@ -101,8 +106,9 @@ export const updateUserStatus = asyncHandler(async (req, res) => {
   }
 
   const reason = String(req.body.reason || "Administrative account status change").trim().slice(0, 500);
-  const previous = await User.findById(req.params.userId).select("status role");
+  const previous = await User.findById(req.params.userId).select("status role dateOfBirth");
   if (previous?.role === "admin") throw new ApiError(403, "Manage staff accounts from Admin team & access");
+  if (req.body.status === "active" && previous) assertAccountAge(previous);
   const user = await User.findByIdAndUpdate(req.params.userId, { $set: { status: req.body.status } }, { new: true, runValidators: true }).select("+accountType name username email role status creatorApprovalStatus isVerified avatar createdAt");
   if (!user) throw new ApiError(404, "User not found");
   await AdminAccountAudit.create({ admin: req.user._id, user: user._id, action: "ACCOUNT_STATUS_CHANGED", previousStatus: previous?.status, status: user.status, reason });
@@ -121,8 +127,9 @@ export const bulkUpdateUsers = asyncHandler(async (req, res) => {
   if (!accountType && !status) throw new ApiError(400, "Choose an account type or status to update");
   const reason = String(req.body.reason || "").trim();
   if (reason.length < 3 || reason.length > 500) throw new ApiError(400, "A reason between 3 and 500 characters is required");
-  const users = await User.find({ _id: { $in: ids }, role: { $ne: "admin" } }).select("+accountType status role");
+  const users = await User.find({ _id: { $in: ids }, role: { $ne: "admin" } }).select("+accountType status role dateOfBirth");
   if (users.length !== ids.length) throw new ApiError(404, "One or more users were not found");
+  if (status === "active") users.forEach(assertAccountAge);
   const update = { ...(accountType ? { accountType } : {}), ...(status ? { status } : {}) };
   await User.updateMany({ _id: { $in: ids } }, { $set: update }, { runValidators: true });
   if (accountType) {
@@ -254,7 +261,7 @@ export const getReportForModeration = asyncHandler(async (req, res) => {
     .populate("reviewedBy", "name username email")
     .lean();
   if (!report) throw new ApiError(404, "Report not found");
-  return sendResponse(res, 200, "Report fetched", { report });
+  return sendResponse(res, 200, "Report fetched", { report: withMessageEvidenceUrls(report) });
 });
 
 export const startMessageReportReview = asyncHandler(async (req, res) => {
@@ -347,5 +354,3 @@ export const resolveMessageReport = asyncHandler(async (req, res) => {
   await report.populate([{ path: "reporter", select: reportUserFields }, { path: "reportedUser", select: reportUserFields }, { path: "reviewedBy", select: "name username email" }]);
   return sendResponse(res, 200, "Report resolved", { report });
 });
-
-
