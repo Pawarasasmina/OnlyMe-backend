@@ -15,6 +15,8 @@ const schema = new mongoose.Schema({
   processedAt: { type: Date, default: null },
   paidAt: { type: Date, default: null },
   monthKey: { type: String, default: "", index: true },
+  retryCount: { type: Number, default: 0, min: 0 },
+  statusHistory: { type: [{ status: { type: String, enum: ["PENDING", "PROCESSING", "PAID", "FAILED", "CANCELED"], required: true }, reason: { type: String, maxlength: 500, default: "" }, at: { type: Date, default: Date.now }, ledgerEntry: { type: mongoose.Schema.Types.ObjectId, ref: "StarsLedgerEntry", default: null } }], default: [] },
 }, { timestamps: true });
 
 schema.index({ user: 1, createdAt: -1 });

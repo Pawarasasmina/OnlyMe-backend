@@ -14,6 +14,7 @@ import InvitationFan from "../models/InvitationFan.js";
 import { referralCodes } from "../services/referralService.js";
 import { profileAccountType, profileCategory } from "../constants/profileCategoryConstants.js";
 import { validateProfileAccountType } from "../validators/profileAccountTypeValidator.js";
+import { requireCountryFeature } from "../services/monetizationService.js";
 import UserBlock from "../models/UserBlock.js";
 import Content from "../models/Content.js";
 import Gift from "../models/Gift.js";
@@ -32,6 +33,7 @@ import {
   validateUsername,
 } from "../validators/profileValidator.js";
 import { normalizePhone } from "../validators/authValidator.js";
+import { protectVerifiedHandle, requireUsernameAvailable, usernameConflict } from "../services/usernameProtectionService.js";
 
 const profileModels = {
   admin: AdminProfile,
@@ -549,6 +551,7 @@ export const getMyAccountSettings = asyncHandler(async (req, res) => {
 
 export const updateMyAccountSettings = asyncHandler(async (req, res) => {
   if (Object.hasOwn(req.body, "profileAccountType")) {
+    if (String(req.body.profileAccountType).toLowerCase() === "business") await requireCountryFeature(req.user._id, "businessAccounts");
     const updates = validateProfileAccountType(req.user, req.body);
     const user = await User.findByIdAndUpdate(req.user._id, { $set: updates }, { new: true, runValidators: true });
     const profile = await ensureRoleProfile(user);
@@ -596,23 +599,22 @@ export const updateMyProfile = asyncHandler(async (req, res) => {
   }
 
   if (commonUpdates.username && commonUpdates.username !== req.user.username) {
+    if (req.user.usernameLocked) throw new ApiError(423, "Your username is locked. Contact support if you believe this is a mistake", "USERNAME_LOCKED");
     const changedAt = req.user.usernameChangedAt ? new Date(req.user.usernameChangedAt) : null;
     const nextAllowedAt = changedAt ? new Date(changedAt.getTime() + 14 * 24 * 60 * 60 * 1000) : null;
-    if (nextAllowedAt && nextAllowedAt > new Date()) {
+    if (!req.user.usernameChangeRequired && nextAllowedAt && nextAllowedAt > new Date()) {
       throw new ApiError(429, `You can change your username again after ${nextAllowedAt.toISOString()}`, "USERNAME_CHANGE_COOLDOWN");
     }
-    const [usernameTaken, usernameReserved] = await Promise.all([
-      User.exists({ username: commonUpdates.username, _id: { $ne: req.user._id } }),
-      UsernameReservation.exists({ username: commonUpdates.username, user: { $ne: req.user._id }, expiresAt: { $gt: new Date() } }),
-    ]);
-    if (usernameTaken || usernameReserved) throw new ApiError(409, "That username is already taken");
+    await requireUsernameAvailable(commonUpdates.username, { userId: req.user._id });
     const oldUsername = req.user.username;
     commonUpdates.usernameChangedAt = new Date();
+    commonUpdates.usernameChangeRequired = false;
     await UsernameReservation.findOneAndUpdate(
       { username: oldUsername },
       { $set: { user: req.user._id, expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) } },
       { upsert: true, setDefaultsOnInsert: true }
     );
+    await protectVerifiedHandle(req.user, oldUsername);
   }
   if (commonUpdates.email && commonUpdates.email !== req.user.email) {
     const emailTaken = await User.exists({ email: commonUpdates.email, _id: { $ne: req.user._id } });
@@ -742,14 +744,11 @@ export const removeMyCover = asyncHandler(async (req, res) => {
 export const checkUsernameAvailability = asyncHandler(async (req, res) => {
   const username = validateUsername(req.query.username);
   const currentUserId = req.user?._id ?? new mongoose.Types.ObjectId();
-  const [existingUser, reservation] = await Promise.all([
-    User.findOne({ username, _id: { $ne: currentUserId } }).select("_id"),
-    UsernameReservation.exists({ username, user: { $ne: currentUserId }, expiresAt: { $gt: new Date() } }),
-  ]);
+  const conflict = await usernameConflict(username, { userId: currentUserId });
 
   return sendResponse(res, 200, "Username availability checked", {
     username,
-    available: !existingUser && !reservation,
+    available: !conflict,
   });
 });
 

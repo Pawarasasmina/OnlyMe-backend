@@ -5,6 +5,7 @@ import WorldWaitlist from "../models/WorldWaitlist.js";
 import Wallet from "../models/Wallet.js";
 import StarsLedgerEntry from "../models/StarsLedgerEntry.js";
 import GroupConversation from "../models/GroupConversation.js";
+import MembershipPayment from "../models/MembershipPayment.js";
 import { executeFinancialCommand } from "./financialCommandService.js";
 import { creditWallet, debitWallet, transferStars, safeWallet } from "./walletLedgerService.js";
 import { fingerprint, idempotencyKey } from "../validators/financialValidator.js";
@@ -192,6 +193,7 @@ export async function joinPremium({ user, publicationId, key }) {
         ],
         { session },
       );
+      await MembershipPayment.create([{ membership: membership._id, premiumPublication: publication._id, user: user._id, creator: publication.creator, type: "INITIAL", status: "SUCCEEDED", amountStars: firstPeriodPrice, periodStart: start, periodEnd: end, attemptedAt: start, succeededAt: start, debitLedgerEntry: moved.debit.entry._id, creditLedgerEntry: moved.credit.entry._id, idempotencyKey: key }], { session });
       await GroupConversation.updateMany({ premiumWorld: publication._id, isWorldCircle: true, deletedAt: null }, { $addToSet: { members: user._id } }, { session });
       return {
         resultReference: membership._id,
@@ -277,6 +279,7 @@ export async function admitWorldWaitlist(publicationId) {
           latestLedgerEntry: entry.holdLedgerEntry || credited.entry._id,
           idempotencyKey: `waitlist-admit:${entry._id}`,
         }], { session });
+        await MembershipPayment.create([{ membership: membership._id, premiumPublication: entry.publication, user: entry.user, creator: entry.creator, type: "INITIAL", status: "SUCCEEDED", amountStars: entry.heldStars, periodStart: start, periodEnd: membership.currentPeriodEnd, attemptedAt: start, succeededAt: start, debitLedgerEntry: entry.holdLedgerEntry, creditLedgerEntry: credited.entry._id, idempotencyKey: `waitlist-admit:${entry._id}` }], { session });
         entry.status = "ADMITTED";
         entry.membership = membership._id;
         entry.admittedAt = new Date();
@@ -502,6 +505,7 @@ export async function renewPremiumMembership(membershipId, now = new Date()) {
         membership.latestLedgerEntry = moved.debit.entry._id;
         membership.membershipVersion += 1;
         await membership.save({ session });
+        await MembershipPayment.create([{ membership: membership._id, premiumPublication: membership.premiumPublication, user: membership.user, creator: membership.creator, type: "RENEWAL", status: "SUCCEEDED", amountStars: membership.starsPerPeriod, periodStart, periodEnd, attemptedAt: now, succeededAt: now, debitLedgerEntry: moved.debit.entry._id, creditLedgerEntry: moved.credit.entry._id, idempotencyKey: key }], { session });
         return {
           resultReference: membership._id,
           membership: summary(membership),
@@ -529,6 +533,7 @@ export async function renewPremiumMembership(membershipId, now = new Date()) {
           $inc: { membershipVersion: 1 },
         },
       );
+      if (suspended.modifiedCount) await MembershipPayment.updateOne({ membership: due._id, periodStart, type: "RENEWAL" }, { $setOnInsert: { membership: due._id, premiumPublication: due.premiumPublication, user: due.user, creator: due.creator, type: "RENEWAL", status: "FAILED", amountStars: due.starsPerPeriod, periodStart, periodEnd, attemptedAt: now, failedAt: now, failureCode: error.code, failureMessage: String(error.message || "Renewal payment failed").slice(0, 500), idempotencyKey: key } }, { upsert: true });
       if (suspended.modifiedCount && [FINANCIAL_ERROR_CODES.INSUFFICIENT_STARS, FINANCIAL_ERROR_CODES.WALLET_UNAVAILABLE].includes(error.code)) {
         await Notification.updateOne({ dedupeKey: `premium-renewal-failed:${due._id}:${periodStart.toISOString()}` }, { $setOnInsert: {
           user: due.user, actor: due.creator, type: "premium_renewal_failed", title: "Not enough coins to renew — top up to stay", message: "Your World membership could not renew. Top up your Wallet, then restart your membership.", target: { type: "PREMIUM_WORLD", id: due.premiumPublication }, metadata: { membershipId: String(due._id), coins: due.starsPerPeriod, currentPeriodEnd: due.currentPeriodEnd }, dedupeKey: `premium-renewal-failed:${due._id}:${periodStart.toISOString()}`,

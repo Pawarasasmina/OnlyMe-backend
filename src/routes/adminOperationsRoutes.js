@@ -5,6 +5,8 @@ import { requireAdminPermission } from "../middleware/adminPermissionMiddleware.
 import { actionUnifiedReport, createLegalHold, exportHistory, getAdminUserDetail, getFinancialUser, getModerationPolicy, getOperationsDashboard, getUnifiedReport, holdPayouts, listAppeals, listAuditEvents, listLegalHolds, listUnifiedReports, releaseLegalHold, releasePayouts, reviewAppeal, searchGovernanceTargets, updateModerationPolicy, enforceUser } from "../controllers/adminOperationsController.js";
 
 import { exportContentHistory, exportUserPackage } from "../controllers/adminExportController.js";
+import { listMembershipWorlds, getWorldMemberships, adminCancelMembership, adminRefundMembershipPayment } from "../controllers/adminWorldMembershipController.js";
+import { adminFinancialMutationLimit } from "../middleware/financialRateLimit.js";
 
 const router = Router();
 router.use(protect, authorize("admin"));
@@ -29,4 +31,8 @@ router.get("/exports/user-package", requireAdminPermission("exports.manage"), ex
 router.get("/finance/users/:id", requireAdminPermission("finance.view"), getFinancialUser);
 router.post("/finance/users/:id/payout-hold", requireAdminPermission("finance.manage"), holdPayouts);
 router.post("/finance/users/:id/payout-release", requireAdminPermission("finance.manage"), releasePayouts);
+router.get("/world-memberships/worlds", requireAdminPermission("finance.view"), listMembershipWorlds);
+router.get("/world-memberships/worlds/:worldId", requireAdminPermission("finance.view"), getWorldMemberships);
+router.post("/world-memberships/:id/cancel", adminFinancialMutationLimit, requireAdminPermission("finance.manage"), adminCancelMembership);
+router.post("/world-memberships/payments/:id/refund", adminFinancialMutationLimit, requireAdminPermission("finance.manage"), adminRefundMembershipPayment);
 export default router;

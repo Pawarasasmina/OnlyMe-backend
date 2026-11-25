@@ -14,7 +14,7 @@ import { financialModeForAccountType } from "../constants/accountTypeConstants.j
 import { requireMonetization } from "./monetizationService.js";
 import { callAvailabilityForUser } from "./callAvailabilityService.js";
 
-export const PAID_CALL_REQUEST_MS = 24 * 60 * 60 * 1000;
+export const PAID_CALL_REQUEST_MS = 48 * 60 * 60 * 1000;
 export const PAID_CALL_PLATFORM_RATE_BPS = 0;
 export const PAID_CALL_PRIORITY_STARS = 200;
 

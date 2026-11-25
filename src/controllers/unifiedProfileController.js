@@ -52,7 +52,7 @@ async function loadProfile(owner, viewer) {
   const Model = profileModelFor(owner);
   const publishedFilter = { creator: owner._id, status: { $in: ["PUBLISHED", "published"] } };
   const profileOwner = Boolean(viewer?._id && String(viewer._id) === String(owner._id));
-  const seenStatus = { $in: profileOwner ? ["DRAFT", "PUBLISHED", "CHANGES_REQUESTED"] : ["PUBLISHED", "CHANGES_REQUESTED"] };
+  const seenStatus = { $in: profileOwner ? ["DRAFT", "PENDING_REVIEW", "PUBLISHED", "CHANGES_REQUESTED", "REJECTED"] : ["PUBLISHED", "CHANGES_REQUESTED"] };
   const seenAudienceFilter = await seenVisibilityFilter(viewer || null, [owner._id]);
   const planetStatus = profileOwner ? { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } : { $in: ["PUBLISHED", "PENDING_REVIEW", "CHANGES_REQUESTED", "REJECTED"] };
   const [roleProfile, content, publishedContentCount, seens, seriesDocs, planets, experiences, ownFeedPosts, ownCurrentWallPosts, shares, wallShares, feedSharePosts, followerCount, followingCount, seenByCount, supporterRows, viewerRelationships, viewerSeeSignal, profileMedia] = await Promise.all([

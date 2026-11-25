@@ -66,12 +66,18 @@ const monthAgo = () => new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 const weekAgo = () => new Date(Date.now() - 6 * 24 * 60 * 60 * 1000);
 const dayBucket = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
 const updateSnapshotMetadata = (publication, values) => {
-  for (const snapshotKey of ["submittedSnapshot", "publishedSnapshot"]) {
+  const snapshotKeys = publication.status === "CHANGES_REQUESTED"
+    ? ["submittedSnapshot"]
+    : ["submittedSnapshot", "publishedSnapshot"];
+  for (const snapshotKey of snapshotKeys) {
     if (!publication[snapshotKey]?.metadata) continue;
     publication[snapshotKey].metadata = { ...publication[snapshotKey].metadata, ...values };
     publication.markModified(`${snapshotKey}.metadata`);
   }
 };
+const startWorldRevisionIfPublished = async (creatorId, publication) => ["PUBLISHED", "PENDING_REVIEW"].includes(publication.status) && ["WORLD", "PREMIUM_WORLD"].includes(publication.kind)
+  ? startPublishedRevision(creatorId, publication._id, { statusVersion: publication.statusVersion })
+  : publication;
 const premiumWorldForCreator = (creatorId) => Publication.findOne({ creator: creatorId, kind: "PREMIUM_WORLD", status: { $in: ["DRAFT", "PENDING_REVIEW", "CHANGES_REQUESTED", "PUBLISHED"] } }).select("+submittedSnapshot");
 async function syncExperienceWithPremiumWorld(creatorId, experienceId, included, premiumWorld = null) {
   const world = premiumWorld || await premiumWorldForCreator(creatorId);
@@ -99,7 +105,10 @@ const snapshotChapter = (chapter) => ({
 });
 const upsertSnapshotChapter = (publication, chapter) => {
   const nextChapter = snapshotChapter(chapter);
-  for (const snapshotKey of ["submittedSnapshot", "publishedSnapshot"]) {
+  const snapshotKeys = publication.status === "CHANGES_REQUESTED"
+    ? ["submittedSnapshot"]
+    : ["submittedSnapshot", "publishedSnapshot"];
+  for (const snapshotKey of snapshotKeys) {
     if (!publication[snapshotKey]?.chapters) continue;
     const chapters = publication[snapshotKey].chapters || [];
     const index = chapters.findIndex((item) => item.stableChapterId === chapter.stableChapterId);
@@ -316,7 +325,7 @@ export const updateWorldPricing = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "World price updated", { ...(await serializeWorldManagement(publication, req.user)), pricing });
 });
 export const updateWorldManagement = asyncHandler(async (req, res) => {
-  const publication = await ownerWorld(req.user._id, req.params.id);
+  let publication = await ownerWorld(req.user._id, req.params.id);
   const updates = {};
   let premiumWorld = null;
   if (Object.hasOwn(req.body, "priceStars") || Object.hasOwn(req.body, "monthlyStars") || Object.hasOwn(req.body, "monthlyCoins")) {
@@ -366,6 +375,8 @@ export const updateWorldManagement = asyncHandler(async (req, res) => {
     updates.taggedPeople = taggedPeople;
   }
   if (!Object.keys(updates).length) return sendResponse(res, 200, "World unchanged", await serializeWorldManagement(publication, req.user));
+  const moderationRelevant = ["title", "description", "summary", "ownerWelcomeNote", "includedInWorld", "taggedPeople"].some((field) => Object.hasOwn(updates, field)) || Object.hasOwn(updates, "planet.faceEmoji");
+  if (moderationRelevant) publication = await startWorldRevisionIfPublished(req.user._id, publication);
   const planetFaceEmoji = updates["planet.faceEmoji"];
   delete updates["planet.faceEmoji"];
   Object.assign(publication, updates);
@@ -384,7 +395,8 @@ export const updateWorldManagement = asyncHandler(async (req, res) => {
 });
 export const uploadWorldCover = asyncHandler(async (req, res) => {
   if (!req.file) throw new ApiError(400, "Cover image or video is required");
-  const publication = await ownerWorld(req.user._id, req.params.id);
+  let publication = await ownerWorld(req.user._id, req.params.id);
+  publication = await startWorldRevisionIfPublished(req.user._id, publication);
   const mediaType = String(req.file.mimetype || "").startsWith("video/") ? "VIDEO" : "IMAGE";
   const uploaded = await uploadPublicationFile({ file: req.file, creatorId: req.user._id, publicationId: publication._id, chapterId: "root", blockId: "cover", mediaType });
   if (mediaType === "VIDEO" && Number(uploaded.duration) > 30.1) {
@@ -400,7 +412,8 @@ export const uploadWorldCover = asyncHandler(async (req, res) => {
   return sendResponse(res, 201, "World cover updated", await serializeWorldManagement(publication, req.user));
 });
 export const removeWorldCover = asyncHandler(async (req, res) => {
-  const publication = await ownerWorld(req.user._id, req.params.id);
+  let publication = await ownerWorld(req.user._id, req.params.id);
+  publication = await startWorldRevisionIfPublished(req.user._id, publication);
   const media = publication.coverMedia;
   publication.coverMedia = undefined;
   publication.statusVersion += 1;
@@ -413,7 +426,8 @@ export const removeWorldCover = asyncHandler(async (req, res) => {
 export const uploadWorldWelcomeVoice = asyncHandler(async (req, res) => {
   if (!req.file) throw new ApiError(400, "Voice recording is required");
   if (!String(req.file.mimetype || "").startsWith("audio/")) throw new ApiError(400, "Choose an audio recording");
-  const publication = await ownerWorld(req.user._id, req.params.id);
+  let publication = await ownerWorld(req.user._id, req.params.id);
+  publication = await startWorldRevisionIfPublished(req.user._id, publication);
   const uploaded = await uploadPublicationFile({ file: req.file, creatorId: req.user._id, publicationId: publication._id, chapterId: "root", blockId: "welcome-voice", mediaType: "VOICE" });
   if (Number(uploaded.duration || 0) > 120.1) {
     await deletePublicationFile(uploaded).catch(() => {});
@@ -430,7 +444,8 @@ export const uploadWorldWelcomeVoice = asyncHandler(async (req, res) => {
   return sendResponse(res, 201, "Welcome voice added", await serializeWorldManagement(publication, req.user));
 });
 export const removeWorldWelcomeVoice = asyncHandler(async (req, res) => {
-  const publication = await ownerWorld(req.user._id, req.params.id);
+  let publication = await ownerWorld(req.user._id, req.params.id);
+  publication = await startWorldRevisionIfPublished(req.user._id, publication);
   const previous = publication.worldWelcomeVoiceMedia?.toObject?.() || publication.worldWelcomeVoiceMedia;
   publication.worldWelcomeVoiceMedia = undefined;
   publication.statusVersion += 1;
@@ -442,7 +457,8 @@ export const removeWorldWelcomeVoice = asyncHandler(async (req, res) => {
 });
 export const uploadWorldStoryPreview = asyncHandler(async (req, res) => {
   if (!req.file) throw new ApiError(400, "Story image is required");
-  const publication = await ownerWorld(req.user._id, req.params.id);
+  let publication = await ownerWorld(req.user._id, req.params.id);
+  publication = await startWorldRevisionIfPublished(req.user._id, publication);
   const mediaType = String(req.file.mimetype || "").startsWith("video/") ? "VIDEO" : "IMAGE";
   if (mediaType !== "IMAGE") throw new ApiError(400, "World stories currently support images");
 
@@ -492,7 +508,8 @@ export const uploadWorldStoryPreview = asyncHandler(async (req, res) => {
   return sendResponse(res, 201, "World story added", await serializeWorldManagement(publication, req.user));
 });
 export const removeWorldStoryPreview = asyncHandler(async (req, res) => {
-  const publication = await ownerWorld(req.user._id, req.params.id);
+  let publication = await ownerWorld(req.user._id, req.params.id);
+  publication = await startWorldRevisionIfPublished(req.user._id, publication);
   const chapter = await Chapter.findOne({ publication: publication._id, stableChapterId: req.params.chapterId });
   if (!chapter) throw new ApiError(404, "World story chapter not found");
   const blockIndex = (chapter.blocks || []).findIndex((block) => String(block.id) === String(req.params.blockId) && block.metadata?.storyPreview);
@@ -512,7 +529,8 @@ export const removeWorldStoryPreview = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "World story removed", await serializeWorldManagement(publication, req.user));
 });
 export const includeWorldExperience = asyncHandler(async (req, res) => {
-  const publication = await ownerWorld(req.user._id, req.params.id);
+  let publication = await ownerWorld(req.user._id, req.params.id);
+  publication = await startWorldRevisionIfPublished(req.user._id, publication);
   ensurePublicationId(req.params.experienceId);
   const experience = await Publication.findOne({ _id: req.params.experienceId, creator: req.user._id, kind: "SEEN", "pricing.mode": "ONE_TIME", status: { $ne: "REMOVED" } }).select("+submittedSnapshot");
   if (!experience) throw new ApiError(404, "Paid Seen not found");
@@ -528,7 +546,8 @@ export const includeWorldExperience = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Paid Seen included", await serializeWorldManagement(publication, req.user));
 });
 export const removeWorldExperience = asyncHandler(async (req, res) => {
-  const publication = await ownerWorld(req.user._id, req.params.id);
+  let publication = await ownerWorld(req.user._id, req.params.id);
+  publication = await startWorldRevisionIfPublished(req.user._id, publication);
   ensurePublicationId(req.params.experienceId);
   publication.includedExperienceIds = publication.includedExperienceIds.filter((item) => String(item) !== String(req.params.experienceId));
   publication.statusVersion += 1;
@@ -677,7 +696,7 @@ export const deleteChapter = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Chapter removed", { publication: await removeChapter(req.user._id, req.params.id, req.params.chapterId, req.body) });
 });
 export const reorder = asyncHandler(async (req, res) => sendResponse(res, 200, "Chapters reordered", { publication: await reorderChapters(req.user._id, req.params.id, req.body) }));
-export const submit = asyncHandler(async (req, res) => { const publication = await submitPublication(req.user._id, req.params.id, req.body); return sendResponse(res, 200, ["WORLD", "PREMIUM_WORLD", "EXPERIENCE"].includes(publication.kind) ? `${publication.kind === "EXPERIENCE" ? "Experience" : "World"} published` : "Publication submitted", { publication: serializePublication(publication, req.user), aiBonusGranted: publication.$locals?.aiBonusGranted === true }); });
+export const submit = asyncHandler(async (req, res) => { const publication = await submitPublication(req.user._id, req.params.id, req.body); return sendResponse(res, 200, publication.status === "PENDING_REVIEW" ? "Publication submitted for admin review" : "Publication published", { publication: serializePublication(publication, req.user), aiBonusGranted: publication.$locals?.aiBonusGranted === true }); });
 export const resubmit = asyncHandler(async (req, res) => { const publication = await resubmitPublication(req.user._id, req.params.id, req.body); return sendResponse(res, 200, publication.kind === "EXPERIENCE" ? "Experience updated and published" : "Publication resubmitted", { publication: serializePublication(publication, req.user), aiBonusGranted: publication.$locals?.aiBonusGranted === true }); });
 export const startRevision = asyncHandler(async (req, res) => sendResponse(res, 200, "Published revision started", { publication: serializePublication(await startPublishedRevision(req.user._id, req.params.id, req.body), req.user) }));
 export const cancelRevision = asyncHandler(async (req, res) => sendResponse(res, 200, "Published revision canceled", { publication: serializePublication(await cancelPublishedRevision(req.user._id, req.params.id, req.body), req.user) }));

@@ -21,8 +21,14 @@ import { effectiveAdminRole } from "../middleware/adminPermissionMiddleware.js";
 import { getWebCoinTaxRate, setWebCoinTaxRate } from "../services/coinPackService.js";
 import { transitionPayout } from "../services/payoutService.js";
 import { getCreatorReferralPolicy, setCreatorReferralPolicy } from "../services/creatorReferralPolicyService.js";
+import DAWindow from "../models/DAWindow.js";
+import CallSession from "../models/CallSession.js";
+import Referral from "../models/Referral.js";
+import ReferralEarning from "../models/ReferralEarning.js";
+import { getMonetizationPolicy } from "../services/monetizationService.js";
+import { buildMoneyOverview, moneyOverviewCsv } from "../services/moneyOverviewService.js";
 
-const financialAudit = (req, action, targetId, reason, after = null) => AdminAuditEvent.create({ actor: req.user._id, actorRole: effectiveAdminRole(req.user), action, targetType: "FINANCIAL_RECORD", targetId: String(targetId), reason: requiredReason(reason), after });
+const financialAudit = (req, action, targetId, reason, after = null, before = null) => AdminAuditEvent.create({ actor: req.user._id, actorRole: effectiveAdminRole(req.user), action, targetType: "FINANCIAL_RECORD", targetId: String(targetId), reason: requiredReason(reason), before, after });
 
 const objectId = (value) => {
   if (!mongoose.isObjectIdOrHexString(value)) throw new ApiError(400, "A valid financial record identifier is required", "INVALID_FINANCIAL_ID");
@@ -33,7 +39,55 @@ export const getExchangeRate = asyncHandler(async (_req, res) => sendResponse(re
 export const getCoinTaxRate = asyncHandler(async (_req, res) => sendResponse(res, 200, "Web coin tax rate fetched", { percent: await getWebCoinTaxRate() }));
 export const updateCoinTaxRate = asyncHandler(async (req, res) => sendResponse(res, 200, "Web coin tax rate updated", { percent: await setWebCoinTaxRate(req.body.percent, req.user._id) }));
 export const getCreatorReferralSettings = asyncHandler(async (_req, res) => sendResponse(res, 200, "Creator referral settings fetched", await getCreatorReferralPolicy()));
-export const updateCreatorReferralSettings = asyncHandler(async (req, res) => sendResponse(res, 200, "Creator referral settings updated", await setCreatorReferralPolicy(req.body, req.user._id)));
+export const updateCreatorReferralSettings = asyncHandler(async (req, res) => {
+  const reason = requiredReason(req.body.reason);
+  const before = await getCreatorReferralPolicy();
+  const monetization = await getMonetizationPolicy();
+  if (req.body.enabled === true && !monetization.enabled) throw new ApiError(409, "Creator payouts must be operational before referral rewards can be enabled", "CREATOR_PAYOUTS_REQUIRED");
+  const after = await setCreatorReferralPolicy(req.body, req.user._id);
+  await financialAudit(req, "CREATOR_REFERRAL_POLICY_UPDATED", "CREATOR_REFERRAL_POLICY", reason, after, before);
+  return sendResponse(res, 200, "Creator referral settings updated", after);
+});
+
+const person = (value) => value ? { id: String(value._id), name: value.name, username: value.username, email: value.email || "" } : null;
+export const listDirectAccessEscrow = asyncHandler(async (req, res) => {
+  const requested = String(req.query.status || "ALL").toUpperCase();
+  const settlement = requested === "PENDING" ? ["HELD", "REFUND_PENDING"] : requested === "ANSWERED" ? ["CAPTURED"] : requested === "REFUNDED" ? ["REFUNDED"] : ["HELD", "REFUND_PENDING", "CAPTURED", "REFUNDED"];
+  const [windows, calls] = await Promise.all([
+    DAWindow.find({ source: { $ne: "PREMIUM_INCLUDED" }, settlementStatus: { $in: settlement } }).populate("fan creator", "name username email").sort({ createdAt: -1 }).limit(250).lean(),
+    CallSession.find({ paid: true, settlementStatus: { $in: settlement } }).populate("caller recipient", "name username email").sort({ createdAt: -1 }).limit(250).lean(),
+  ]);
+  const now = Date.now();
+  const items = [
+    ...windows.map((item) => ({ id: String(item._id), type: "MESSAGE", status: item.settlementStatus === "CAPTURED" ? "ANSWERED" : item.settlementStatus === "REFUNDED" ? "REFUNDED" : "PENDING", settlementStatus: item.settlementStatus, fan: person(item.fan), creator: person(item.creator), amount: item.priceStars, openedAt: item.openedAt, deadlineAt: item.expiresAt, answeredAt: item.answeredAt, refundedAt: item.refundedAt, overdue: item.settlementStatus === "HELD" && new Date(item.expiresAt).getTime() <= now })),
+    ...calls.map((item) => ({ id: String(item._id), type: "CALL", callType: item.type, status: item.settlementStatus === "CAPTURED" ? "ANSWERED" : item.settlementStatus === "REFUNDED" ? "REFUNDED" : "PENDING", settlementStatus: item.settlementStatus, fan: person(item.caller), creator: person(item.recipient), amount: item.priceStars, openedAt: item.createdAt, deadlineAt: item.requestExpiresAt, answeredAt: item.connectedAt || item.answeredAt, refundedAt: item.settlementStatus === "REFUNDED" ? item.endedAt : null, overdue: item.settlementStatus === "HELD" && new Date(item.requestExpiresAt).getTime() <= now })),
+  ].sort((a, b) => new Date(b.openedAt) - new Date(a.openedAt));
+  const summary = items.reduce((total, item) => { total[item.status.toLowerCase()] += 1; total.totalStars += item.amount; if (item.overdue || item.settlementStatus === "REFUND_PENDING") total.needsAttention += 1; return total; }, { pending: 0, answered: 0, refunded: 0, needsAttention: 0, totalStars: 0 });
+  return sendResponse(res, 200, "Direct Access escrow fetched", { items, summary });
+});
+
+export const getCreatorReferralOperations = asyncHandler(async (req, res) => {
+  const status = String(req.query.status || "ALL").toUpperCase();
+  const now = new Date();
+  const earningFilter = status === "AVAILABLE" ? { status: "SETTLED", availableAt: { $lte: now } } : status === "HOLDING" ? { status: "SETTLED", availableAt: { $gt: now } } : status === "REVERSED" ? { status: "REVERSED" } : {};
+  const [policy, monetization, referrals, earnings, payoutSummary] = await Promise.all([
+    getCreatorReferralPolicy(),
+    getMonetizationPolicy(),
+    Referral.find({ type: "creator" }).populate("inviter invitee", "name username email").sort({ createdAt: -1 }).limit(200).lean(),
+    ReferralEarning.find(earningFilter).populate("referrer referredUser", "name username email").sort({ createdAt: -1 }).limit(300).lean(),
+    Payout.aggregate([{ $match: { status: { $in: ["PENDING", "PROCESSING", "PAID"] } } }, { $group: { _id: "$status", count: { $sum: 1 }, usd: { $sum: "$usdAmount" } } }]),
+  ]);
+  const summary = earnings.reduce((total, item) => { total.rewardStars += item.rewardStars; total.grossStars += item.grossStars; if (item.status === "REVERSED") total.reversed += 1; else if (new Date(item.availableAt) <= now) total.available += item.rewardStars; else total.holding += item.rewardStars; return total; }, { rewardStars: 0, grossStars: 0, available: 0, holding: 0, reversed: 0 });
+  return sendResponse(res, 200, "Creator referral operations fetched", { policy, payoutOperational: Boolean(monetization.enabled), summary, payouts: payoutSummary, referrals: referrals.map((item) => ({ id: String(item._id), referrer: person(item.inviter), creator: person(item.invitee), eligible: item.rewardEligible, attributedAt: item.attributedAt, expiresAt: item.expiresAt, firstPayoutAt: item.firstPayoutAt, earnedUsd: item.earningsAmount, deferredStars: item.deferredRewardStars, exclusionReason: item.exclusionReason })), earnings: earnings.map((item) => ({ id: String(item._id), referrer: person(item.referrer), creator: person(item.referredUser), sourceType: item.sourceType, grossStars: item.grossStars, rewardStars: item.rewardStars, availableAt: item.availableAt, status: item.status, createdAt: item.createdAt })) });
+});
+
+export const getMoneyOverview = asyncHandler(async (req, res) => sendResponse(res, 200, "Money overview fetched", await buildMoneyOverview(req.query)));
+export const exportMoneyOverview = asyncHandler(async (req, res) => {
+  const report = await buildMoneyOverview(req.query);
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="money-overview-${report.range.from.slice(0, 10)}-${report.range.to.slice(0, 10)}.csv"`);
+  return res.status(200).send(moneyOverviewCsv(report));
+});
 
 export const updateExchangeRate = asyncHandler(async (req, res) => {
   const starsPerUsd = Number(req.body.starsPerUsd);
@@ -145,9 +199,14 @@ export const refundPremiumMembership = asyncHandler(async (req, res) => { const 
 
 export const listPayouts = asyncHandler(async (req, res) => {
   const status = String(req.query.status || "").toUpperCase();
-  const filter = status ? { status } : {};
+  const trigger = String(req.query.trigger || "").toUpperCase();
+  const search = String(req.query.search || "").trim();
+  const userIds = search ? (await User.find({ $or: ["name", "username", "email"].map((field) => ({ [field]: { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" } })) }).select("_id").lean()).map((item) => item._id) : null;
+  const filter = { ...(status ? { status } : {}), ...(trigger ? { trigger } : {}), ...(userIds ? { user: { $in: userIds } } : {}) };
   const items = await Payout.find(filter).populate("user", "name username email").sort({ createdAt: -1 }).limit(200).lean();
-  return sendResponse(res, 200, "Payouts fetched", { items });
+  const summaryRows = await Payout.aggregate([{ $group: { _id: "$status", count: { $sum: 1 }, usd: { $sum: "$usdAmount" } } }]);
+  const nextAutomaticRun = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 1));
+  return sendResponse(res, 200, "Payouts fetched", { items, summary: Object.fromEntries(summaryRows.map((row) => [row._id, { count: row.count, usd: row.usd }])), policy: { automaticMinimumUsd: 20, requestedMinimumUsd: 50, clearingDays: [14, 7, 3], nextAutomaticRun } });
 });
 
 export const updatePayoutStatus = asyncHandler(async (req, res) => {
@@ -157,5 +216,5 @@ export const updatePayoutStatus = asyncHandler(async (req, res) => {
   if (status === "FAILED" && !reason) throw new ApiError(400, "A failure reason is required", "PAYOUT_REASON_REQUIRED");
   const result = await transitionPayout({ payoutId: objectId(req.params.id), status, reason });
   await financialAudit(req, "PAYOUT_STATUS_UPDATED", String(req.params.id), reason || status, { status, restoredEntry: result.restoredEntry });
-  return sendResponse(res, 200, "Payout status updated", { payout: result.payout, restoredEntry: result.restoredEntry });
+  return sendResponse(res, 200, "Payout status updated", { payout: result.payout, restoredEntry: result.restoredEntry, retryLedgerEntry: result.retryLedgerEntry });
 });
