@@ -20,7 +20,7 @@ import { accountOwnershipSummary, canRestoreAccount, changeAccountOwnership } fr
 import AdminLoginEvent from "../models/AdminLoginEvent.js";
 import { verifyTotp } from "../utils/totp.js";
 import crypto from "node:crypto";
-import UsernameReservation from "../models/UsernameReservation.js";
+import { usernameConflict } from "../services/usernameProtectionService.js";
 
 void mongoose;
 
@@ -132,11 +132,11 @@ export const register = asyncHandler(async (req, res) => {
 
   if (req.body.referralCode) await resolveReferral(req.body.referralCode);
 
-  const [existingUser, reservedUsername] = await Promise.all([
+  const [existingUser, usernamePolicyConflict] = await Promise.all([
     User.findOne({ $or: [{ username }, ...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])] }),
-    UsernameReservation.exists({ username, expiresAt: { $gt: new Date() } }),
+    usernameConflict(username),
   ]);
-  if (reservedUsername || existingUser?.username === username) throw new ApiError(409, "This username is already taken");
+  if (usernamePolicyConflict || existingUser?.username === username) throw new ApiError(409, usernamePolicyConflict && !["ACTIVE", "TEMPORARY"].includes(usernamePolicyConflict.type) ? "This username is protected" : "This username is already taken");
   if (email && existingUser?.email === email) throw new ApiError(409, "This email is already registered");
   if (phone && existingUser?.phone === phone) throw new ApiError(409, "This phone number is already registered");
 

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { activateFanWallet, creditStars, getCoinTaxRate, getCreatorReferralSettings, getExchangeRate, getPlatformRevenue, listPayouts, listUserWallets, updateCoinTaxRate, updateCreatorReferralSettings, updateExchangeRate, updatePayoutStatus } from "../controllers/adminFinancialController.js";
+import { activateFanWallet, creditStars, exportMoneyOverview, getCoinTaxRate, getCreatorReferralOperations, getCreatorReferralSettings, getExchangeRate, getMoneyOverview, getPlatformRevenue, listDirectAccessEscrow, listPayouts, listUserWallets, updateCoinTaxRate, updateCreatorReferralSettings, updateExchangeRate, updatePayoutStatus } from "../controllers/adminFinancialController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
 import { adminFinancialMutationLimit } from "../middleware/financialRateLimit.js";
@@ -13,6 +13,10 @@ router.get("/platform-revenue", requireAdminPermission("finance.view"), getPlatf
 router.get("/exchange-rate", requireAdminPermission("finance.view"), getExchangeRate);
 router.get("/coin-tax-rate", requireAdminPermission("finance.view"), getCoinTaxRate);
 router.get("/creator-referral-settings", requireAdminPermission("finance.view"), getCreatorReferralSettings);
+router.get("/creator-referrals", requireAdminPermission("finance.view"), getCreatorReferralOperations);
+router.get("/direct-access-escrow", requireAdminPermission("finance.view"), listDirectAccessEscrow);
+router.get("/money-overview", requireAdminPermission("finance.view"), getMoneyOverview);
+router.get("/money-overview/export", requireAdminPermission("finance.view"), exportMoneyOverview);
 router.get("/monetization-policy", requireAdminPermission("finance.view"), getMonetizationPolicyAdmin);
 router.get("/payouts", requireAdminPermission("finance.view"), listPayouts);
 router.put("/exchange-rate", adminFinancialMutationLimit, requireAdminPermission("finance.manage"), updateExchangeRate);

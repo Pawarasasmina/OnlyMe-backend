@@ -28,6 +28,11 @@ const userSchema = new mongoose.Schema(
       lowercase: true,
     },
     usernameChangedAt: { type: Date, default: null },
+    usernameLocked: { type: Boolean, default: false, index: true },
+    usernameLockedAt: { type: Date, default: null },
+    usernameLockedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    usernameLockReason: { type: String, trim: true, maxlength: 1000, default: "" },
+    usernameChangeRequired: { type: Boolean, default: false },
     email: {
       type: String,
       unique: true,

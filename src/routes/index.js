@@ -43,6 +43,7 @@ import repostRoutes from "./repostRoutes.js";
 import shareRoutes from "./shareRoutes.js";
 import verifiedCreatorRoutes from "./verifiedCreatorRoutes.js";
 import adminVerifiedCreatorRoutes from "./adminVerifiedCreatorRoutes.js";
+import adminUsernameProtectionRoutes from "./adminUsernameProtectionRoutes.js";
 import { sendResponse } from "../utils/response.js";
 
 const router = Router();
@@ -79,6 +80,7 @@ router.use("/admin/publication-moderation", adminPublicationRoutes);
 router.use("/admin",adminFinancialRoutes);
 router.use("/admin/analytics", adminAnalyticsRoutes);
 router.use("/admin", adminOperationsRoutes);
+router.use("/admin", adminUsernameProtectionRoutes);
 router.use("/appeals", appealRoutes);
 router.use("/analytics", analyticsRoutes);
 router.use("/admin", adminRoutes);

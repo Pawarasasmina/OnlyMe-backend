@@ -24,6 +24,7 @@ import { coverPreview } from "../services/activitySupplementService.js";
 import { PAYOUT_POLICY } from "../constants/payoutPolicy.js";
 import ReferralEarning from "../models/ReferralEarning.js";
 import { requireCountryFeature } from "../services/monetizationService.js";
+import Notification from "../models/Notification.js";
 
 const CREATOR_EVENTS = ["WORLD_CREATOR_EARNING", "PREMIUM_CREATOR_EARNING", "DREAM_CREATOR_EARNING", "CHAT_GIFT_EARNING", "DA_CREATOR_EARNING", "CALL_CREATOR_EARNING", "REFERRAL_CREATOR_EARNING"];
 const safePublication = (item) => item ? { id: item._id, title: item.title || item.publishedSnapshot?.metadata?.title || "", kind: item.kind, planet: item.planet || null, ...coverPreview(item) } : null;
@@ -187,7 +188,8 @@ export const withdrawCreatorIncome = asyncHandler(async (req, res) => {
         metadata: { bankLast4: payoutBank.accountLast4, bankApplicationId: String(payoutBank._id), bankVersion: payoutBank.version, payoutProvider: "manual", bucketSpend: { bonus: 0, purchased: 0, earned: amount }, starsPerUsd, usdAmount: amount / starsPerUsd },
       }], { session });
       await Wallet.updateOne({ _id: updated._id }, { $set: { lastLedgerEntry: entry._id } }, { session });
-      const [payout] = await Payout.create([{ user: req.user._id, ledgerEntry: entry._id, command: command._id, trigger: "MANUAL", status: "PENDING", starsAmount: amount, usdAmount: amount / starsPerUsd, feeUsd: 0, bankLast4: payoutBank.accountLast4 }], { session });
+      const [payout] = await Payout.create([{ user: req.user._id, ledgerEntry: entry._id, command: command._id, trigger: "MANUAL", status: "PENDING", starsAmount: amount, usdAmount: amount / starsPerUsd, feeUsd: 0, bankLast4: payoutBank.accountLast4, statusHistory: [{ status: "PENDING", reason: "Creator requested payout", at: new Date(), ledgerEntry: entry._id }] }], { session });
+      await Notification.create([{ user: req.user._id, type: "payout_created", title: "Payout request received", message: `$${(amount / starsPerUsd).toFixed(2)} is waiting for processing.`, dedupeKey: `payout-created:${payout._id}`, target: { type: "PAYOUT", id: payout._id }, metadata: { payoutId: String(payout._id), trigger: "MANUAL", starsAmount: amount, usdAmount: amount / starsPerUsd } }], { session });
       return { resultReference: payout._id, wallet: safeWallet(updated), withdrawal: { id: payout._id, ledgerEntryId: entry._id, starsAmount: amount, usdAmount: amount / starsPerUsd, status: payout.status, bankLast4: payoutBank.accountLast4, estimatedArrival: "After admin processing" } };
     },
   );
