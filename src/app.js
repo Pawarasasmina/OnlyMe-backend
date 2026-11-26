@@ -1,5 +1,6 @@
-﻿import express from "express";
+import express from "express";
 import path from "node:path";
+import { monitoringRequestMiddleware } from "./services/internalMonitoringService.js";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
@@ -14,7 +15,7 @@ import { errorHandler } from "./middleware/errorMiddleware.js";
 import { notFoundHandler } from "./middleware/notFoundMiddleware.js";
 import { assertPrivateStorageConfiguration } from "./services/privateDocumentStorageService.js";
 import mongoose from "mongoose";
-import { uptimeAlertMiddleware } from "./middleware/uptimeAlertMiddleware.js";
+
 import { csrfProtection } from "./middleware/csrfMiddleware.js";
 import { sendOwnerOperationalAlert } from "./services/operationalAlertService.js";
 
@@ -58,7 +59,7 @@ app.use(
 );
 app.use(helmet());
 app.use(morgan(env.nodeEnv === "production" ? "combined" : "dev"));
-app.use(uptimeAlertMiddleware);
+app.use(monitoringRequestMiddleware);
 app.get("/api/health/live", (_req, res) => res.status(200).json({ success: true, message: "ATSEEN API process is alive", data: {} }));
 app.get("/api/health/ready", (_req, res) => {
   const ready = !app.get("shuttingDown") && mongoose.connection.readyState === 1;
@@ -97,6 +98,7 @@ app.use("/api", routes);
 app.use("/api/identity", manualBankRoutes);
 app.use("/api/identity", identityRoutes);
 app.use(notFoundHandler);
+
 app.use(errorHandler);
 
 export default app;

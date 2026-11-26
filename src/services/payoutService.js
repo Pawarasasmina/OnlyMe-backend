@@ -20,6 +20,9 @@ export async function transitionPayout({ payoutId, status, reason = "" }) {
   const current = await Payout.findById(payoutId).lean();
   if (!current) throw new ApiError(404, "Payout not found", "PAYOUT_NOT_FOUND");
   if (!payoutTransitionAllowed(current.status, status)) throw new ApiError(409, `Payout cannot move from ${current.status} to ${status}`, "INVALID_PAYOUT_TRANSITION");
+  if (["PROCESSING", "PAID"].includes(status) && await PayoutHold.exists({ user: current.user, active: true })) {
+    throw new ApiError(403, "Payouts are currently on administrative hold", "PAYOUT_ON_HOLD");
+  }
   const restore = ["FAILED", "CANCELED"].includes(status);
   const retrying = current.status === "FAILED" && status === "PROCESSING";
   const key = `payout-status:${current._id}:${current.status}:${status}:${Number(current.retryCount || 0)}`;

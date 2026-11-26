@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import BusinessVerification from "../models/BusinessVerification.js";
+import { auditDocumentView } from "../services/adminDocumentAccessService.js";
 import BusinessBooking from "../models/BusinessBooking.js";
 import FeedPost from "../models/FeedPost.js";
 import User from "../models/User.js";
@@ -72,6 +73,7 @@ export const streamBusinessDocument = asyncHandler(async (req, res) => {
   const row = await BusinessVerification.findById(validId(req.params.id)).select("+document");
   if (!row?.document) throw new ApiError(404, "Business document not found");
   const stream = await openVerificationDocument(row.document.storageKey);
+  await auditDocumentView(req, stream, "BUSINESS_VERIFICATION", row._id, "document");
   setPrivateDocumentHeaders(res,row.document);
   stream.on("error", error => res.destroy(error)); stream.pipe(res);
 });

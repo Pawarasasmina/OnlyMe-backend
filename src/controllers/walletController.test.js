@@ -1,5 +1,17 @@
 import test from"node:test";import assert from"node:assert/strict";import{effectiveMembershipStatus,withdrawalBalances}from"./walletController.js";
 import { withdrawCreatorIncome } from './walletController.js';
+import { convertIncomeToCoins } from './walletController.js';
+
+test("creator earnings cannot be converted into spendable coins", async () => {
+  let failure;
+  await convertIncomeToCoins({ body: {} }, {}, (error) => { failure = error; });
+  assert.equal(failure.code, "INCOME_CONVERSION_DISABLED");
+});
+test("test earnings cannot request real payouts", async () => {
+  let failure;
+  await withdrawCreatorIncome({ body: {}, user: { accountType: "TEST" } }, {}, (error) => { failure = error; });
+  assert.equal(failure.code, "TEST_PAYOUT_DISABLED");
+});
 
 test('unsupported instant payouts are rejected before any wallet mutation',async()=>{
   let failure;

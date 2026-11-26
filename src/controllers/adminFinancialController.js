@@ -6,7 +6,7 @@ import Transaction from "../models/Transaction.js";
 import PlatformRevenue from "../models/PlatformRevenue.js";
 import { executeFinancialCommand } from "../services/financialCommandService.js";
 import { creditWallet, safeWallet } from "../services/walletLedgerService.js";
-import { activateWalletLedger } from "../services/walletAdministrationService.js";
+
 import { refundWorld, refundPremium } from "../services/refundService.js";
 import Payout from "../models/Payout.js";
 import { positiveStars, idempotencyKey, requiredReason, fingerprint } from "../validators/financialValidator.js";
@@ -18,6 +18,7 @@ import { sendResponse } from "../utils/response.js";
 import { financialModeForAccountType } from "../constants/accountTypeConstants.js";
 import AdminAuditEvent from "../models/AdminAuditEvent.js";
 import { effectiveAdminRole } from "../middleware/adminPermissionMiddleware.js";
+import { assertManualAdjustmentAccess, assertManualAdjustmentTarget } from "../validators/manualAdjustmentPolicy.js";
 import { getWebCoinTaxRate, setWebCoinTaxRate } from "../services/coinPackService.js";
 import { transitionPayout } from "../services/payoutService.js";
 import { getCreatorReferralPolicy, setCreatorReferralPolicy } from "../services/creatorReferralPolicyService.js";
@@ -91,15 +92,16 @@ export const exportMoneyOverview = asyncHandler(async (req, res) => {
 
 export const updateExchangeRate = asyncHandler(async (req, res) => {
   const starsPerUsd = Number(req.body.starsPerUsd);
-  if (!Number.isFinite(starsPerUsd) || starsPerUsd < 0.01 || starsPerUsd > 100000) throw new ApiError(400, "Coins per USD must be between 0.01 and 100,000", "INVALID_STAR_EXCHANGE_RATE");
+  if (starsPerUsd !== 10) throw new ApiError(400, "The exchange rate is fixed at 10 coins per USD", "INVALID_STAR_EXCHANGE_RATE");
   const setting = await setStarExchangeRate(Math.round(starsPerUsd * 100) / 100, req.user._id);
   return sendResponse(res, 200, "Coin exchange rate updated", { starsPerUsd: setting.starsPerUsd, updatedAt: setting.updatedAt });
 });
 
 export const creditStars = asyncHandler(async (req, res) => {
-  if (!env.enableAdminStarCredits) throw new ApiError(403, "Admin Coins credits are disabled", "ADMIN_CREDITS_DISABLED");
+  assertManualAdjustmentAccess(req.user, env);
   const target = await User.findById(objectId(req.params.userId)).select("+accountType _id role status");
   if (!target) throw new ApiError(404, "User not found", "USER_NOT_FOUND");
+  assertManualAdjustmentTarget(target);
   if (!["fan", "creator"].includes(target.role)) throw new ApiError(400, "Coins can only be added to fan or creator Wallets", "WALLET_ACCOUNT_REQUIRED");
   if (target.status !== "active") throw new ApiError(409, "The selected account is not active", "WALLET_ACCOUNT_INACTIVE");
   const amount = positiveStars(req.body.starsAmount);
@@ -109,13 +111,13 @@ export const creditStars = asyncHandler(async (req, res) => {
   const result = await executeFinancialCommand({ user: req.user._id, financialMode: financialModeForAccountType(target.accountType), commandType: "ADMIN_CREDIT", idempotencyKey: key, requestFingerprint: fingerprint({ target: String(target._id), amount, reason, resetLegacyWallet }) }, async (session, command) => {
     const existingWallet = await Wallet.findOne({ user: target._id }).session(session);
     const requiresReset = Boolean(existingWallet && (existingWallet.currency !== "STARS" || !existingWallet.ledgerActivatedAt || existingWallet.reconciliationStatus !== "MATCHED"));
-    if (requiresReset && !resetLegacyWallet) throw new ApiError(409, "Legacy Wallet reset confirmation is required", "WALLET_RESET_CONFIRMATION_REQUIRED");
-    let reset = null;
-    if (requiresReset) reset = await activateWalletLedger({ user: target._id, openingBalance: 0, reason: `Legacy Wallet reset before admin top-up: ${reason}`, admin: req.user._id, command, idempotencyKey: key }, session);
-    const posted = await creditWallet({ user: target._id, amount, entryType: "CREDIT_ADMIN", entryRole: "ADMIN_CREDIT", referenceType: "ADMIN_CREDIT", referenceId: command._id, command, idempotencyKey: key, counterpartyUser: req.user._id, metadata: { reason, adminUser: String(req.user._id), legacyWalletReset: Boolean(reset), previousBalance: reset?.previous.balance, previousCurrency: reset?.previous.currency } }, session);
-    return { resultReference: posted.entry._id, wallet: safeWallet(posted.wallet, command.financialMode), credit: { starsAmount: amount, createdAt: posted.entry.createdAt }, legacyReset: reset ? { previousBalance: reset.previous.balance, previousCurrency: reset.previous.currency } : null };
+    if (requiresReset) throw new ApiError(409, "Wallet requires reviewed reconciliation before credits", "WALLET_REQUIRES_MIGRATION");
+
+
+    const posted = await creditWallet({ user: target._id, amount, entryType: "CREDIT_ADMIN", entryRole: "ADMIN_CREDIT", referenceType: "ADMIN_CREDIT", referenceId: command._id, command, idempotencyKey: key, counterpartyUser: req.user._id, metadata: { reason, adminUser: String(req.user._id), financialMode: "TEST" } }, session);
+    await AdminAuditEvent.create([{ actor: req.user._id, actorRole: "FINANCE", action: "ADMIN_STARS_CREDITED", targetType: "USER", targetId: String(target._id), reason, after: { starsAmount: amount, resultReference: posted.entry._id }, metadata: { financialMode: "TEST", commandId: String(command._id) } }], { session });
+    return { resultReference: posted.entry._id, wallet: safeWallet(posted.wallet, command.financialMode), credit: { starsAmount: amount, createdAt: posted.entry.createdAt }, legacyReset: null };
   });
-  await financialAudit(req, "ADMIN_STARS_CREDITED", target._id, reason, { starsAmount: amount, resultReference: result.resultReference });
   return sendResponse(res, 200, "Coins credited", result);
 });
 
@@ -142,7 +144,7 @@ export const listUserWallets = asyncHandler(async (req, res) => {
     const legacy = legacyByWallet.get(String(wallet?._id)) || [];
     const legacyProjection = legacy.filter((item) => item.status === "completed").reduce((total, item) => total + (item.type === "debit" ? -1 : 1) * Math.abs(Number(item.amount) || 0), 0);
     const reconciliationStatus = !wallet ? "NOT_CREATED" : wallet.currency !== "STARS" || !wallet.ledgerActivatedAt ? "NOT_ACTIVATED" : walletBalance !== ledgerBalance ? "DRIFT" : wallet.reconciliationStatus === "MATCHED" ? "MATCHED" : wallet.reconciliationStatus || "BLOCKED";
-    return { id: user._id, name: user.name, username: user.username, email: user.email, avatar: user.avatar || "", status: user.status, role: user.role, accountType: user.accountType || "SEED", wallet: { exists: Boolean(wallet), balance: walletBalance, realSeedBalance: walletBalance, testBalance: Number(wallet?.testBalance || 0), realSeedEarnings: Number(realLedger?.earnings || 0), testEarnings: Number(testLedger?.earnings || 0), currency: wallet?.currency || "STARS", version: wallet?.version || 0, ledgerActivated: Boolean(wallet?.ledgerActivatedAt), ledgerActivatedAt: wallet?.ledgerActivatedAt || null, reconciliationStatus, ledgerBalance, ledgerEntries: Number(realLedger?.entries || 0) + Number(testLedger?.entries || 0), legacyProjection, legacyDifference: walletBalance - legacyProjection, legacyTransactions: legacy.slice(0, 20).map((item) => ({ id: item._id, amount: item.amount, type: item.type, status: item.status, description: item.description, createdAt: item.createdAt })) } };
+    return { id: user._id, name: user.name, username: user.username, email: user.email, avatar: user.avatar || "", status: user.status, role: user.role, accountType: user.accountType || "SEED", wallet: { exists: Boolean(wallet), fanCoins: Number(wallet?.bonusBalance || 0) + Number(wallet?.purchasedBalance || 0), creatorEarningsUsd: Number(wallet?.earnedBalance || 0) / 10, testFanCoins: Number(wallet?.testBonusBalance || 0) + Number(wallet?.testPurchasedBalance || 0), testCreatorEarningsUsd: Number(wallet?.testEarnedBalance || 0) / 10, balance: Number(wallet?.bonusBalance || 0) + Number(wallet?.purchasedBalance || 0), realSeedBalance: walletBalance, testBalance: Number(wallet?.testBalance || 0), realSeedEarnings: Number(realLedger?.earnings || 0), testEarnings: Number(testLedger?.earnings || 0), currency: wallet?.currency || "STARS", version: wallet?.version || 0, ledgerActivated: Boolean(wallet?.ledgerActivatedAt), ledgerActivatedAt: wallet?.ledgerActivatedAt || null, reconciliationStatus, ledgerBalance, ledgerEntries: Number(realLedger?.entries || 0) + Number(testLedger?.entries || 0), legacyProjection, legacyDifference: walletBalance - legacyProjection, legacyTransactions: legacy.slice(0, 20).map((item) => ({ id: item._id, amount: item.amount, type: item.type, status: item.status, description: item.description, createdAt: item.createdAt })) } };
   });
   return sendResponse(res, 200, "User Wallets fetched", { items });
 });
@@ -178,22 +180,7 @@ export const getPlatformRevenue = asyncHandler(async (_req, res) => {
   });
 });
 
-export const activateFanWallet = asyncHandler(async (req, res) => {
-  if (!env.enableAdminStarCredits) throw new ApiError(403, "Admin Coins credits are disabled", "ADMIN_CREDITS_DISABLED");
-  const target = await User.findById(objectId(req.params.userId)).select("_id role status");
-  if (!target || !["fan", "creator"].includes(target.role)) throw new ApiError(404, "Fan or creator not found", "USER_NOT_FOUND");
-  const openingBalance = Number(req.body.openingBalance);
-  if (!Number.isSafeInteger(openingBalance) || openingBalance < 0) throw new ApiError(400, "Opening balance must be a non-negative integer", "INVALID_OPENING_BALANCE");
-  const reason = requiredReason(req.body.reason);
-  const key = idempotencyKey(req.body.idempotencyKey);
-  const result = await executeFinancialCommand({ user: req.user._id, commandType: "ACTIVATE_WALLET", idempotencyKey: key, requestFingerprint: fingerprint({ target: String(target._id), openingBalance, reason }) }, async (session, command) => {
-    const activated = await activateWalletLedger({ user: target._id, openingBalance, reason, admin: req.user._id, command, idempotencyKey: key }, session);
-    return { resultReference: activated.entry?._id || activated.wallet._id, wallet: safeWallet(activated.wallet), activation: { openingBalance, previousBalance: activated.previous.balance, previousCurrency: activated.previous.currency, activatedAt: activated.wallet.ledgerActivatedAt } };
-  });
-  await financialAudit(req, "WALLET_LEDGER_ACTIVATED", target._id, reason, { openingBalance, resultReference: result.resultReference });
-  return sendResponse(res, 200, "Wallet ledger activated", result);
-});
-
+export const activateFanWallet = asyncHandler(async () => { throw new ApiError(410, "Opening balances require a reviewed migration; manual wallet resets are disabled", "MANUAL_ACTIVATION_DISABLED"); });
 export const refundWorldEntitlement = asyncHandler(async (req, res) => { const result = await refundWorld({ admin: req.user, entitlementId: objectId(req.params.id), key: req.body.idempotencyKey, reason: req.body.reason }); await financialAudit(req, "REFUND_WORLD", req.params.id, req.body.reason, { resultReference: result.resultReference }); return sendResponse(res, 200, "World purchase refunded", result); });
 export const refundPremiumMembership = asyncHandler(async (req, res) => { const result = await refundPremium({ admin: req.user, membershipId: objectId(req.params.id), key: req.body.idempotencyKey, reason: req.body.reason }); await financialAudit(req, "REFUND_PREMIUM", req.params.id, req.body.reason, { resultReference: result.resultReference }); return sendResponse(res, 200, "Premium period refunded", result); });
 

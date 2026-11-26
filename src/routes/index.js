@@ -1,3 +1,4 @@
+import monitoringRoutes from "./monitoringRoutes.js";
 import businessRoutes from "./businessRoutes.js";
 import adminBusinessRoutes from "./adminBusinessRoutes.js";
 import presenceRoutes from "./presenceRoutes.js";
@@ -71,6 +72,7 @@ router.use("/premium-worlds",premiumWorldRoutes);
 router.use("/premium-memberships",membershipRoutes);
 router.use("/", publicProfileRoutes);
 router.use("/creator/verification", creatorVerificationRoutes);
+router.use("/monitoring", monitoringRoutes);
 router.use("/creator/verified-status", verifiedCreatorRoutes);
 router.use("/creator", creatorRoutes);
 router.use("/content", contentRoutes);
