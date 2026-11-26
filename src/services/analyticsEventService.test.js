@@ -13,7 +13,7 @@ test("retentionPercent calculates cohort return percentage only for cohort users
   assert.equal(analyticsEventServiceTestUtils.retentionPercent([], ["u1"]), null);
 });
 
-test("funnelRates uses impressions as the rate denominator", () => {
+test("funnelRates uses qualified views for engagement and conversion rates", () => {
   assert.deepEqual(analyticsEventServiceTestUtils.funnelRates({
     comments: 5,
     follows: 2,
@@ -32,10 +32,33 @@ test("funnelRates uses impressions as the rate denominator", () => {
     subscriptions: 1,
     support: 1,
     viewRate: 25,
-    engagementRate: 20,
-    saveRate: 3,
+    engagementRate: 80,
+    saveRate: 12,
     followConversion: 8,
     subscriptionConversion: 8,
+    unmatchedViews: 0,
+  });
+});
+
+test("funnelRates never reports more views than impressions and exposes unmatched events", () => {
+  assert.deepEqual(analyticsEventServiceTestUtils.funnelRates({
+    impressions: 10,
+    views: 521,
+    reactions: 2,
+    comments: 1,
+  }), {
+    impressions: 10,
+    views: 10,
+    engagements: 3,
+    follows: 0,
+    subscriptions: 0,
+    support: 0,
+    viewRate: 100,
+    engagementRate: 30,
+    saveRate: 0,
+    followConversion: 0,
+    subscriptionConversion: 0,
+    unmatchedViews: 511,
   });
 });
 

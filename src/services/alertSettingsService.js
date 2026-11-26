@@ -43,10 +43,19 @@ export async function saveAlertSettings(input, adminId) {
   await PlatformSetting.findOneAndUpdate({ key: KEY }, { $set: { value: next, updatedBy: adminId } }, { upsert: true });
   return alertSettings();
 }
+export function telegramButtonUrl(value) {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase();
+    if (!['http:', 'https:'].includes(url.protocol) || hostname === 'localhost' || hostname === '::1' || /^127\./.test(hostname)) return '';
+    return url.toString();
+  } catch { return ''; }
+}
 export async function sendTelegram({ buttonText = "", buttonUrl = "", chatId, text }) {
   const settings = await alertSettings({ secret: true });
   if (!settings.enabled || !settings.botToken || !chatId) throw new ApiError(503, "Telegram alerts are not fully configured");
-  const replyMarkup = buttonUrl && /^https?:\/\//i.test(buttonUrl) ? { inline_keyboard: [[{ text: buttonText || "Open", url: buttonUrl }]] } : undefined;
+  const safeButtonUrl = telegramButtonUrl(buttonUrl);
+  const replyMarkup = safeButtonUrl ? { inline_keyboard: [[{ text: buttonText || "Open", url: safeButtonUrl }]] } : undefined;
   const response = await fetch(`https://api.telegram.org/bot${settings.botToken}/sendMessage`, { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(10000), body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) }) });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || !payload.ok) throw new Error(payload.description || `Telegram rejected alert (${response.status})`);

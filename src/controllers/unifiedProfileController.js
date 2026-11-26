@@ -41,6 +41,7 @@ import { buildProfileStatusFromPayload, serializeProfileStatus } from "../servic
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
+import { normalizeReportReason } from "../constants/reportConstants.js";
 import { normalizeUsername } from "../validators/profileValidator.js";
 import { serializePost } from "./postController.js";
 import { engagementForWallPost, engagementForWallShare, serializeWallPost } from "./wallController.js";
@@ -399,15 +400,13 @@ export const toggleProfileSeeSignal = asyncHandler(async (req, res) => {
   });
 });
 
-const PROFILE_REPORT_REASONS = new Set(["SPAM", "FALSE_INFORMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "OTHER"]);
-
 export const reportUnifiedProfile = asyncHandler(async (req, res) => {
   const username = normalizeUsername(req.params.username);
   const reportedUser = await User.findOne({ username }).select("name username avatar role");
   if (!reportedUser) throw new ApiError(404, "Profile not found");
   if (String(reportedUser._id) === String(req.user._id)) throw new ApiError(400, "You cannot report your own profile");
-  const reason = String(req.body.reason || "").trim().toUpperCase().replaceAll(/[^A-Z0-9]+/g, "_");
-  if (!PROFILE_REPORT_REASONS.has(reason)) throw new ApiError(400, "Select a valid report reason");
+  const reason = normalizeReportReason(req.body.reason, "");
+  if (!reason) throw new ApiError(400, "Select a valid report reason");
   const details = String(req.body.details || "").trim().slice(0, 1000);
   try {
     const report = await MessageReport.create({

@@ -18,10 +18,11 @@ import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { effectiveAdminRole } from "../middleware/adminPermissionMiddleware.js";
+import { CURRENT_ACCOUNT_FILTER } from "../constants/currentAccountScope.js";
 
 export const getAdminDashboard = asyncHandler(async (_req, res) => {
-  const platformUserIds = await User.distinct("_id");
-  const platformUserFilter = { _id: { $in: platformUserIds } };
+  const platformUserIds = await User.distinct("_id", CURRENT_ACCOUNT_FILTER);
+  const platformUserFilter = { ...CURRENT_ACCOUNT_FILTER, _id: { $in: platformUserIds } };
   const creatorFilter = { $in: platformUserIds };
   const now = new Date();
   const [totalUsers, fans, creators, admins, activeUsers, pendingCreators, legacyPublished, publicationsPublished, feedPostsPublished, wallPostsPublished, storiesPublished, legacyDrafts, publicationDrafts, feedPostDrafts, legacySubscriptions, premiumMemberships, accountTypeRows] =
@@ -42,7 +43,7 @@ export const getAdminDashboard = asyncHandler(async (_req, res) => {
       FeedPost.countDocuments({ author: creatorFilter, status: "draft", deletedAt: null }),
       Subscription.countDocuments({ fan: creatorFilter, status: "active", $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }] }),
       PremiumMembership.countDocuments({ user: creatorFilter, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: now } }),
-      User.aggregate([{ $group: { _id: { $ifNull: ["$accountType", "SEED"] }, count: { $sum: 1 } } }]),
+      User.aggregate([{ $match: CURRENT_ACCOUNT_FILTER }, { $group: { _id: { $ifNull: ["$accountType", "SEED"] }, count: { $sum: 1 } } }]),
     ]);
 
   const contentBreakdown = { legacy: legacyPublished, publications: publicationsPublished, wall: feedPostsPublished + wallPostsPublished, stories: storiesPublished };
@@ -64,7 +65,7 @@ export const getAdminDashboard = asyncHandler(async (_req, res) => {
 });
 
 export const listUsers = asyncHandler(async (req, res) => {
-  const filter = {};
+  const filter = { ...CURRENT_ACCOUNT_FILTER };
   if (effectiveAdminRole(req.user) !== "MAIN_ADMIN") filter.role = { $ne: "admin" };
   if (req.query.role === "creator") {
     filter.role = { $in: ["fan", "creator"] };

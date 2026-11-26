@@ -1,23 +1,8 @@
 import mongoose from "mongoose";
 import PlatformSetting from "./PlatformSetting.js";
+import { REPORT_REASONS, URGENT_REPORT_REASONS } from "../constants/reportConstants.js";
 
-export const PUBLICATION_REPORT_REASONS = [
-  "SPAM",
-  "FALSE_INFORMATION",
-  "DEFAMATION",
-  "HARASSMENT",
-  "HATE",
-  "NUDITY",
-  "SEXUAL_CONTENT",
-  "VIOLENCE",
-  "SELF_HARM",
-  "ILLEGAL_CONTENT",
-  "COPYRIGHT",
-  "SCAM",
-  "IMPERSONATION",
-  "CHILD_SAFETY",
-  "OTHER",
-];
+export const PUBLICATION_REPORT_REASONS = REPORT_REASONS;
 
 const publicationReportSchema = new mongoose.Schema(
   {
@@ -52,7 +37,7 @@ publicationReportSchema.index({ status: 1, createdAt: -1 });
 publicationReportSchema.index({ creator: 1, status: 1, createdAt: -1 });
 publicationReportSchema.pre("validate", async function applySla() {
   if (!this.isNew) return;
-  const urgent = ["CHILD_SAFETY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM"].includes(this.reason);
+  const urgent = URGENT_REPORT_REASONS.has(this.reason);
   const settings = await PlatformSetting.findOne({ key: "moderation-policy" }).select("value").lean();
   const urgentHours = Math.min(24, Math.max(1, Number(settings?.value?.urgentHours) || 4));
   const standardHours = Math.min(168, Math.max(1, Number(settings?.value?.standardHours) || 24));
@@ -69,7 +54,7 @@ publicationReportSchema.post("save", async function autoHideUrgent(doc) {
 });
 publicationReportSchema.post("save", function alertModerators(doc) {
   if (!doc.$locals.wasNew) return;
-  void import("../services/moderationAlertService.js").then(({ processModerationAlerts }) => processModerationAlerts(new Date())).catch((error) => console.error("Immediate moderation alert failed", error));
+  void import("../services/moderationAlertService.js").then(({ processNewModerationAlert }) => processNewModerationAlert(doc.toObject(), "PublicationReport")).catch((error) => console.error("Immediate moderation alert failed", error));
 });
 
 export default mongoose.model("PublicationReport", publicationReportSchema);

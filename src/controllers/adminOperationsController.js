@@ -28,8 +28,9 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { effectiveAdminRole } from "../middleware/adminPermissionMiddleware.js";
 import { alertSettings, saveAlertSettings, sendTelegram } from "../services/alertSettingsService.js";
+import { getModerationMetrics, normalizeModerationReport, URGENT_REPORT_REASONS } from "../services/moderationMetricsService.js";
 
-const URGENT = new Set(["UNSAFE_MEETUP", "CHILD_SAFETY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM"]);
+const URGENT = URGENT_REPORT_REASONS;
 const clean = (value, max = 2000) => String(value || "").trim().slice(0, max);
 const validId = (id, label = "ID") => { if (!mongoose.isValidObjectId(id)) throw new ApiError(400, `Invalid ${label}`); return id; };
 const defaultPolicy = {
@@ -47,14 +48,7 @@ async function policy() {
 async function audit(req, action, targetType, targetId, reason, before = null, after = null, metadata = {}) {
   return AdminAuditEvent.create({ actor: req.user._id, actorRole: effectiveAdminRole(req.user), action, targetType, targetId: String(targetId), reason, before, after, metadata });
 }
-function normalizedReport(row, model) {
-  const reason = row.reason || "OTHER";
-  const urgent = row.priority === "URGENT" || URGENT.has(reason);
-  const created = new Date(row.createdAt);
-  const dueAt = reason === "UNSAFE_MEETUP" ? new Date(Math.min(new Date(row.dueAt || Infinity).getTime() || Infinity, created.getTime() + 4 * 3600000)) : row.dueAt || new Date(created.getTime() + (urgent ? 4 : 24) * 3600000);
-  const author = model === "MessageReport" ? row.reportedUser : row.creator;
-  return { ...row, id: row._id, model, author, priority: urgent ? "URGENT" : "STANDARD", priorityRank: urgent ? 2 : 1, dueAt, overdue: !["RESOLVED", "CLOSED"].includes(row.status) && new Date(dueAt) < new Date() };
-}
+const normalizedReport = normalizeModerationReport;
 function reportTargetKey(row, model) {
   if (model === "PublicationReport") return `publication:${row.publication}`;
   for (const field of ["message", "groupMessage", "commentId", "feedPost", "profileMedia", "story", "chapterId", "directAccessWindow", "publication"]) if (row[field]) return `${row.scope}:${row[field]}`;
@@ -68,10 +62,13 @@ function siblingFilter(report, model) {
 
 export const listUnifiedReports = asyncHandler(async (req, res) => {
   const status = clean(req.query.status, 30).toUpperCase();
-  const match = status && ["RECEIVED", "REVIEWING", "RESOLVED", "CLOSED"].includes(status) ? { status } : {};
-  const [messages, publications] = await Promise.all([
+  const match = status && ["RECEIVED", "REVIEWING", "RESOLVED", "CLOSED"].includes(status)
+    ? { status }
+    : { status: { $in: ["RECEIVED", "REVIEWING"] } };
+  const [messages, publications, metrics] = await Promise.all([
     MessageReport.find(match).select("+snapshot").populate("reporter", "name username email avatar").populate("reportedUser", "name username email avatar status").populate("reviewedBy", "name username").sort({ createdAt: -1 }).limit(500).lean(),
     PublicationReport.find(match).populate("reporter", "name username email avatar").populate("creator", "name username email avatar status").populate("reviewedBy", "name username").sort({ createdAt: -1 }).limit(500).lean(),
+    getModerationMetrics(new Date()),
   ]);
   const rawItems = [...messages.map((row) => normalizedReport(row, "MessageReport")), ...publications.map((row) => normalizedReport(row, "PublicationReport"))];
   const reportCounts = rawItems.reduce((map, item) => map.set(reportTargetKey(item, item.model), (map.get(reportTargetKey(item, item.model)) || 0) + 1), new Map());
@@ -81,8 +78,7 @@ export const listUnifiedReports = asyncHandler(async (req, res) => {
     .filter((item) => req.query.dueSoon !== "true" || (!item.overdue && new Date(item.dueAt) - new Date() <= 4 * 3600000))
     .sort((a, b) => b.priorityRank - a.priorityRank || new Date(a.createdAt) - new Date(b.createdAt));
   const page = Math.max(1, Number(req.query.page) || 1); const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 40));
-  const open = items.filter((item) => !["RESOLVED", "CLOSED"].includes(item.status));
-  return sendResponse(res, 200, "Unified report queue fetched", { items: items.slice((page - 1) * limit, page * limit), summary: { total: items.length, open: open.length, urgent: open.filter((item) => item.priority === "URGENT").length, overdue: open.filter((item) => item.overdue).length }, pagination: { page, limit, total: items.length, pages: Math.max(1, Math.ceil(items.length / limit)) } });
+  return sendResponse(res, 200, "Unified report queue fetched", { items: items.slice((page - 1) * limit, page * limit), summary: { total: items.length, ...metrics.summary }, pagination: { page, limit, total: items.length, pages: Math.max(1, Math.ceil(items.length / limit)) } });
 });
 
 async function findReport(model, id) {
@@ -293,20 +289,13 @@ export const releasePayouts = asyncHandler(async (req, res) => { const reason = 
 
 export const getOperationsDashboard = asyncHandler(async (_req, res) => {
   const now = new Date();
-  const platformUserIds = await User.distinct("_id");
-  const [messages, publications, appeals] = await Promise.all([
-    MessageReport.find({ reportedUser: { $in: platformUserIds }, status: { $in: ["RECEIVED", "REVIEWING"] } }).select("reason priority dueAt createdAt reportedUser reviewingAt reviewedBy").lean(),
-    PublicationReport.find({ creator: { $in: platformUserIds }, status: { $in: ["RECEIVED", "REVIEWING"] } }).select("reason priority dueAt createdAt creator reviewingAt reviewedBy").lean(),
+  const platformUserIds = await User.distinct("_id", { deletionRequestedAt: null });
+  const [metrics, appeals, failedAlerts] = await Promise.all([
+    getModerationMetrics(now),
     ModerationAppeal.find({ appellant: { $in: platformUserIds } }).select("status createdAt reviewedAt").lean(),
+    ModerationAlert.countDocuments({ status: "FAILED" }),
   ]);
-  const all = [...messages.map((r) => normalizedReport(r, "MessageReport")), ...publications.map((r) => normalizedReport(r, "PublicationReport"))];
-  const [resolvedMessages, resolvedPublications, failedAlerts] = await Promise.all([MessageReport.find({ reportedUser: { $in: platformUserIds }, resolvedAt: { $ne: null } }).select("createdAt resolvedAt priority reason").limit(5000).lean(), PublicationReport.find({ creator: { $in: platformUserIds }, resolvedAt: { $ne: null } }).select("createdAt resolvedAt priority reason").limit(5000).lean(), ModerationAlert.countDocuments({ status: "FAILED" })]);
-  const times = [...resolvedMessages, ...resolvedPublications].map((r) => new Date(r.resolvedAt) - new Date(r.createdAt)).sort((a, b) => a - b);
-  const medianMs = times.length ? times[Math.floor(times.length / 2)] : null;
-  const within24 = times.length ? Math.round(times.filter((x) => x <= 86400000).length / times.length * 100) : null;
-  const resolved = [...resolvedMessages.map((r) => normalizedReport(r, "MessageReport")), ...resolvedPublications.map((r) => normalizedReport(r, "PublicationReport"))];
-  const urgentTimes = resolved.filter((r) => r.priority === "URGENT").map((r) => new Date(r.resolvedAt) - new Date(r.createdAt));
-  const standardTimes = resolved.filter((r) => r.priority !== "URGENT").map((r) => new Date(r.resolvedAt) - new Date(r.createdAt));
+  const all = metrics.openRows;
   const userCounts = new Map();
   for (const row of all) { const id = String(row.author?._id || row.author || ""); if (id) userCounts.set(id, (userCounts.get(id) || 0) + 1); }
   const leaders = [...userCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
@@ -316,7 +305,7 @@ export const getOperationsDashboard = asyncHandler(async (_req, res) => {
   return sendResponse(res, 200, "Operations dashboard fetched", {
     scope: "ALL_CURRENT_ACCOUNTS",
     generatedAt: now,
-    reports: { open: all.length, urgent: all.filter((x) => x.priority === "URGENT").length, overdue: all.filter((x) => new Date(x.dueAt) < now).length, dueSoon: all.filter((x) => new Date(x.dueAt) >= now && new Date(x.dueAt) - now <= 4 * 3600000).length, oldestOpenAt: all.length ? all.reduce((oldest, row) => new Date(row.createdAt) < new Date(oldest) ? row.createdAt : oldest, all[0].createdAt) : null, unacknowledged: all.filter((x) => !x.reviewingAt).length, resolvedSampleSize: times.length, medianActionMinutes: medianMs == null ? null : Math.round(medianMs / 60000), within24Percent: within24, urgentWithin4Percent: urgentTimes.length ? Math.round(urgentTimes.filter((x) => x <= 4 * 3600000).length / urgentTimes.length * 100) : null, standardWithin24Percent: standardTimes.length ? Math.round(standardTimes.filter((x) => x <= 24 * 3600000).length / standardTimes.length * 100) : null, failedAlerts },
+    reports: { ...metrics.summary, failedAlerts },
     appeals: { total: appeals.length, open: appeals.filter((x) => ["PENDING", "REVIEWING"].includes(x.status)).length, reversed: appeals.filter((x) => x.status === "REVERSED").length },
     topReportedUsers,
   });

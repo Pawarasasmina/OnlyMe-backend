@@ -2,6 +2,7 @@ import { normalizeMeetupPolicy, refreshUnsafeAccountRestriction } from "../servi
 import mongoose from "mongoose";
 import PlatformSetting from "./PlatformSetting.js";
 import { freezeMessageEvidence, isMessageEvidenceScope } from "../services/messageEvidenceService.js";
+import { REPORT_REASONS, URGENT_REPORT_REASONS } from "../constants/reportConstants.js";
 
 const messageReportSchema = new mongoose.Schema({
   reporter: { type: mongoose.Schema.Types.ObjectId, ref: "User", required() { const source = this.source || this.getUpdate?.()?.$setOnInsert?.source || this.getUpdate?.()?.$set?.source; return !["UPLOAD_SCAN", "AUTOMATED_DUPLICATE"].includes(source); }, default: null, index: true },
@@ -20,7 +21,7 @@ const messageReportSchema = new mongoose.Schema({
   directAccessWindow: { type: mongoose.Schema.Types.ObjectId, ref: "DAWindow", default: null },
   reason: {
     type: String,
-    enum: ["UNSAFE_MEETUP", "SPAM", "FALSE_INFORMATION", "DEFAMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "ILLEGAL_CONTENT", "COPYRIGHT", "IMPERSONATION", "CHILD_SAFETY", "SCAM", "OTHER"],
+    enum: REPORT_REASONS,
     required: true,
   },
   details: { type: String, trim: true, maxlength: 1000, default: "" },
@@ -60,7 +61,7 @@ messageReportSchema.index({ status: 1, priorityRank: -1, dueAt: 1, createdAt: 1 
 messageReportSchema.pre("validate", async function applySla() {
   if (!this.isNew) return;
   this.$locals.wasNew = true;
-  const urgent = ["UNSAFE_MEETUP", "CHILD_SAFETY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM"].includes(this.reason);
+  const urgent = URGENT_REPORT_REASONS.has(this.reason);
   const settings = await PlatformSetting.findOne({ key: "moderation-policy" }).select("value").lean();
   const urgentHours = Math.min(24, Math.max(1, Number(settings?.value?.urgentHours) || 4));
   const standardHours = Math.min(168, Math.max(1, Number(settings?.value?.standardHours) || 24));
@@ -89,7 +90,7 @@ messageReportSchema.post("save", async function autoHideUrgent(doc) {
 });
 messageReportSchema.post("save", function alertModerators(doc) {
   if (!doc.$locals.wasNew) return;
-  void import("../services/moderationAlertService.js").then(({ processModerationAlerts }) => processModerationAlerts(new Date())).catch((error) => console.error("Immediate moderation alert failed", error));
+  void import("../services/moderationAlertService.js").then(({ processNewModerationAlert }) => processNewModerationAlert(doc.toObject(), "MessageReport")).catch((error) => console.error("Immediate moderation alert failed", error));
 });
 messageReportSchema.post("save", async function updateWallReportState(doc) {
   if (doc.scope !== "FEED_POST") return;

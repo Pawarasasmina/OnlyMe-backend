@@ -28,7 +28,7 @@ import { cancelCreatorAnnouncement, createCreatorAnnouncement, getCreatorAnnounc
 
 const router = Router();
 const messageReportScope = (req, _res, next) => { req.reportScopes = ["MESSAGE", "GROUP_MESSAGE", "CONVERSATION"]; next(); };
-const userReportScope = (req, _res, next) => { req.reportScopes = ["PROFILE"]; next(); };
+const userReportScope = (req, _res, next) => { req.reportScopes = ["PROFILE", "PROFILE_MEDIA"]; next(); };
 const postReportScope = (req, _res, next) => { req.reportScopes = ["FEED_POST", "COMMENT", "SEEN", "CHAPTER", "WORLD", "STORY", "GIFT", "DIRECT_ACCESS"]; next(); };
 
 router.use(protect, authorize("admin"));

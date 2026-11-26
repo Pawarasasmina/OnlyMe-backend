@@ -19,7 +19,7 @@ import WallPost from "../models/WallPost.js";
 import WallShareEngagement from "../models/WallShareEngagement.js";
 import {
   contentFunnelAnalytics,
-  impressionCountsByContent,
+  trackedFunnelCountsByContent,
   profileAnalytics,
   retentionAnalytics,
   searchAnalytics,
@@ -27,6 +27,7 @@ import {
   TRACKING_START_DATE,
 } from "./analyticsEventService.js";
 import ApiError from "../utils/ApiError.js";
+import { CURRENT_ACCOUNT_FILTER } from "../constants/currentAccountScope.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 const SUPPORTED_CONTENT_TYPES = ["feed_post", "content", "seen", "world", "premium_world", "story", "wall_post"];
@@ -36,7 +37,6 @@ const PDF_COLORS = ["#f97316", "#2563eb", "#10b981", "#8b5cf6", "#f59e0b", "#647
 const toNumber = (value) => Number(value || 0);
 const idString = (value) => String(value?._id || value || "");
 const pct = (current, previous) => previous > 0 ? Number((((current - previous) / previous) * 100).toFixed(1)) : null;
-const percent = (numerator, denominator) => denominator > 0 ? Number(((numerator / denominator) * 100).toFixed(2)) : null;
 const dateMatch = (field, startDate, endDate) => ({ [field]: { $gte: startDate, $lte: endDate } });
 const normalizeStatus = (status) => String(status || "").toLowerCase();
 const formatReportValue = (value) => value == null ? "N/A" : Number.isFinite(Number(value)) ? Number(value).toLocaleString("en-US") : String(value);
@@ -62,7 +62,7 @@ async function internalAccountTypeBreakdown(startDate, endDate) {
   ]);
   for (const row of follows) addAccountTypeCount(metrics.followers, row._id, row.count);
   for (const row of messages) addAccountTypeCount(metrics.messages, row._id, row.count);
-  const userRows = await User.aggregate([{ $match: { deletionRequestedAt: null } }, { $group: { _id: { $ifNull: ["$accountType", "SEED"] }, count: { $sum: 1 } } }]);
+  const userRows = await User.aggregate([{ $match: CURRENT_ACCOUNT_FILTER }, { $group: { _id: { $ifNull: ["$accountType", "SEED"] }, count: { $sum: 1 } } }]);
   const users = accountTypeMetric();
   for (const row of userRows) addAccountTypeCount(users, row._id, row.count);
   return { users, ...metrics };
@@ -252,33 +252,24 @@ async function engagementTrend(range, buckets) {
 }
 
 async function topContent({ page, limit, sort }) {
-  const impressionMap = await impressionCountsByContent();
+  const funnelMap = await trackedFunnelCountsByContent();
   const feedRows = await FeedPost.find({ deletedAt: null }).populate("author", "name username avatar").sort({ viewCount: -1, createdAt: -1 }).limit(120).lean();
   const publications = await Publication.find({ status: { $in: ["PUBLISHED", "ARCHIVED", "REMOVED"] } }).populate("creator", "name username avatar").sort({ publishedAt: -1, createdAt: -1 }).limit(120).lean();
-  const publicationEngagement = await SeenEngagement.aggregate([{ $group: { _id: "$publication", reactions: { $sum: { $cond: [{ $eq: ["$type", "REACTION"] }, 1, 0] } }, comments: { $sum: { $cond: [{ $eq: ["$type", "COMMENT"] }, 1, 0] } }, saves: { $sum: { $cond: [{ $eq: ["$type", "SAVE"] }, 1, 0] } }, views: { $sum: { $cond: [{ $eq: ["$type", "WALKED"] }, 1, 0] } } } }]);
-  const seenById = new Map(publicationEngagement.map((row) => [idString(row._id), row]));
   const rows = [
     ...feedRows.map((post) => {
-      const impressions = impressionMap.get(`feed_post:${idString(post._id)}`) || 0;
-      const views = toNumber(post.viewCount);
-      const reactions = post.reactions?.length || 0;
-      const comments = toNumber(post.commentCount);
-      const saves = toNumber(post.saveCount);
-      const shares = toNumber(post.shareCount);
+      const tracked = funnelMap.get(`feed_post:${idString(post._id)}`) || { impressions: 0, views: 0, unmatchedViews: 0, reactions: 0, comments: 0, saves: 0, shares: 0 };
+      const impressions = tracked.impressions; const views = tracked.views;
+      const { reactions, comments, saves, shares } = tracked;
       const engagements = reactions + comments + saves + shares;
-      return { id: idString(post._id), title: post.text?.slice(0, 80) || "Feed post", type: "Feed post", creator: post.author && { name: post.author.name, username: post.author.username }, createdAt: post.createdAt, impressions, views, viewRate: impressions ? Number(((views / impressions) * 100).toFixed(2)) : null, reactions, comments, saves, shares, engagements, engagementRate: impressions ? Number(((engagements / impressions) * 100).toFixed(2)) : null, engagement: views + engagements, status: post.status, route: `/posts/${post._id}` };
+      return { id: idString(post._id), title: post.text?.slice(0, 80) || "Feed post", type: "Feed post", creator: post.author && { name: post.author.name, username: post.author.username }, createdAt: post.createdAt, impressions, views, unmatchedViews: tracked.unmatchedViews, viewRate: impressions ? Number(((views / impressions) * 100).toFixed(2)) : null, reactions, comments, saves, shares, engagements, engagementRate: views ? Number(((engagements / views) * 100).toFixed(2)) : null, engagement: engagements, status: post.status, route: `/posts/${post._id}` };
     }),
     ...publications.map((item) => {
-      const e = seenById.get(idString(item._id)) || {};
       const entityType = item.kind === "SEEN" ? "seen" : "world";
-      const impressions = impressionMap.get(`${entityType}:${idString(item._id)}`) || impressionMap.get(`publication:${idString(item._id)}`) || 0;
-      const views = toNumber(e.views);
-      const reactions = toNumber(e.reactions);
-      const comments = toNumber(e.comments);
-      const saves = toNumber(e.saves);
-      const shares = 0;
+      const tracked = funnelMap.get(`${entityType}:${idString(item._id)}`) || funnelMap.get(`publication:${idString(item._id)}`) || { impressions: 0, views: 0, unmatchedViews: 0, reactions: 0, comments: 0, saves: 0, shares: 0 };
+      const impressions = tracked.impressions; const views = tracked.views;
+      const { reactions, comments, saves, shares } = tracked;
       const engagements = reactions + comments + saves + shares;
-      return { id: idString(item._id), title: item.title || item.kind, type: item.kind?.replaceAll("_", " "), creator: item.creator && { name: item.creator.name, username: item.creator.username }, createdAt: item.createdAt, impressions, views, viewRate: impressions ? Number(((views / impressions) * 100).toFixed(2)) : null, reactions, comments, saves, shares, engagements, engagementRate: impressions ? Number(((engagements / impressions) * 100).toFixed(2)) : null, engagement: views + engagements, status: item.status, route: `/admin/publication-moderation/${item._id}` };
+      return { id: idString(item._id), title: item.title || item.kind, type: item.kind?.replaceAll("_", " "), creator: item.creator && { name: item.creator.name, username: item.creator.username }, createdAt: item.createdAt, impressions, views, unmatchedViews: tracked.unmatchedViews, viewRate: impressions ? Number(((views / impressions) * 100).toFixed(2)) : null, reactions, comments, saves, shares, engagements, engagementRate: views ? Number(((engagements / views) * 100).toFixed(2)) : null, engagement: engagements, status: item.status, route: `/admin/publication-moderation/${item._id}` };
     }),
   ];
   const sortKey = ["impressions", "views", "viewRate", "reactions", "comments", "saves", "shares", "engagementRate", "engagement", "createdAt"].includes(sort) ? sort : "engagement";
@@ -350,7 +341,7 @@ export async function getAdminAnalytics(query = {}) {
     trend, top, creatorsTable, activeTable, moderationRows, moderationTrend, subscriptions, memberships, transactions, time,
     sessions, retention, profiles, search, funnel, accountTypeBreakdown, productEvents,
   ] = await Promise.all([
-    User.countDocuments({ deletionRequestedAt: null }),
+    User.countDocuments(CURRENT_ACCOUNT_FILTER),
     User.countDocuments({ role: "fan", deletionRequestedAt: null }),
     User.countDocuments({ role: { $in: ["fan", "creator"] }, creatorApprovalStatus: "approved", deletionRequestedAt: null }),
     User.countDocuments({ role: "admin", deletionRequestedAt: null }),
@@ -417,22 +408,7 @@ export async function getAdminAnalytics(query = {}) {
     trend: hydrateBuckets(buckets, moderationTrend, ["reports"]),
   };
 
-  const fallbackFunnelViews = Math.max(toNumber(funnel.views), toNumber(engagement.views));
-  const fallbackFunnelEngagements = Math.max(
-    toNumber(funnel.engagements),
-    toNumber(engagement.reactions) + toNumber(engagement.comments) + toNumber(engagement.saves) + toNumber(engagement.shares),
-  );
-  const fallbackFunnelFollows = Math.max(toNumber(funnel.follows), toNumber(engagement.follows));
-  const dashboardFunnel = {
-    ...funnel,
-    views: fallbackFunnelViews,
-    engagements: fallbackFunnelEngagements,
-    follows: fallbackFunnelFollows,
-    engagementRate: funnel.engagementRate ?? percent(fallbackFunnelEngagements, fallbackFunnelViews),
-    saveRate: funnel.saveRate ?? percent(engagement.saves, fallbackFunnelViews),
-    followConversion: funnel.followConversion ?? percent(fallbackFunnelFollows, fallbackFunnelViews),
-    subscriptionConversion: funnel.subscriptionConversion ?? percent(toNumber(funnel.subscriptions) + toNumber(funnel.support), fallbackFunnelViews),
-  };
+  const dashboardFunnel = funnel;
 
   return {
     range: { startDate: range.startDate, endDate: range.endDate, granularity: range.granularity },

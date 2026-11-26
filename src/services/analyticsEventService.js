@@ -339,19 +339,21 @@ export async function profileAnalytics(startDate, endDate) {
 }
 
 export function funnelRates({ comments = 0, follows = 0, impressions = 0, reactions = 0, saves = 0, shares = 0, subscriptions = 0, support = 0, views = 0 } = {}) {
+  const qualifiedViews = Math.min(Math.max(0, views), Math.max(0, impressions));
   const engagements = reactions + comments + saves + shares;
   return {
     impressions,
-    views,
+    views: qualifiedViews,
     engagements,
     follows,
     subscriptions,
     support,
-    viewRate: percent(views, impressions),
-    engagementRate: percent(engagements, impressions),
-    saveRate: percent(saves, impressions),
-    followConversion: percent(follows, views),
-    subscriptionConversion: percent(subscriptions + support, views),
+    viewRate: percent(qualifiedViews, impressions),
+    engagementRate: percent(engagements, qualifiedViews),
+    saveRate: percent(saves, qualifiedViews),
+    followConversion: percent(follows, qualifiedViews),
+    subscriptionConversion: percent(subscriptions + support, qualifiedViews),
+    unmatchedViews: Math.max(0, views - qualifiedViews),
   };
 }
 
@@ -413,6 +415,14 @@ export async function impressionCountsByContent() {
     { $group: { _id: { entityType: "$entityType", entityId: "$entityId" }, impressions: { $sum: 1 } } },
   ]);
   return new Map(rows.map((row) => [`${row._id.entityType}:${row._id.entityId}`, row.impressions]));
+}
+
+export async function trackedFunnelCountsByContent() {
+  const rows = await AnalyticsEvent.aggregate([
+    { $match: { eventType: { $in: ["CONTENT_IMPRESSION", "CONTENT_VIEW", "CONTENT_OPENED", "REACTION", "COMMENT", "SAVE", "SHARE"] } } },
+    { $group: { _id: { entityType: "$entityType", entityId: "$entityId" }, impressions: { $sum: { $cond: [{ $eq: ["$eventType", "CONTENT_IMPRESSION"] }, 1, 0] } }, rawViews: { $sum: { $cond: [{ $in: ["$eventType", ["CONTENT_VIEW", "CONTENT_OPENED"]] }, 1, 0] } }, reactions: { $sum: { $cond: [{ $eq: ["$eventType", "REACTION"] }, 1, 0] } }, comments: { $sum: { $cond: [{ $eq: ["$eventType", "COMMENT"] }, 1, 0] } }, saves: { $sum: { $cond: [{ $eq: ["$eventType", "SAVE"] }, 1, 0] } }, shares: { $sum: { $cond: [{ $eq: ["$eventType", "SHARE"] }, 1, 0] } } } },
+  ]);
+  return new Map(rows.map((row) => { const impressions = Number(row.impressions || 0); const rawViews = Number(row.rawViews || 0); return [`${row._id.entityType}:${row._id.entityId}`, { impressions, views: Math.min(impressions, rawViews), unmatchedViews: Math.max(0, rawViews - impressions), reactions: Number(row.reactions || 0), comments: Number(row.comments || 0), saves: Number(row.saves || 0), shares: Number(row.shares || 0) }]; }));
 }
 
 export const analyticsEventServiceTestUtils = {

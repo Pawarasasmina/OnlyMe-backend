@@ -10,12 +10,26 @@ import { alertSettings, sendTelegram } from "./alertSettingsService.js";
 
 const OPEN = ["RECEIVED", "REVIEWING"];
 const RETRIES_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000];
-const reportUrl = (model, id) => `${env.clientUrl.replace(/\/$/, "")}/admin/safety?report=${model}:${id}`;
+export const reportAdminPath = (report, model = report?.__model) => {
+  const id = String(report?._id || "");
+  if (model === "MessageReport") {
+    if (["MESSAGE", "GROUP_MESSAGE", "CONVERSATION"].includes(report?.scope)) return `/admin/message-reports/${id}`;
+    if (["PROFILE", "PROFILE_MEDIA"].includes(report?.scope)) return `/admin/user-reports/${id}`;
+    return `/admin/post-reports/${id}`;
+  }
+  return `/admin/safety?report=${encodeURIComponent(`${model}:${id}`)}`;
+};
+export const reportTypeLabel = (report, model = report?.__model) => {
+  if (model === "PublicationReport") return String(report?.kind || "PUBLICATION").replaceAll("_", " ");
+  const labels = { MESSAGE: "MESSAGE", GROUP_MESSAGE: "GROUP MESSAGE", CONVERSATION: "CONVERSATION", PROFILE: "USER PROFILE", PROFILE_MEDIA: "PROFILE MEDIA", FEED_POST: "POST", COMMENT: "COMMENT", SEEN: "SEEN", CHAPTER: "SEEN CHAPTER", WORLD: "WORLD", STORY: "STORY", GIFT: "GIFT", DIRECT_ACCESS: "DIRECT ACCESS" };
+  return labels[report?.scope] || String(report?.scope || "REPORT").replaceAll("_", " ");
+};
+const reportUrl = (report, model = report?.__model) => `${env.clientUrl.replace(/\/$/, "")}${reportAdminPath(report, model)}`;
 const titleFor = (report, stage) => `${stage === "NEW" ? "New" : stage === "UNCLAIMED_30M" ? "Unclaimed" : stage === "DUE_SOON" ? "SLA warning" : "OVERDUE"} ${report.priority === "URGENT" ? "urgent " : ""}safety report`;
 const timeLeft = (dueAt) => { const ms = new Date(dueAt) - new Date(); if (ms <= 0) return `${Math.max(1, Math.round(Math.abs(ms) / 3600000))}h overdue`; const minutes = Math.max(1, Math.ceil(ms / 60000)); return minutes < 60 ? `${minutes}m left` : `${Math.ceil(minutes / 60)}h left`; };
 const textFor = (report, stage) => {
   const heading = stage === "UNCLAIMED_30M" ? "🚨 URGENT REPORT NOT PICKED UP" : stage === "OVERDUE" || stage === "OVERDUE_REPEAT" ? "⛔ OVERDUE REPORT" : stage === "DUE_SOON" ? "⚠️ REPORT SLA WARNING" : report.priority === "URGENT" ? "🔴 URGENT REPORT" : "🟠 STANDARD REPORT";
-  return [heading, `Report ID: ${report._id}`, `Category: ${String(report.reason || "OTHER").replaceAll("_", " ")}`, `Priority: ${report.priority === "URGENT" ? "Urgent" : "Standard"}`, `Deadline: ${timeLeft(report.dueAt)}`, reportUrl(report.__model, report._id)].join("\n");
+  return [heading, `Report ID: ${report._id}`, `Report type: ${reportTypeLabel(report)}`, `Category: ${String(report.reason || "OTHER").replaceAll("_", " ")}`, `Priority: ${report.priority === "URGENT" ? "Urgent" : "Standard"}`, `Deadline: ${timeLeft(report.dueAt)}`, reportUrl(report)].join("\n");
 };
 
 async function moderators() {
@@ -66,36 +80,33 @@ async function queueReportRows(Model, reportModel, now) {
 }
 
 async function deliverTelegram(alert, report, message) {
-  return sendTelegram({ chatId: alert.recipientKey, text: message, buttonText: "Open report in admin", buttonUrl: reportUrl(alert.reportModel, alert.reportId) });
+  return sendTelegram({ chatId: alert.recipientKey, text: message, buttonText: "Open report in admin", buttonUrl: reportUrl(report, alert.reportModel) });
 }
 
 async function deliver(alert, io) {
   const Model = alert.reportModel === "MessageReport" ? MessageReport : PublicationReport;
   const report = await Model.findById(alert.reportId).select("reason scope kind priority dueAt createdAt status").lean();
   if (!report || !OPEN.includes(report.status)) return { status: "SKIPPED", providerId: "REPORT_CLOSED" };
-  const age = Date.now() - new Date(report.createdAt).getTime(); const overdueBy = Date.now() - new Date(report.dueAt).getTime();
-  if (alert.stage === "NEW" && age > 5 * 60 * 1000) return { status: "SKIPPED", providerId: "STALE_NEW_ALERT" };
+  const overdueBy = Date.now() - new Date(report.dueAt).getTime();
   if (alert.stage === "OVERDUE" && overdueBy >= 4 * 60 * 60 * 1000) return { status: "SKIPPED", providerId: "SUPERSEDED_OVERDUE_ALERT" };
   report.__model = alert.reportModel; const title = titleFor(report, alert.stage); const message = textFor(report, alert.stage);
   if (alert.channel === "IN_APP") {
     const key = `moderation-alert:${alert.reportModel}:${alert.reportId}:${alert.stage}:${alert.recipientKey}`;
-    await Notification.updateOne({ dedupeKey: key }, { $setOnInsert: { user: alert.recipientKey, type: "moderation_alert", title, message, severity: alert.stage.includes("OVERDUE") || report.priority === "URGENT" ? "critical" : "warning", priority: report.priority === "URGENT" ? 100 : 85, metadata: { reportModel: alert.reportModel, reportId: String(alert.reportId), url: `/admin/safety?report=${alert.reportModel}:${alert.reportId}` }, dedupeKey: key } }, { upsert: true });
+    await Notification.updateOne({ dedupeKey: key }, { $setOnInsert: { user: alert.recipientKey, type: "moderation_alert", title, message, severity: alert.stage.includes("OVERDUE") || report.priority === "URGENT" ? "critical" : "warning", priority: report.priority === "URGENT" ? 100 : 85, metadata: { reportModel: alert.reportModel, reportId: String(alert.reportId), url: reportAdminPath(report, alert.reportModel) }, dedupeKey: key } }, { upsert: true });
     io?.to(`user:${alert.recipientKey}`).emit("moderation:alert", { title, message, reportModel: alert.reportModel, reportId: String(alert.reportId), stage: alert.stage });
     return { status: "DELIVERED", providerId: key };
   }
   if (alert.channel === "EMAIL") {
-    const result = await sendEmail({ to: alert.recipientKey, subject: `[Safety] ${title}`, text: `${message}\n\nReview: ${reportUrl(alert.reportModel, alert.reportId)}`, idempotencyKey: `moderation-${alert._id}` });
+    const result = await sendEmail({ to: alert.recipientKey, subject: `[Safety] ${title}`, text: `${message}\n\nReview: ${reportUrl(report, alert.reportModel)}`, idempotencyKey: `moderation-${alert._id}` });
     return { status: result.delivered ? "DELIVERED" : "SKIPPED", providerId: result.id || result.reason || "" };
   }
   return { status: "DELIVERED", providerId: await deliverTelegram(alert, report, message) };
 }
 
-export async function processModerationAlerts(now = new Date(), io = null) {
-  await ModerationAlert.updateMany({ status: "SENDING", updatedAt: { $lt: new Date(now.getTime() - 5 * 60000) } }, { $set: { status: "FAILED", nextAttemptAt: now, error: "Delivery worker interrupted; retrying" } });
-  await Promise.all([queueReportRows(MessageReport, "MessageReport", now), queueReportRows(PublicationReport, "PublicationReport", now)]);
+async function deliverQueuedAlerts(now, io, filter = {}) {
   let processed = 0;
   for (; processed < 100; processed += 1) {
-    const alert = await ModerationAlert.findOneAndUpdate({ status: { $in: ["PENDING", "FAILED"] }, nextAttemptAt: { $lte: now }, attempts: { $lt: RETRIES_MS.length + 1 } }, { $set: { status: "SENDING" }, $inc: { attempts: 1 } }, { new: true, sort: { createdAt: 1 } });
+    const alert = await ModerationAlert.findOneAndUpdate({ ...filter, status: { $in: ["PENDING", "FAILED"] }, nextAttemptAt: { $lte: now }, attempts: { $lt: RETRIES_MS.length + 1 } }, { $set: { status: "SENDING" }, $inc: { attempts: 1 } }, { new: true, sort: { createdAt: 1 } });
     if (!alert) break;
     try {
       const result = await deliver(alert, io); alert.status = result.status; alert.providerId = result.providerId; alert.deliveredAt = result.status === "DELIVERED" ? new Date() : null; alert.error = "";
@@ -106,4 +117,15 @@ export async function processModerationAlerts(now = new Date(), io = null) {
     await alert.save();
   }
   return { processed };
+}
+
+export async function processNewModerationAlert(report, reportModel, io = null) {
+  await queueStage(report, reportModel, "NEW");
+  return deliverQueuedAlerts(new Date(), io, { reportModel, reportId: report._id, stage: "NEW" });
+}
+
+export async function processModerationAlerts(now = new Date(), io = null) {
+  await ModerationAlert.updateMany({ status: "SENDING", updatedAt: { $lt: new Date(now.getTime() - 5 * 60000) } }, { $set: { status: "FAILED", nextAttemptAt: now, error: "Delivery worker interrupted; retrying" } });
+  await Promise.all([queueReportRows(MessageReport, "MessageReport", now), queueReportRows(PublicationReport, "PublicationReport", now)]);
+  return deliverQueuedAlerts(now, io);
 }

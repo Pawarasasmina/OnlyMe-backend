@@ -33,6 +33,7 @@ import { attachEntityMetadata, validateEntityRefs } from "../services/contentEnt
 import { recordChecklistEvent } from "../services/onboardingService.js";
 import { recordAnalyticsEvent, readAnalyticsSessionId } from "../services/analyticsEventService.js";
 import { listSupportedTranslationLanguages } from "../services/translationService.js";
+import { normalizeReportReason } from "../constants/reportConstants.js";
 import { messageVoiceUrl, uploadMessageVoice } from "../services/messageVoiceStorageService.js";
 import { getVoiceLanguageName, normalizeVoiceLanguageCode, resolveSupportedVoiceLanguage } from "../constants/voiceTranslationLanguages.js";
 import { personalizeCandidates } from "../services/recommendationService.js";
@@ -970,9 +971,8 @@ export const hideFeedPost = asyncHandler(async (req, res) => {
 export const reportFeedPost = asyncHandler(async (req, res) => {
   const post = await findPublishedPost(req.params.id, req.user);
   if (String(post.author) === String(req.user._id)) throw new ApiError(400, "You cannot report your own post");
-  const reason = cleanString(req.body.reason || "OTHER", 80).toUpperCase().replaceAll(/[^A-Z0-9]+/g, "_");
-    const allowed = new Set(["UNSAFE_MEETUP", "SPAM", "FALSE_INFORMATION", "DEFAMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "IMPERSONATION", "CHILD_SAFETY", "OTHER"]);
-  if (!allowed.has(reason)) throw new ApiError(400, "Select a valid report reason");
+  const reason = normalizeReportReason(cleanString(req.body.reason || "OTHER", 80));
+  if (!reason) throw new ApiError(400, "Select a valid report reason");
   try {
     const report = await MessageReport.create({
       reporter: req.user._id,

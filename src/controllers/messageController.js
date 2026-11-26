@@ -875,6 +875,11 @@ export const consumeDisappearingMessage = asyncHandler(async (req, res) => {
   message.gift = undefined;
   message.sharedContent = undefined;
   await message.save();
+  await emitPrivateMessage(req.app.get("io"), message.sender, "message:disappearing-opened", {
+    messageId: String(message._id),
+    openedAt: message.openedAt,
+    expiresAt: message.expiresAt,
+  });
   return sendResponse(res, 200, "Disappearing message consumed", { messageId: String(message._id) });
 });
 
@@ -997,11 +1002,11 @@ export const forwardMessage = asyncHandler(async (req, res) => {
   return sendResponse(res, 201, "Message forwarded", { results });
 });
 
-const REPORT_REASONS = new Set(["SPAM", "HARASSMENT", "HATE", "DEFAMATION", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "SCAM", "COPYRIGHT", "IMPERSONATION", "CHILD_SAFETY", "OTHER"]);
+import { normalizeReportReason } from "../constants/reportConstants.js";
 function reportInput(req) {
-  const reason = String(req.body.reason || "").trim().toUpperCase();
+  const reason = normalizeReportReason(req.body.reason, "");
   const details = String(req.body.details || "").trim();
-  if (!REPORT_REASONS.has(reason)) throw new ApiError(400, "Select a valid report reason");
+  if (!reason) throw new ApiError(400, "Select a valid report reason");
   if (details.length > 1000) throw new ApiError(400, "Report details must be 1,000 characters or fewer");
   return { reason, details };
 }

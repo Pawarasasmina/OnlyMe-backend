@@ -14,6 +14,7 @@ import ProfileRelationship from "../models/ProfileRelationship.js";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
+import { normalizeReportReason } from "../constants/reportConstants.js";
 import { deleteGroupAvatar, uploadGroupAvatar } from "../services/groupAvatarStorageService.js";
 import { messageImageUrl, uploadMessageImage } from "../services/messageImageStorageService.js";
 import { messageVoiceUrl, uploadMessageVoice } from "../services/messageVoiceStorageService.js";
@@ -323,8 +324,8 @@ export const reportGroupMessage = asyncHandler(async (req, res) => {
   if (!message) throw new ApiError(404, "Message not found");
   await getGroup(message.group, req.user._id);
   if (String(message.sender) === String(req.user._id)) throw new ApiError(400, "You cannot report your own message");
-  const reason = String(req.body.reason || "").toUpperCase();
-  if (!["SPAM", "HARASSMENT", "HATE", "DEFAMATION", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "SCAM", "COPYRIGHT", "IMPERSONATION", "CHILD_SAFETY", "OTHER"].includes(reason)) throw new ApiError(400, "Select a valid report reason");
+  const reason = normalizeReportReason(req.body.reason, "");
+  if (!reason) throw new ApiError(400, "Select a valid report reason");
   try {
     const report = await MessageReport.create({ reporter: req.user._id, reportedUser: message.sender, scope: "GROUP_MESSAGE", groupMessage: message._id, reason, details: String(req.body.details || "").slice(0, 1000), snapshot: { ...messageEvidenceRow(message), groupId: String(message.group) } });
     return sendResponse(res, 201, "Report received", { reportId: String(report._id), status: report.status });
