@@ -60,7 +60,7 @@ export function serializeProfileMedia(item = {}, { includeSourceIds = false, vie
 }
 
 export async function profileMediaOwnerByUsername(username) {
-  const owner = await User.findOne({ username: normalizeUsername(username), role: { $in: ["fan", "creator"] }, status: "active" }).select("_id username role status");
+  const owner = await User.findOne({ username: normalizeUsername(username), role: { $in: ["fan", "creator"] }, status: "active" }).select("_id name username avatar role status");
   if (!owner) throw new ApiError(404, "Profile not found");
   return owner;
 }
@@ -116,7 +116,7 @@ export async function reportProfileMedia({ mediaId, payload = {}, username, user
       profileMedia: item._id,
       reason,
       details: String(payload.details || "").trim().slice(0, 1000),
-      snapshot: { mediaId: String(item._id), ownerId: String(owner._id), username: owner.username, type: item.type, url: item.url, thumbnailUrl: item.thumbnailUrl || "" },
+      snapshot: { frozenAt: new Date(), mediaId: String(item._id), ownerId: String(owner._id), username: owner.username, name: owner.name, avatar: owner.avatar, type: item.type, url: item.url, thumbnailUrl: item.thumbnailUrl || "" },
     });
     return { reportId: String(report._id), status: report.status };
   } catch (error) {

@@ -946,6 +946,7 @@ export const reportStory = asyncHandler(async (req, res) => {
       reason,
       details,
       snapshot: {
+        frozenAt: new Date(),
         storyId: String(story._id),
         creatorId: String(story.creator._id || story.creator),
         creatorName: story.creator.name || "",

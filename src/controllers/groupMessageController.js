@@ -327,7 +327,7 @@ export const reportGroupMessage = asyncHandler(async (req, res) => {
   const reason = normalizeReportReason(req.body.reason, "");
   if (!reason) throw new ApiError(400, "Select a valid report reason");
   try {
-    const report = await MessageReport.create({ reporter: req.user._id, reportedUser: message.sender, scope: "GROUP_MESSAGE", groupMessage: message._id, reason, details: String(req.body.details || "").slice(0, 1000), snapshot: { ...messageEvidenceRow(message), groupId: String(message.group) } });
+    const report = await MessageReport.create({ reporter: req.user._id, reportedUser: message.sender, scope: "GROUP_MESSAGE", groupMessage: message._id, reason, details: String(req.body.details || "").slice(0, 1000), snapshot: { frozenAt: new Date(), ...messageEvidenceRow(message), groupId: String(message.group) } });
     return sendResponse(res, 201, "Report received", { reportId: String(report._id), status: report.status });
   } catch (error) { if (error?.code === 11000) throw new ApiError(409, "You already reported this message"); throw error; }
 });

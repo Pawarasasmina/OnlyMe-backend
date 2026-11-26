@@ -415,7 +415,7 @@ export const reportUnifiedProfile = asyncHandler(async (req, res) => {
       scope: "PROFILE",
       reason,
       details,
-      snapshot: { userId: String(reportedUser._id), username: reportedUser.username, name: reportedUser.name, avatar: reportedUser.avatar, role: reportedUser.role },
+      snapshot: { frozenAt: new Date(), userId: String(reportedUser._id), username: reportedUser.username, name: reportedUser.name, avatar: reportedUser.avatar, role: reportedUser.role },
     });
     return sendResponse(res, 201, "Profile report received", { reportId: String(report._id), status: report.status });
   } catch (error) {

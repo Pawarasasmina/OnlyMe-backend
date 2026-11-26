@@ -1035,6 +1035,7 @@ export const reportMessage = asyncHandler(async (req, res) => {
       message: message._id,
       ...input,
       snapshot: {
+        frozenAt: new Date(),
         ...messageEvidenceRow(message),
         senderId: String(message.sender),
         recipientId: String(message.recipient),
@@ -1069,6 +1070,7 @@ export const reportConversation = asyncHandler(async (req, res) => {
     scope: "CONVERSATION",
     ...input,
     snapshot: {
+      frozenAt: new Date(),
       participantIds: [String(req.user._id), String(other._id)],
       messages: rows.reverse().map((message) => ({
         ...messageEvidenceRow(message),

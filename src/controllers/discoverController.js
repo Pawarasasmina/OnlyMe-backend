@@ -1288,6 +1288,7 @@ export const reportDiscoverCreator = asyncHandler(async (req, res) => {
     scope: "PROFILE",
     ...input,
     snapshot: {
+      frozenAt: new Date(),
       source: "DISCOVER",
       reportedUserId: String(profile.user._id),
       username: profile.user.username,

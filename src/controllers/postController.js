@@ -983,6 +983,7 @@ export const reportFeedPost = asyncHandler(async (req, res) => {
       reason,
       details: cleanString(req.body.details, 1000),
       snapshot: {
+        frozenAt: new Date(),
         postId: String(post._id),
         authorId: String(post.author),
         text: post.text,
