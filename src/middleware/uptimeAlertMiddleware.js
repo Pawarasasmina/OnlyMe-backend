@@ -1,4 +1,5 @@
 import { env } from "../config/env.js";
+import { sendOwnerOperationalAlert } from "../services/operationalAlertService.js";
 
 let consecutiveFailures = 0;
 let incidentOpen = false;
@@ -32,11 +33,13 @@ export function uptimeAlertMiddleware(req, res, next) {
       const incident = { event: "API_UNAVAILABLE", status: res.statusCode, path: req.originalUrl, method: req.method, durationMs, consecutiveFailures, occurredAt: new Date().toISOString() };
       console.error("Uptime incident", incident);
       void notify(incident);
+      void sendOwnerOperationalAlert("DOWNTIME", `DOWNTIME:${Math.floor(Date.now() / 300000)}`, `🔴 @seen API incident\n${consecutiveFailures} consecutive server errors\nStatus: ${res.statusCode}\nTime: ${incident.occurredAt}`);
     } else if (!failed && incidentOpen) {
       incidentOpen = false;
       const recovery = { event: "API_RECOVERED", path: req.originalUrl, durationMs, recoveredAt: new Date().toISOString() };
       console.info("Uptime recovered", recovery);
       void notify(recovery);
+      void sendOwnerOperationalAlert("RECOVERY", `RECOVERY:${Math.floor(Date.now() / 300000)}`, `✅ @seen API recovered\nTime: ${recovery.recoveredAt}`);
     }
   });
   next();

@@ -13,6 +13,7 @@ const adminProfileSchema = new mongoose.Schema(
       comments: { type: Boolean, default: true },
       reactions: { type: Boolean, default: true },
       security: { type: Boolean, default: true },
+      moderation: { type: Boolean, default: true },
     },
     lastLoginAt: { type: Date, default: null },
     twoFactorSecret: { type: String, default: "", select: false },

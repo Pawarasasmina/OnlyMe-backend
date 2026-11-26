@@ -18,10 +18,12 @@ import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { effectiveAdminRole } from "../middleware/adminPermissionMiddleware.js";
+import { CURRENT_ACCOUNT_FILTER } from "../constants/currentAccountScope.js";
+import { applyResolvedCaseStrike } from "../services/moderationEnforcementService.js";
 
 export const getAdminDashboard = asyncHandler(async (_req, res) => {
-  const platformUserIds = await User.distinct("_id");
-  const platformUserFilter = { _id: { $in: platformUserIds } };
+  const platformUserIds = await User.distinct("_id", CURRENT_ACCOUNT_FILTER);
+  const platformUserFilter = { ...CURRENT_ACCOUNT_FILTER, _id: { $in: platformUserIds } };
   const creatorFilter = { $in: platformUserIds };
   const now = new Date();
   const [totalUsers, fans, creators, admins, activeUsers, pendingCreators, legacyPublished, publicationsPublished, feedPostsPublished, wallPostsPublished, storiesPublished, legacyDrafts, publicationDrafts, feedPostDrafts, legacySubscriptions, premiumMemberships, accountTypeRows] =
@@ -42,7 +44,7 @@ export const getAdminDashboard = asyncHandler(async (_req, res) => {
       FeedPost.countDocuments({ author: creatorFilter, status: "draft", deletedAt: null }),
       Subscription.countDocuments({ fan: creatorFilter, status: "active", $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }] }),
       PremiumMembership.countDocuments({ user: creatorFilter, status: { $in: ["ACTIVE", "CANCEL_AT_PERIOD_END"] }, currentPeriodEnd: { $gt: now } }),
-      User.aggregate([{ $group: { _id: { $ifNull: ["$accountType", "SEED"] }, count: { $sum: 1 } } }]),
+      User.aggregate([{ $match: CURRENT_ACCOUNT_FILTER }, { $group: { _id: { $ifNull: ["$accountType", "SEED"] }, count: { $sum: 1 } } }]),
     ]);
 
   const contentBreakdown = { legacy: legacyPublished, publications: publicationsPublished, wall: feedPostsPublished + wallPostsPublished, stories: storiesPublished };
@@ -64,7 +66,7 @@ export const getAdminDashboard = asyncHandler(async (_req, res) => {
 });
 
 export const listUsers = asyncHandler(async (req, res) => {
-  const filter = {};
+  const filter = { ...CURRENT_ACCOUNT_FILTER };
   if (effectiveAdminRole(req.user) !== "MAIN_ADMIN") filter.role = { $ne: "admin" };
   if (req.query.role === "creator") {
     filter.role = { $in: ["fan", "creator"] };
@@ -331,6 +333,13 @@ export const resolveMessageReport = asyncHandler(async (req, res) => {
     await FeedPost.updateOne({ _id: report.feedPost }, { $set: { status: action === "REMOVED" ? "deleted" : "archived", ...(report.source !== "AUTOMATED_DUPLICATE" ? { moderationStatus: "REJECTED" } : {}), ...(action === "REMOVED" ? { deletedAt: new Date() } : { archivedAt: new Date() }) } });
   }
   await report.save();
+  const strike = await applyResolvedCaseStrike({ report, reportModel: "MessageReport", actorId: req.user._id, io: req.app.get("io") });
+  if (strike) {
+    report.resolution.strike = strike._id;
+    report.resolution.strikeNumber = strike.strikeNumberAtIssue;
+    report.resolution.automaticConsequence = strike.automaticConsequence;
+    await report.save();
+  }
   if (action === "WARNING") {
     await Notification.updateOne(
       { dedupeKey: `moderation-warning:${report._id}` },

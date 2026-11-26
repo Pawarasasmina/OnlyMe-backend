@@ -1,23 +1,8 @@
 import mongoose from "mongoose";
 import PlatformSetting from "./PlatformSetting.js";
+import { REPORT_REASONS, URGENT_REPORT_REASONS } from "../constants/reportConstants.js";
 
-export const PUBLICATION_REPORT_REASONS = [
-  "SPAM",
-  "FALSE_INFORMATION",
-  "DEFAMATION",
-  "HARASSMENT",
-  "HATE",
-  "NUDITY",
-  "SEXUAL_CONTENT",
-  "VIOLENCE",
-  "SELF_HARM",
-  "ILLEGAL_CONTENT",
-  "COPYRIGHT",
-  "SCAM",
-  "IMPERSONATION",
-  "CHILD_SAFETY",
-  "OTHER",
-];
+export const PUBLICATION_REPORT_REASONS = REPORT_REASONS;
 
 const publicationReportSchema = new mongoose.Schema(
   {
@@ -34,8 +19,9 @@ const publicationReportSchema = new mongoose.Schema(
     priorityRank: { type: Number, default: 1, index: true },
     dueAt: { type: Date, default: null, index: true },
     reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    reviewingAt: { type: Date, default: null },
     resolvedAt: { type: Date, default: null },
-    resolution: { action: { type: String, default: "" }, note: { type: String, default: "", maxlength: 2000 } },
+    resolution: { action: { type: String, default: "" }, note: { type: String, default: "", maxlength: 2000 }, strike: { type: mongoose.Schema.Types.ObjectId, ref: "ModerationStrike", default: null }, strikeNumber: { type: Number, default: null }, automaticConsequence: { type: String, default: "" } },
     snapshot: {
       title: { type: String, trim: true, default: "" },
       summary: { type: String, trim: true, default: "" },
@@ -51,7 +37,7 @@ publicationReportSchema.index({ status: 1, createdAt: -1 });
 publicationReportSchema.index({ creator: 1, status: 1, createdAt: -1 });
 publicationReportSchema.pre("validate", async function applySla() {
   if (!this.isNew) return;
-  const urgent = ["CHILD_SAFETY", "SELF_HARM", "DEFAMATION"].includes(this.reason);
+  const urgent = URGENT_REPORT_REASONS.has(this.reason);
   const settings = await PlatformSetting.findOne({ key: "moderation-policy" }).select("value").lean();
   const urgentHours = Math.min(24, Math.max(1, Number(settings?.value?.urgentHours) || 4));
   const standardHours = Math.min(168, Math.max(1, Number(settings?.value?.standardHours) || 24));
@@ -65,6 +51,14 @@ publicationReportSchema.post("save", async function autoHideUrgent(doc) {
   if (!doc.$locals.wasNew || !doc.$locals.autoHide) return;
   const { default: Publication } = await import("./Publication.js");
   await Publication.updateOne({ _id: doc.publication }, { $set: { status: "ARCHIVED", archivedAt: new Date() } });
+});
+publicationReportSchema.post("save", function alertModerators(doc) {
+  if (!doc.$locals.wasNew) return;
+  void import("../services/moderationAlertService.js").then(({ processNewModerationAlert }) => processNewModerationAlert(doc.toObject(), "PublicationReport")).catch((error) => console.error("Immediate moderation alert failed", error));
+});
+publicationReportSchema.post("save", async function syncSeriousPayoutHold(doc) {
+  const { syncSeriousCasePayoutHoldForReport } = await import("../services/moderationEnforcementService.js");
+  await syncSeriousCasePayoutHoldForReport(doc, "PublicationReport");
 });
 
 export default mongoose.model("PublicationReport", publicationReportSchema);

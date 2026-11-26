@@ -42,6 +42,8 @@
     "seed:updated-wall-notes": "node src/scripts/seedUpdatedWallNotes.js"
     ,"migrate:admin-operations:dry-run": "node src/scripts/migrateAdminOperations.js"
     ,"migrate:admin-operations": "node src/scripts/migrateAdminOperations.js --apply"
+    ,"migrate:moderation-strikes:dry-run": "node src/scripts/backfillModerationStrikes.js"
+    ,"migrate:moderation-strikes": "node src/scripts/backfillModerationStrikes.js --apply"
   },
   "dependencies": {
     "@deepgram/sdk": "^5.8.0",

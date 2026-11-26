@@ -9,6 +9,7 @@ import Repost from "../models/Repost.js";
 import { deleteProfileMediaFile, uploadProfileMediaFile } from "./profileMediaStorageService.js";
 import { publicationDeliveryUrl } from "./publicationMediaStorageService.js";
 import ApiError from "../utils/ApiError.js";
+import { normalizeReportReason } from "../constants/reportConstants.js";
 import { normalizeUsername } from "../validators/profileValidator.js";
 
 const SOURCE_MEDIA_ID = {
@@ -59,7 +60,7 @@ export function serializeProfileMedia(item = {}, { includeSourceIds = false, vie
 }
 
 export async function profileMediaOwnerByUsername(username) {
-  const owner = await User.findOne({ username: normalizeUsername(username), role: { $in: ["fan", "creator"] }, status: "active" }).select("_id username role status");
+  const owner = await User.findOne({ username: normalizeUsername(username), role: { $in: ["fan", "creator"] }, status: "active" }).select("_id name username avatar role status");
   if (!owner) throw new ApiError(404, "Profile not found");
   return owner;
 }
@@ -99,16 +100,14 @@ export async function toggleProfileMediaLike({ mediaId, username, user }) {
   return { liked: !liked, likeCount: item.likedBy.length, mediaId: String(item._id) };
 }
 
-const PROFILE_MEDIA_REPORT_REASONS = new Set(["SPAM", "FALSE_INFORMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "OTHER"]);
-
 export async function reportProfileMedia({ mediaId, payload = {}, username, user }) {
   if (!mongoose.isValidObjectId(mediaId)) throw new ApiError(400, "Invalid Profile Media item");
   const owner = await profileMediaOwnerByUsername(username);
   if (String(owner._id) === String(user._id)) throw new ApiError(400, "You cannot report your own Media");
   const item = await ProfileMedia.findOne({ _id: mediaId, user: owner._id }).lean();
   if (!item) throw new ApiError(404, "Profile Media item not found");
-  const reason = String(payload.reason || "OTHER").trim().toUpperCase().replaceAll(/[^A-Z0-9]+/g, "_");
-  if (!PROFILE_MEDIA_REPORT_REASONS.has(reason)) throw new ApiError(400, "Select a valid report reason");
+  const reason = normalizeReportReason(payload.reason);
+  if (!reason) throw new ApiError(400, "Select a valid report reason");
   try {
     const report = await MessageReport.create({
       reporter: user._id,
@@ -117,7 +116,7 @@ export async function reportProfileMedia({ mediaId, payload = {}, username, user
       profileMedia: item._id,
       reason,
       details: String(payload.details || "").trim().slice(0, 1000),
-      snapshot: { mediaId: String(item._id), ownerId: String(owner._id), username: owner.username, type: item.type, url: item.url, thumbnailUrl: item.thumbnailUrl || "" },
+      snapshot: { frozenAt: new Date(), mediaId: String(item._id), ownerId: String(owner._id), username: owner.username, name: owner.name, avatar: owner.avatar, type: item.type, url: item.url, thumbnailUrl: item.thumbnailUrl || "" },
     });
     return { reportId: String(report._id), status: report.status };
   } catch (error) {

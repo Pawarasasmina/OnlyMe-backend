@@ -2,8 +2,14 @@ import mongoose from "mongoose";
 const schema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   active: { type: Boolean, default: true, index: true },
+  manualActive: { type: Boolean, default: true },
+  seriousCaseRefs: [{
+    reportModel: { type: String, enum: ["MessageReport", "PublicationReport"], required: true },
+    reportId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    category: { type: String, required: true },
+  }],
   reason: { type: String, required: true, trim: true, maxlength: 2000 },
-  placedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  placedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   releasedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   releasedAt: { type: Date, default: null },
   releaseReason: { type: String, trim: true, maxlength: 2000, default: "" },

@@ -20,6 +20,7 @@ import ApiError from "../utils/ApiError.js";
 import { syncRepost } from "../services/repostService.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
+import { normalizeReportReason } from "../constants/reportConstants.js";
 
 const publishedSeen = async (id, viewer, shareToken = "") => {
   if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid Seen ID");
@@ -361,8 +362,8 @@ export const reportSeenComment = asyncHandler(async (req, res) => {
   const comment = await SeenEngagement.findOne({ _id: req.params.commentId, publication: publication._id, type: "COMMENT" }).lean();
   if (!comment) throw new ApiError(404, "Comment not found");
   if (String(comment.user) === String(req.user._id)) throw new ApiError(400, "You cannot report your own comment");
-  const reason = String(req.body.reason || "OTHER").toUpperCase();
-  if (!["SPAM", "HARASSMENT", "HATE", "DEFAMATION", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "SCAM", "COPYRIGHT", "IMPERSONATION", "CHILD_SAFETY", "OTHER"].includes(reason)) throw new ApiError(400, "Select a valid report reason");
+  const reason = normalizeReportReason(req.body.reason);
+  if (!reason) throw new ApiError(400, "Select a valid report reason");
   try {
     const report = await MessageReport.create({ reporter: req.user._id, reportedUser: comment.user, scope: "COMMENT", publication: publication._id, commentId: comment._id, reason, details: String(req.body.details || "").trim().slice(0, 1000), snapshot: { publicationId: String(publication._id), commentId: String(comment._id), authorId: String(comment.user), text: comment.text, audio: comment.audio, createdAt: comment.createdAt } });
     return sendResponse(res, 201, "Comment report received", { reportId: report._id });
@@ -465,9 +466,8 @@ export const reportSeen = asyncHandler(async (req, res) => {
   if (!canAccessSeen || !canAccessWorld) throw new ApiError(404, "Published content not found");
 
   if (String(publication.creator) === String(req.user._id)) throw new ApiError(400, "You cannot report your own content");
-  const reason = cleanString(req.body.reason || "OTHER", 80).toUpperCase().replaceAll(/[^A-Z0-9]+/g, "_");
-  const allowed = new Set(["SPAM", "FALSE_INFORMATION", "DEFAMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "IMPERSONATION", "CHILD_SAFETY", "OTHER"]);
-  if (!allowed.has(reason)) throw new ApiError(400, "Select a valid report reason");
+  const reason = normalizeReportReason(cleanString(req.body.reason || "OTHER", 80));
+  if (!reason) throw new ApiError(400, "Select a valid report reason");
   const scope = publication.kind === "SEEN" ? "SEEN" : "WORLD";
   if (await MessageReport.exists({ reporter: req.user._id, publication: publication._id, scope })) throw new ApiError(409, "You already reported this content");
   const requestedSafetyActions = reason === "SPAM" ? normalizeSpamSafetyActions(req.body.safetyActions) : [];

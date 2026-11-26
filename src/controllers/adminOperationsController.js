@@ -18,6 +18,7 @@ import AdminLoginEvent from "../models/AdminLoginEvent.js";
 import LegalHold from "../models/LegalHold.js";
 import PayoutHold from "../models/PayoutHold.js";
 import PlatformSetting from "../models/PlatformSetting.js";
+import ModerationAlert from "../models/ModerationAlert.js";
 import Wallet from "../models/Wallet.js";
 import StarsLedgerEntry from "../models/StarsLedgerEntry.js";
 import WorldEntitlement from "../models/WorldEntitlement.js";
@@ -26,8 +27,11 @@ import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { effectiveAdminRole } from "../middleware/adminPermissionMiddleware.js";
+import { alertSettings, saveAlertSettings, sendTelegram } from "../services/alertSettingsService.js";
+import { getModerationMetrics, normalizeModerationReport, URGENT_REPORT_REASONS } from "../services/moderationMetricsService.js";
+import { applyResolvedCaseStrike, getUserStrikeSummary, reverseCaseStrike } from "../services/moderationEnforcementService.js";
 
-const URGENT = new Set(["UNSAFE_MEETUP", "CHILD_SAFETY", "SELF_HARM", "DEFAMATION"]);
+const URGENT = URGENT_REPORT_REASONS;
 const clean = (value, max = 2000) => String(value || "").trim().slice(0, max);
 const validId = (id, label = "ID") => { if (!mongoose.isValidObjectId(id)) throw new ApiError(400, `Invalid ${label}`); return id; };
 const defaultPolicy = {
@@ -45,14 +49,7 @@ async function policy() {
 async function audit(req, action, targetType, targetId, reason, before = null, after = null, metadata = {}) {
   return AdminAuditEvent.create({ actor: req.user._id, actorRole: effectiveAdminRole(req.user), action, targetType, targetId: String(targetId), reason, before, after, metadata });
 }
-function normalizedReport(row, model) {
-  const reason = row.reason || "OTHER";
-  const urgent = row.priority === "URGENT" || URGENT.has(reason);
-  const created = new Date(row.createdAt);
-  const dueAt = reason === "UNSAFE_MEETUP" ? new Date(Math.min(new Date(row.dueAt || Infinity).getTime() || Infinity, created.getTime() + 4 * 3600000)) : row.dueAt || new Date(created.getTime() + (urgent ? 4 : 24) * 3600000);
-  const author = model === "MessageReport" ? row.reportedUser : row.creator;
-  return { ...row, id: row._id, model, author, priority: urgent ? "URGENT" : "STANDARD", priorityRank: urgent ? 2 : 1, dueAt, overdue: !["RESOLVED", "CLOSED"].includes(row.status) && new Date(dueAt) < new Date() };
-}
+const normalizedReport = normalizeModerationReport;
 function reportTargetKey(row, model) {
   if (model === "PublicationReport") return `publication:${row.publication}`;
   for (const field of ["message", "groupMessage", "commentId", "feedPost", "profileMedia", "story", "chapterId", "directAccessWindow", "publication"]) if (row[field]) return `${row.scope}:${row[field]}`;
@@ -66,19 +63,23 @@ function siblingFilter(report, model) {
 
 export const listUnifiedReports = asyncHandler(async (req, res) => {
   const status = clean(req.query.status, 30).toUpperCase();
-  const match = status && ["RECEIVED", "REVIEWING", "RESOLVED", "CLOSED"].includes(status) ? { status } : {};
-  const [messages, publications] = await Promise.all([
+  const match = status && ["RECEIVED", "REVIEWING", "RESOLVED", "CLOSED"].includes(status)
+    ? { status }
+    : { status: { $in: ["RECEIVED", "REVIEWING"] } };
+  const [messages, publications, metrics] = await Promise.all([
     MessageReport.find(match).select("+snapshot").populate("reporter", "name username email avatar").populate("reportedUser", "name username email avatar status").populate("reviewedBy", "name username").sort({ createdAt: -1 }).limit(500).lean(),
     PublicationReport.find(match).populate("reporter", "name username email avatar").populate("creator", "name username email avatar status").populate("reviewedBy", "name username").sort({ createdAt: -1 }).limit(500).lean(),
+    getModerationMetrics(new Date()),
   ]);
   const rawItems = [...messages.map((row) => normalizedReport(row, "MessageReport")), ...publications.map((row) => normalizedReport(row, "PublicationReport"))];
   const reportCounts = rawItems.reduce((map, item) => map.set(reportTargetKey(item, item.model), (map.get(reportTargetKey(item, item.model)) || 0) + 1), new Map());
   const items = rawItems.map((item) => ({ ...item, reportCount: reportCounts.get(reportTargetKey(item, item.model)) || 1 }))
     .filter((item) => !req.query.priority || item.priority === String(req.query.priority).toUpperCase())
+    .filter((item) => req.query.overdue !== "true" || item.overdue)
+    .filter((item) => req.query.dueSoon !== "true" || (!item.overdue && new Date(item.dueAt) - new Date() <= 4 * 3600000))
     .sort((a, b) => b.priorityRank - a.priorityRank || new Date(a.createdAt) - new Date(b.createdAt));
   const page = Math.max(1, Number(req.query.page) || 1); const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 40));
-  const open = items.filter((item) => !["RESOLVED", "CLOSED"].includes(item.status));
-  return sendResponse(res, 200, "Unified report queue fetched", { items: items.slice((page - 1) * limit, page * limit), summary: { total: items.length, open: open.length, urgent: open.filter((item) => item.priority === "URGENT").length, overdue: open.filter((item) => item.overdue).length }, pagination: { page, limit, total: items.length, pages: Math.max(1, Math.ceil(items.length / limit)) } });
+  return sendResponse(res, 200, "Unified report queue fetched", { items: items.slice((page - 1) * limit, page * limit), summary: { total: items.length, ...metrics.summary }, pagination: { page, limit, total: items.length, pages: Math.max(1, Math.ceil(items.length / limit)) } });
 });
 
 async function findReport(model, id) {
@@ -99,6 +100,18 @@ export const getUnifiedReport = asyncHandler(async (req, res) => {
     ReportModel.countDocuments({ ...siblingFilter(report, req.params.model), status: { $in: ["RECEIVED", "REVIEWING", "RESOLVED", "CLOSED"] } }),
   ]);
   return sendResponse(res, 200, "Moderation case fetched", { report: { ...normalizedReport(withMessageEvidenceUrls(report), req.params.model), reportCount }, history, appeals });
+});
+
+export const acknowledgeUnifiedReport = asyncHandler(async (req, res) => {
+  const report = await findReport(req.params.model, req.params.id);
+  if (!report) throw new ApiError(404, "Report not found");
+  if (["RESOLVED", "CLOSED"].includes(report.status)) throw new ApiError(409, "This report is already resolved");
+  if (!report.reviewingAt) report.reviewingAt = new Date();
+  report.reviewedBy = req.user._id;
+  report.status = "REVIEWING";
+  await report.save();
+  await audit(req, "MODERATION_REPORT_ACKNOWLEDGED", "REPORT", report._id, "Moderator began review", { status: "RECEIVED" }, { status: "REVIEWING", reviewingAt: report.reviewingAt }, { reportModel: req.params.model });
+  return sendResponse(res, 200, "Report review started", { report: normalizedReport(report.toObject(), req.params.model) });
 });
 
 async function applyContentAction(report, model, action) {
@@ -130,6 +143,8 @@ export const actionUnifiedReport = asyncHandler(async (req, res) => {
   if (Object.keys(userUpdate).length) await User.updateOne({ _id: authorId }, { $set: userUpdate });
   await applyContentAction(report, req.params.model, action);
   report.status = "RESOLVED"; report.reviewedBy = req.user._id; report.resolvedAt = new Date(); report.resolution = { action, note: reason, falseReport: Boolean(req.body.falseReport), restrictionUntil: ["POSTING_RESTRICTED", "SELLING_RESTRICTED", "MESSAGING_RESTRICTED", "ACCOUNT_RESTRICTED"].includes(action) ? until : null }; await report.save();
+  const strike = await applyResolvedCaseStrike({ report, reportModel: req.params.model, actorId: req.user._id, io: req.app.get("io") });
+  if (strike) { report.resolution.strike = strike._id; report.resolution.strikeNumber = strike.strikeNumberAtIssue; report.resolution.automaticConsequence = strike.automaticConsequence; await report.save(); }
   const ReportModel = req.params.model === "MessageReport" ? MessageReport : PublicationReport;
   const siblingReports = await ReportModel.find({ ...siblingFilter(report, req.params.model), _id: { $ne: report._id } });
   for (const sibling of siblingReports) { sibling.status = "RESOLVED"; sibling.reviewedBy = req.user._id; sibling.resolvedAt = report.resolvedAt; sibling.resolution = { ...report.resolution.toObject?.() || report.resolution, falseReport: false }; await sibling.save(); }
@@ -180,6 +195,7 @@ export const reviewAppeal = asyncHandler(async (req, res) => {
       if (appeal.reportModel === "MessageReport" && report.message && ["HIDDEN", "REMOVED"].includes(appeal.action)) await Message.updateOne({ _id: report.message }, { $set: { deletedAt: null } });
       if (appeal.reportModel === "MessageReport" && report.groupMessage && ["HIDDEN", "REMOVED"].includes(appeal.action)) await GroupMessage.updateOne({ _id: report.groupMessage }, { $set: { deletedAt: null } });
       if (appeal.reportModel === "MessageReport" && report.scope === "PROFILE" && ["HIDDEN", "REMOVED"].includes(appeal.action)) await User.updateOne({ _id: authorId }, { $set: { profileModerationHiddenAt: null } });
+      await reverseCaseStrike({ reportModel: appeal.reportModel, reportId: report._id, actorId: req.user._id, reason });
     }
   }
   appeal.status = decision; appeal.reviewer = req.user._id; appeal.reviewReason = reason; appeal.reviewedAt = new Date(); await appeal.save();
@@ -194,10 +210,24 @@ export const updateModerationPolicy = asyncHandler(async (req, res) => {
   await PlatformSetting.findOneAndUpdate({ key: "moderation-policy" }, { $set: { value: next, updatedBy: req.user._id } }, { upsert: true, new: true }); await audit(req, "MODERATION_POLICY_UPDATED", "SETTING", "moderation-policy", clean(req.body.reason) || "Policy settings updated", current, next); return sendResponse(res, 200, "Moderation policy updated", { policy: next });
 });
 
+export const getAlertSettings = asyncHandler(async (_req, res) => sendResponse(res, 200, "Alert settings fetched", { settings: await alertSettings() }));
+export const updateAlertSettings = asyncHandler(async (req, res) => {
+  const before = await alertSettings(); const settings = await saveAlertSettings(req.body || {}, req.user._id);
+  await audit(req, "OPERATIONAL_ALERT_SETTINGS_UPDATED", "SETTING", "operational-alerts", clean(req.body.reason) || "Operational alert settings updated", { ...before, tokenConfigured: before.tokenConfigured }, { ...settings, tokenConfigured: settings.tokenConfigured });
+  return sendResponse(res, 200, "Alert settings updated", { settings });
+});
+export const testAlertChannel = asyncHandler(async (req, res) => {
+  const settings = await alertSettings(); const channel = clean(req.body.channel, 20).toUpperCase();
+  const chatId = channel === "OWNER" ? settings.ownerChatId : settings.moderatorChatId;
+  await sendTelegram({ chatId, text: channel === "OWNER" ? "✅ @seen owner operations alerts are connected." : "✅ @seen moderator safety alerts are connected. No report content will be posted here." });
+  await audit(req, "OPERATIONAL_ALERT_TEST_SENT", "SETTING", "operational-alerts", `Test sent to ${channel.toLowerCase()} Telegram chat`);
+  return sendResponse(res, 200, "Telegram test delivered", {});
+});
+
 export const getAdminUserDetail = asyncHandler(async (req, res) => {
   const user = await User.findById(validId(req.params.id, "user ID")).select("+accountType name username email dateOfBirth unsafeRestrictedUntil unsafeRestrictionReason role profileType accountType status isVerified creatorApprovalStatus createdAt authVersion postingRestrictedUntil postingRestrictionReason sellingRestrictedUntil sellingRestrictionReason messagingRestrictedUntil loginRestrictedUntil").lean(); if (!user || user.role === "admin") throw new ApiError(404, "User not found");
-  const [reports, actions, logins, holds] = await Promise.all([MessageReport.find({ reportedUser: user._id }).select("-snapshot").sort({ createdAt: -1 }).limit(100).lean(), AdminAuditEvent.find({ $or: [{ targetType: "USER", targetId: String(user._id) }, { "metadata.authorId": String(user._id) }] }).populate("actor", "name username").sort({ createdAt: -1 }).lean(), AdminLoginEvent.find({ user: user._id }).sort({ createdAt: -1 }).limit(50).lean(), LegalHold.find({ targetType: "USER", targetId: String(user._id), active: true }).lean()]);
-  return sendResponse(res, 200, "Admin user detail fetched", { user, reports, actions, logins, holds });
+  const [reports, actions, logins, holds, payoutHold, strikeSummary] = await Promise.all([MessageReport.find({ reportedUser: user._id }).select("-snapshot").sort({ createdAt: -1 }).limit(100).lean(), AdminAuditEvent.find({ $or: [{ targetType: "USER", targetId: String(user._id) }, { "metadata.authorId": String(user._id) }] }).populate("actor", "name username").sort({ createdAt: -1 }).lean(), AdminLoginEvent.find({ user: user._id }).sort({ createdAt: -1 }).limit(50).lean(), LegalHold.find({ targetType: "USER", targetId: String(user._id), active: true }).lean(), PayoutHold.findOne({ user: user._id, active: true }).lean(), getUserStrikeSummary(user._id)]);
+  return sendResponse(res, 200, "Admin user detail fetched", { user, reports, actions, logins, holds, payoutHold, strikeSummary });
 });
 export const enforceUser = asyncHandler(async (req, res) => {
   const user = await User.findById(validId(req.params.id, "user ID")); if (!user || user.role === "admin") throw new ApiError(404, "User not found"); const action = clean(req.body.action, 50).toUpperCase(); const reason = clean(req.body.reason); if (reason.length < 3) throw new ApiError(400, "A reason is required"); const days = Math.min(365, Math.max(1, Number(req.body.durationDays) || 7)); const until = new Date(Date.now() + days * 86400000); const before = { status: user.status };
@@ -258,22 +288,18 @@ export const releaseLegalHold = asyncHandler(async (req, res) => { const reason 
 export const exportHistory = asyncHandler(async (req, res) => { const type = clean(req.query.type, 20).toUpperCase(); const id = validId(req.query.id, "export target ID"); let payload; if (type === "USER") { const user = await User.findById(id).select("-password -resetPasswordToken -resetPasswordExpires").lean(); if (!user) throw new ApiError(404, "User not found"); const [reports, actions, ledger] = await Promise.all([MessageReport.find({ $or: [{ reporter: id }, { reportedUser: id }] }).select("+snapshot").lean(), AdminAuditEvent.find({ targetType: "USER", targetId: String(id) }).lean(), StarsLedgerEntry.find({ accountUser: id }).sort({ createdAt: 1 }).lean()]); payload = { exportedAt: new Date(), type, user, reports, actions, ledger }; } else if (type === "REPORT") { const report = await MessageReport.findById(id).select("+snapshot").lean() || await PublicationReport.findById(id).lean(); if (!report) throw new ApiError(404, "Report not found"); payload = { exportedAt: new Date(), type, report, actions: await AdminAuditEvent.find({ targetType: "REPORT", targetId: String(id) }).lean() }; } else throw new ApiError(400, "Export type must be USER or REPORT"); await audit(req, "DATA_EXPORTED", type, id, clean(req.query.reason) || "Administrative history export"); return sendResponse(res, 200, "History export generated", { export: payload }); });
 
 export const getFinancialUser = asyncHandler(async (req, res) => { const id = validId(req.params.id, "user ID"); const [user, wallet, ledger, payoutHold, worldPurchases, memberships] = await Promise.all([User.findById(id).select("name username email role status").lean(), Wallet.findOne({ user: id }).lean(), StarsLedgerEntry.find({ accountUser: id }).sort({ createdAt: -1 }).limit(500).lean(), PayoutHold.findOne({ user: id, active: true }).lean(), WorldEntitlement.find({ user: id }).populate("publication", "title kind").sort({ createdAt: -1 }).lean(), PremiumMembership.find({ user: id }).populate("premiumPublication", "title kind").sort({ createdAt: -1 }).lean()]); if (!user) throw new ApiError(404, "User not found"); return sendResponse(res, 200, "Financial user fetched", { user, wallet, ledger, payoutHold, purchases: { worlds: worldPurchases, memberships } }); });
-export const holdPayouts = asyncHandler(async (req, res) => { const user = validId(req.params.id, "user ID"); const reason = clean(req.body.reason); if (reason.length < 3) throw new ApiError(400, "A reason is required"); const hold = await PayoutHold.create({ user, reason, placedBy: req.user._id }); await audit(req, "PAYOUT_HOLD_PLACED", "USER", user, reason, null, { payoutHoldId: hold._id }); return sendResponse(res, 201, "Payouts placed on hold", { hold }); });
-export const releasePayouts = asyncHandler(async (req, res) => { const reason = clean(req.body.reason); if (reason.length < 3) throw new ApiError(400, "A reason is required"); const hold = await PayoutHold.findOneAndUpdate({ user: validId(req.params.id, "user ID"), active: true }, { $set: { active: false, releasedBy: req.user._id, releasedAt: new Date(), releaseReason: reason } }, { new: true }); if (!hold) throw new ApiError(404, "Active payout hold not found"); await audit(req, "PAYOUT_HOLD_RELEASED", "USER", req.params.id, reason, { active: true }, { active: false }); return sendResponse(res, 200, "Payout hold released", { hold }); });
+export const holdPayouts = asyncHandler(async (req, res) => { const user = validId(req.params.id, "user ID"); const reason = clean(req.body.reason); if (reason.length < 3) throw new ApiError(400, "A reason is required"); let hold = await PayoutHold.findOne({ user, active: true }); if (hold) { hold.manualActive = true; hold.reason = reason; hold.placedBy = req.user._id; await hold.save(); } else hold = await PayoutHold.create({ user, reason, placedBy: req.user._id, manualActive: true }); await audit(req, "PAYOUT_HOLD_PLACED", "USER", user, reason, null, { payoutHoldId: hold._id }); return sendResponse(res, 201, "Payouts placed on hold", { hold }); });
+export const releasePayouts = asyncHandler(async (req, res) => { const reason = clean(req.body.reason); if (reason.length < 3) throw new ApiError(400, "A reason is required"); const hold = await PayoutHold.findOne({ user: validId(req.params.id, "user ID"), active: true }); if (!hold) throw new ApiError(404, "Active payout hold not found"); hold.manualActive = false; hold.active = Boolean(hold.seriousCaseRefs?.length); hold.releasedBy = req.user._id; hold.releasedAt = new Date(); hold.releaseReason = hold.active ? `${reason} (serious safety case hold remains active)` : reason; await hold.save(); await audit(req, "PAYOUT_HOLD_RELEASED", "USER", req.params.id, reason, { active: true }, { active: hold.active }); return sendResponse(res, 200, hold.active ? "Manual hold released; safety hold remains" : "Payout hold released", { hold }); });
 
 export const getOperationsDashboard = asyncHandler(async (_req, res) => {
   const now = new Date();
-  const platformUserIds = await User.distinct("_id");
-  const [messages, publications, appeals] = await Promise.all([
-    MessageReport.find({ reportedUser: { $in: platformUserIds }, status: { $in: ["RECEIVED", "REVIEWING"] } }).select("reason priority dueAt createdAt reportedUser").lean(),
-    PublicationReport.find({ creator: { $in: platformUserIds }, status: { $in: ["RECEIVED", "REVIEWING"] } }).select("reason priority dueAt createdAt creator").lean(),
+  const platformUserIds = await User.distinct("_id", { deletionRequestedAt: null });
+  const [metrics, appeals, failedAlerts] = await Promise.all([
+    getModerationMetrics(now),
     ModerationAppeal.find({ appellant: { $in: platformUserIds } }).select("status createdAt reviewedAt").lean(),
+    ModerationAlert.countDocuments({ status: "FAILED" }),
   ]);
-  const all = [...messages.map((r) => normalizedReport(r, "MessageReport")), ...publications.map((r) => normalizedReport(r, "PublicationReport"))];
-  const [resolvedMessages, resolvedPublications] = await Promise.all([MessageReport.find({ reportedUser: { $in: platformUserIds }, resolvedAt: { $ne: null } }).select("createdAt resolvedAt").limit(5000).lean(), PublicationReport.find({ creator: { $in: platformUserIds }, resolvedAt: { $ne: null } }).select("createdAt resolvedAt").limit(5000).lean()]);
-  const times = [...resolvedMessages, ...resolvedPublications].map((r) => new Date(r.resolvedAt) - new Date(r.createdAt)).sort((a, b) => a - b);
-  const medianMs = times.length ? times[Math.floor(times.length / 2)] : null;
-  const within24 = times.length ? Math.round(times.filter((x) => x <= 86400000).length / times.length * 100) : null;
+  const all = metrics.openRows;
   const userCounts = new Map();
   for (const row of all) { const id = String(row.author?._id || row.author || ""); if (id) userCounts.set(id, (userCounts.get(id) || 0) + 1); }
   const leaders = [...userCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
@@ -283,7 +309,7 @@ export const getOperationsDashboard = asyncHandler(async (_req, res) => {
   return sendResponse(res, 200, "Operations dashboard fetched", {
     scope: "ALL_CURRENT_ACCOUNTS",
     generatedAt: now,
-    reports: { open: all.length, urgent: all.filter((x) => x.priority === "URGENT").length, overdue: all.filter((x) => new Date(x.dueAt) < now).length, resolvedSampleSize: times.length, medianActionMinutes: medianMs == null ? null : Math.round(medianMs / 60000), within24Percent: within24 },
+    reports: { ...metrics.summary, failedAlerts },
     appeals: { total: appeals.length, open: appeals.filter((x) => ["PENDING", "REVIEWING"].includes(x.status)).length, reversed: appeals.filter((x) => x.status === "REVERSED").length },
     topReportedUsers,
   });

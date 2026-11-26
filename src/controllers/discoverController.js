@@ -35,6 +35,7 @@ import { readAnalyticsSessionId, recordAnalyticsEvent } from "../services/analyt
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
+import { normalizeReportReason } from "../constants/reportConstants.js";
 
 const DISCOVER_TAGS = [
   "Photography", "Travel", "Fitness", "Food", "Music", "Gaming", "Fashion", "Art",
@@ -71,7 +72,6 @@ const DEFAULT_LIMIT = 8;
 const SESSION_WINDOW = 1000 * 60 * 30;
 const SLIDES_CACHE_TTL = 5 * 60_000;
 const slidesCache = new Map();
-const REPORT_REASONS = new Set(["SPAM", "HARASSMENT", "HATE", "SEXUAL_CONTENT", "VIOLENCE", "SCAM", "OTHER"]);
 
 function slidesCacheKey(req) {
   return [req.user?._id, req.query.filter || "for_you", req.query.topic || "", req.query.cursor || "0", req.query.limit || DEFAULT_LIMIT, req.query.search || "", req.discoverEligibilityKey || ""].join(":");
@@ -1267,9 +1267,9 @@ export const toggleDiscoverOfferSave = asyncHandler(async (req, res) => {
 });
 
 function readReportInput(body = {}) {
-  const reason = cleanText(body.reason || "OTHER", 40).toUpperCase();
+  const reason = normalizeReportReason(cleanText(body.reason || "OTHER", 40));
   const details = cleanText(body.details, 1000);
-  if (!REPORT_REASONS.has(reason)) throw new ApiError(400, "Select a valid report reason");
+  if (!reason) throw new ApiError(400, "Select a valid report reason");
   return { reason, details };
 }
 
@@ -1285,9 +1285,10 @@ export const reportDiscoverCreator = asyncHandler(async (req, res) => {
   const report = await MessageReport.create({
     reporter: req.user._id,
     reportedUser: profile.user._id,
-    scope: "CONVERSATION",
+    scope: "PROFILE",
     ...input,
     snapshot: {
+      frozenAt: new Date(),
       source: "DISCOVER",
       reportedUserId: String(profile.user._id),
       username: profile.user.username,

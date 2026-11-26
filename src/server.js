@@ -14,6 +14,8 @@ import { processDueAccountDeletions } from "./services/accountDeletionService.js
 import { processExpiredBonusGrants } from "./services/bonusService.js";
 import { processAutomaticPayouts } from "./services/payoutService.js";
 import { processDueCreatorAnnouncements } from "./services/creatorAnnouncementService.js";
+import { processModerationAlerts } from "./services/moderationAlertService.js";
+import { processOperationalAlerts } from "./services/operationalAlertService.js";
 
 const WORKER_INTERVAL_MS = 60 * 1000;
 const INITIAL_WORKER_DELAY_MS = 5 * 1000;
@@ -54,6 +56,8 @@ function startMaintenanceWorkers(io) {
   startWorker("Bonus expiry", processExpiredBonusGrants);
   startWorker("Automatic payout", processAutomaticPayouts);
   startWorker("Creator announcement", () => processDueCreatorAnnouncements(new Date(), io));
+  startWorker("Moderation alert", () => processModerationAlerts(new Date(), io));
+  startWorker("Owner operational alert", () => processOperationalAlerts(new Date()));
 }
 
 async function startServer() {

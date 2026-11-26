@@ -99,7 +99,7 @@ export const updateStaffTwoFactor = asyncHandler(async (req, res) => {
   if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(400, "Invalid admin account ID");
   const action = clean(req.body.action, 30).toUpperCase();
   const reason = clean(req.body.reason, 500);
-  if (!["DISABLE", "REQUIRE_NEW"].includes(action) || reason.length < 3) throw new ApiError(400, "Choose a 2FA action and provide a reason");
+  if (action !== "REQUIRE_NEW" || reason.length < 3) throw new ApiError(400, "Staff 2FA can only be reset with a new authenticator enrollment required");
   const target = await User.findOne({ _id: req.params.id, role: "admin" }).select("adminRole adminTwoFactorEnabled adminTwoFactorRequired");
   if (!target) throw new ApiError(404, "Admin account not found");
   await applyTwoFactorPolicy(req, [target], action, reason);
@@ -110,7 +110,7 @@ export const updateRoleTwoFactor = asyncHandler(async (req, res) => {
   const adminRole = clean(req.body.adminRole, 30).toUpperCase();
   const action = clean(req.body.action, 30).toUpperCase();
   const reason = clean(req.body.reason, 500);
-  if (!ROLES.has(adminRole) || !["DISABLE", "REQUIRE_NEW"].includes(action) || reason.length < 3) throw new ApiError(400, "Choose a role, 2FA action, and reason");
+  if (!ROLES.has(adminRole) || action !== "REQUIRE_NEW" || reason.length < 3) throw new ApiError(400, "Choose a role and require a new 2FA setup with a reason");
   const targets = await User.find({ role: "admin", $or: adminRole === "MAIN_ADMIN" ? [{ adminRole }, { adminRole: { $exists: false } }, { adminRole: null }] : [{ adminRole }] }).select("adminRole adminTwoFactorEnabled adminTwoFactorRequired");
   if (!targets.length) throw new ApiError(404, "No admin accounts use this role");
   await applyTwoFactorPolicy(req, targets, action, reason);

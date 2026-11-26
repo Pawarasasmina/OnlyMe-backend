@@ -8,6 +8,7 @@ import mongoose from "mongoose";
 import ApiError from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
+import { normalizeReportReason } from "../constants/reportConstants.js";
 
 const sender = (user, hidden = false) => hidden ? { name: "Private supporter", username: "", avatar: "" } : {
   id: user?._id ? String(user._id) : null,
@@ -16,7 +17,6 @@ const sender = (user, hidden = false) => hidden ? { name: "Private supporter", u
   avatar: user?.avatar || "",
 };
 
-const REPORT_REASONS = new Set(["SPAM", "FALSE_INFORMATION", "HARASSMENT", "HATE", "NUDITY", "SEXUAL_CONTENT", "VIOLENCE", "ILLEGAL_CONTENT", "COPYRIGHT", "SCAM", "OTHER"]);
 const THANK_YOU_MESSAGES = [
   name => `Thank you, ${name} — this genuinely made my day.`,
   () => "You didn’t have to. Thank you — I saw it right away.",
@@ -117,8 +117,8 @@ export const reportReceivedGift = asyncHandler(async (req, res) => {
   if (!gift) throw new ApiError(404, "Received gift not found");
   const reportedUser = gift[config.senderField]?._id || gift[config.senderField];
   if (!reportedUser) throw new ApiError(409, "This gift cannot be reported");
-  const reason = String(req.body.reason || "").trim().toUpperCase().replaceAll(/[^A-Z0-9]+/g, "_");
-  if (!REPORT_REASONS.has(reason)) throw new ApiError(400, "Select a valid report reason");
+  const reason = normalizeReportReason(req.body.reason, "");
+  if (!reason) throw new ApiError(400, "Select a valid report reason");
   const details = String(req.body.details || "").trim().slice(0, 1000);
   try {
     const report = await MessageReport.create({
