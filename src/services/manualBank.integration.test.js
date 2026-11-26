@@ -22,7 +22,7 @@ test("bank submissions are private, encrypted and ready only after independent a
   try {
     await mongoose.connect(database.getUri());
     await PayoutBankApplication.init();
-    const make = (name, role = "fan") => User.create({ name, username: name.toLowerCase(), email: `${name}@example.test`, password: "Password123", role });
+    const make = (name, role = "fan") => User.create({ name, username: name.toLowerCase(), email: `${name}@example.test`, password: "Password123", role, ...(role === "admin" ? { adminRole: "FINANCE", adminTwoFactorEnabled: true, adminTwoFactorRequired: true } : {}) });
     const owner = await make("BankOwner"), other = await make("Other"), admin = await make("BankAdmin", "admin");
     const app = express(); app.use(express.json()); app.use("/", routes); app.use((error, _req, res, _next) => res.status(error.statusCode || 500).json({ message: error.message }));
     server = app.listen(0, "127.0.0.1"); await new Promise(resolve => server.once("listening", resolve));
