@@ -60,7 +60,7 @@ messageReportSchema.index({ status: 1, priorityRank: -1, dueAt: 1, createdAt: 1 
 messageReportSchema.pre("validate", async function applySla() {
   if (!this.isNew) return;
   this.$locals.wasNew = true;
-  const urgent = ["UNSAFE_MEETUP", "CHILD_SAFETY", "SELF_HARM", "DEFAMATION"].includes(this.reason);
+  const urgent = ["UNSAFE_MEETUP", "CHILD_SAFETY", "SEXUAL_CONTENT", "VIOLENCE", "SELF_HARM"].includes(this.reason);
   const settings = await PlatformSetting.findOne({ key: "moderation-policy" }).select("value").lean();
   const urgentHours = Math.min(24, Math.max(1, Number(settings?.value?.urgentHours) || 4));
   const standardHours = Math.min(168, Math.max(1, Number(settings?.value?.standardHours) || 24));
@@ -86,6 +86,10 @@ messageReportSchema.post("save", async function autoHideUrgent(doc) {
   if (doc.commentId && doc.feedPost) { const { default: FeedPost } = await import("./FeedPost.js"); await FeedPost.updateOne({ _id: doc.feedPost, "comments._id": doc.commentId }, { $set: { "comments.$.deletedAt": new Date() } }); }
   if (doc.scope === "PROFILE" && doc.reportedUser) { const { default: User } = await import("./User.js"); await User.updateOne({ _id: doc.reportedUser }, { $set: { profileModerationHiddenAt: new Date() } }); }
   await mongoose.model("MessageReport").updateOne({ _id: doc._id }, { $set: { autoHiddenAt: new Date() } });
+});
+messageReportSchema.post("save", function alertModerators(doc) {
+  if (!doc.$locals.wasNew) return;
+  void import("../services/moderationAlertService.js").then(({ processModerationAlerts }) => processModerationAlerts(new Date())).catch((error) => console.error("Immediate moderation alert failed", error));
 });
 messageReportSchema.post("save", async function updateWallReportState(doc) {
   if (doc.scope !== "FEED_POST") return;

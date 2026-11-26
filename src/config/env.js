@@ -28,6 +28,9 @@ export const env = {
   resendApiKey: process.env.RESEND_API_KEY || "",
   emailFrom: process.env.EMAIL_FROM || "",
   emailTimeoutMs: Math.max(1000, Number(process.env.EMAIL_TIMEOUT_MS) || 10000),
+  moderationTelegramBotToken: process.env.MODERATION_TELEGRAM_BOT_TOKEN || "",
+  moderationTelegramChatId: process.env.MODERATION_TELEGRAM_CHAT_ID || "",
+  moderationAlertTimeoutMs: Math.max(1000, Number(process.env.MODERATION_ALERT_TIMEOUT_MS) || 10000),
   trustProxy: Math.max(0, Number(process.env.TRUST_PROXY_HOPS) || (process.env.NODE_ENV === "production" ? 1 : 0)),
   apiRateLimit: Math.max(100, Number(process.env.API_RATE_LIMIT) || 2000),
   authRateLimit: Math.max(5, Number(process.env.AUTH_RATE_LIMIT) || 20),
@@ -58,6 +61,7 @@ export const env = {
   shutdownTimeoutMs: Math.max(5000, Number(process.env.SHUTDOWN_TIMEOUT_MS) || 30000),
   maintenanceWorkersEnabled: process.env.MAINTENANCE_WORKERS_ENABLED !== "false",
   uptimeAlertWebhook: process.env.UPTIME_ALERT_WEBHOOK || "",
+  operationalAlertWebhookSecret: process.env.OPERATIONAL_ALERT_WEBHOOK_SECRET || "",
 };
 
 export function validateProductionEnv() {
@@ -70,6 +74,9 @@ export function validateProductionEnv() {
   if (insecureSecrets.has(env.refreshSecret) || env.refreshSecret.length < 32) errors.push("JWT_REFRESH_SECRET must be a unique secret of at least 32 characters");
   if (env.accessSecret === env.refreshSecret) errors.push("JWT access and refresh secrets must be different");
   if (!process.env.MAINTENANCE_WORKERS_ENABLED) errors.push("MAINTENANCE_WORKERS_ENABLED must explicitly be true or false in production");
+  if (!env.resendApiKey || !env.emailFrom) errors.push("RESEND_API_KEY and EMAIL_FROM are required for moderator SLA alerts");
+  if (Boolean(env.moderationTelegramBotToken) !== Boolean(env.moderationTelegramChatId)) errors.push("MODERATION_TELEGRAM_BOT_TOKEN and MODERATION_TELEGRAM_CHAT_ID must be configured together");
+  if (!env.operationalAlertWebhookSecret || env.operationalAlertWebhookSecret.length < 32) errors.push("OPERATIONAL_ALERT_WEBHOOK_SECRET must be at least 32 characters");
   try {
     const client = new URL(env.clientUrl);
     if (client.protocol !== "https:") errors.push("CLIENT_URL must use HTTPS in production");

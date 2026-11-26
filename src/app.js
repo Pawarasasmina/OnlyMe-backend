@@ -16,6 +16,7 @@ import { assertPrivateStorageConfiguration } from "./services/privateDocumentSto
 import mongoose from "mongoose";
 import { uptimeAlertMiddleware } from "./middleware/uptimeAlertMiddleware.js";
 import { csrfProtection } from "./middleware/csrfMiddleware.js";
+import { sendOwnerOperationalAlert } from "./services/operationalAlertService.js";
 
 assertPrivateStorageConfiguration();
 
@@ -67,6 +68,18 @@ app.post("/api/identity/webhook", express.raw({ type: "application/json", limit:
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+app.post("/api/internal/operational-alert", async (req, res, next) => {
+  try {
+    if (!env.operationalAlertWebhookSecret || req.get("X-Operational-Alert-Secret") !== env.operationalAlertWebhookSecret) return res.status(401).json({ success: false, message: "Invalid operational alert secret" });
+    const type = String(req.body?.type || "").toUpperCase();
+    if (!["CHARGEBACK_SPIKE", "DOWNTIME", "RECOVERY"].includes(type)) return res.status(400).json({ success: false, message: "Unsupported operational alert type" });
+    const count = Math.max(1, Number(req.body?.count) || 1); const occurredAt = new Date(req.body?.occurredAt || Date.now());
+    const key = String(req.body?.eventId || `${type}:${occurredAt.toISOString()}`).slice(0, 200);
+    const copy = type === "CHARGEBACK_SPIKE" ? `⚠️ @seen chargeback spike\n${count} chargebacks reported\nTime: ${occurredAt.toISOString()}\nReview the payments dashboard.` : type === "DOWNTIME" ? `🔴 @seen downtime detected\nTime: ${occurredAt.toISOString()}\nCheck hosting and database health.` : `✅ @seen service recovered\nTime: ${occurredAt.toISOString()}`;
+    await sendOwnerOperationalAlert(type, key, copy);
+    return res.status(202).json({ success: true, message: "Operational alert accepted", data: {} });
+  } catch (error) { return next(error); }
+});
 app.use(csrfProtection);
 app.use("/uploads", express.static(path.resolve("uploads"), {
   etag: true,
