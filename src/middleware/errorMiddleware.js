@@ -1,3 +1,4 @@
+import { recordException } from "../services/internalMonitoringService.js";
 export function errorHandler(err, req, res, _next) {
   if (err.code === "LIMIT_FILE_SIZE") {
     const isVoiceTranscription = req.originalUrl?.includes("/voice/transcribe");
@@ -12,6 +13,7 @@ export function errorHandler(err, req, res, _next) {
   const databaseUnavailable = ["MongoNetworkError", "MongoServerSelectionError", "MongooseServerSelectionError"].includes(err.name);
   const statusCode = databaseUnavailable ? 503 : err.statusCode || 500;
 
+  if (statusCode >= 500 && !req.originalUrl?.includes("/monitoring")) { req.monitoringErrorRecorded = true; recordException(err, { route: req.originalUrl, status: statusCode }); }
   const exposeMessage = statusCode < 500 || process.env.NODE_ENV !== "production";
   return res.status(statusCode).json({
     success: false,

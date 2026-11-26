@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { effectiveAdminRole, requireAdminRole } from "./adminPermissionMiddleware.js";
+import { effectiveAdminRole, requireAdminRole, requireIdentityReviewAccess } from "./adminPermissionMiddleware.js";
+
+test("identity review excludes finance, all read-only accounts, and non-admins", () => {
+  for (const role of ["MAIN_ADMIN", "MODERATOR", "FINANCE"]) {
+    for (const adminReadOnly of [true, false]) {
+      let result;
+      const req = { user: { role: "admin", adminRole: role, adminReadOnly } };
+      requireIdentityReviewAccess(req, {}, (error) => { result = error; });
+      if (adminReadOnly || role === "FINANCE") assert.equal(result.statusCode, 403);
+      else { assert.equal(result, undefined); assert.equal(req.adminRole, role); }
+    }
+  }
+  requireIdentityReviewAccess({ user: { role: "fan", adminRole: "MAIN_ADMIN" } }, {}, (error) => assert.equal(error.statusCode, 403));
+});
 
 function run(user, ...roles) {
   return new Promise((resolve) => requireAdminRole(...roles)({ user }, {}, (error) => resolve(error || null)));

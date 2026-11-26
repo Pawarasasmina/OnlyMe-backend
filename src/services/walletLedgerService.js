@@ -39,7 +39,7 @@ function creatorEarning(entryType) {
   return entryType.endsWith("_CREATOR_EARNING") || entryType === "CHAT_GIFT_EARNING";
 }
 
-export function rebuildWalletBuckets(entries = []) {
+export function rebuildWalletBuckets(entries = [], onEntry) {
   const balances = { bonus: 0, purchased: 0, earned: 0 };
   const allocations = new Map();
   for (const entry of entries) {
@@ -60,7 +60,9 @@ export function rebuildWalletBuckets(entries = []) {
       }
       for (const key of Object.keys(balances)) balances[key] -= Number(allocation[key] || 0);
     }
+    if (Object.values(balances).some((value) => !Number.isSafeInteger(value) || value < 0) || ["bonus", "purchased", "earned"].reduce((sum, key) => sum + Number(allocation[key] || 0), 0) !== amount) throw new ApiError(409, "Wallet history cannot be classified safely", "WALLET_BUCKET_DRIFT");
     allocations.set(String(entry._id), { bonus: Number(allocation.bonus || 0), purchased: Number(allocation.purchased || 0), earned: Number(allocation.earned || 0) });
+    onEntry?.(entry, { ...balances }, { ...allocation });
   }
   if (Object.values(balances).some((value) => !Number.isSafeInteger(value) || value < 0)) throw new ApiError(409, "Wallet history cannot be classified safely", "WALLET_BUCKET_DRIFT");
   return balances;
@@ -79,16 +81,18 @@ async function creditBuckets({ amount, bonusAmount, purchasedAmount, earnedAmoun
   return { bonus, purchased, earned };
 }
 
-async function debitBuckets(wallet, amount, reversalOf, session) {
+export async function debitBuckets(wallet, amount, reversalOf, session, entryType = "") {
   if (reversalOf) {
     const original = await StarsLedgerEntry.findById(reversalOf).session(session).lean();
     const credited = original?.metadata?.bucketCredit;
     if (credited && Number(credited.bonus || 0) + Number(credited.purchased || 0) + Number(credited.earned || 0) === amount) return { bonus: Number(credited.bonus || 0), purchased: Number(credited.purchased || 0), earned: Number(credited.earned || 0) };
   }
+  if (["CREATOR_EARNING_REVERSAL", "REFERRAL_EARNING_REVERSAL"].includes(entryType)) return { bonus: 0, purchased: 0, earned: amount };
   const bonus = Math.min(Number(wallet.bonusBalance || 0), amount);
   const afterBonus = amount - bonus;
   const purchased = Math.min(Number(wallet.purchasedBalance || 0), afterBonus);
-  return { bonus, purchased, earned: afterBonus - purchased };
+  if (bonus + purchased < amount) throw new ApiError(422, "Insufficient fan coins. Creator earnings can only be withdrawn.", FINANCIAL_ERROR_CODES.INSUFFICIENT_STARS);
+  return { bonus, purchased, earned: 0 };
 }
 
 async function consumeBonusGrants(user, amount, session) {
@@ -126,7 +130,7 @@ async function post({ user, amount, bonusAmount = 0, purchasedAmount, earnedAmou
       }
       metadata = { ...metadata, spendingUsd };
     }
-    bucketMetadata = await debitBuckets(bucketWallet, amount, reversalOf, session);
+    bucketMetadata = await debitBuckets(bucketWallet, amount, reversalOf, session, entryType);
     wallet = await Wallet.findOneAndUpdate(
       { _id: wallet._id, [fields.balance]: { $gte: amount }, [fields.bonus]: { $gte: bucketMetadata.bonus }, [fields.purchased]: { $gte: bucketMetadata.purchased }, [fields.earned]: { $gte: bucketMetadata.earned } },
       { $inc: { [fields.balance]: -amount, [fields.bonus]: -bucketMetadata.bonus, [fields.purchased]: -bucketMetadata.purchased, [fields.earned]: -bucketMetadata.earned, version: 1 }, $set: { currency: "STARS", ledgerActivatedAt: wallet.ledgerActivatedAt || new Date(), reconciliationStatus: "MATCHED" } },
@@ -170,5 +174,7 @@ export async function transferStars({ fromUser, toUser, amount, debitType, credi
 }
 export const safeWallet = (wallet, financialMode = "REAL_SEED") => {
   const test = financialMode === "TEST";
-  return { balance: Number(test ? wallet.testBalance : wallet.balance) || 0, bonusBalance: Number(test ? wallet.testBonusBalance : wallet.bonusBalance) || 0, purchasedBalance: Number(test ? wallet.testPurchasedBalance : wallet.purchasedBalance) || 0, earnedBalance: Number(test ? wallet.testEarnedBalance : wallet.earnedBalance) || 0, version: wallet.version, currency: "STARS" };
+  const bonusBalance = Number(test ? wallet.testBonusBalance : wallet.bonusBalance) || 0;
+  const purchasedBalance = Number(test ? wallet.testPurchasedBalance : wallet.purchasedBalance) || 0;
+  return { balance: bonusBalance + purchasedBalance, bonusBalance, purchasedBalance, earnedBalance: Number(test ? wallet.testEarnedBalance : wallet.earnedBalance) || 0, version: wallet.version, currency: "STARS" };
 };

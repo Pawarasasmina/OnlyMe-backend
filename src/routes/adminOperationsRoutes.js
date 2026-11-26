@@ -1,15 +1,17 @@
 import { Router } from "express";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
-import { requireAdminPermission } from "../middleware/adminPermissionMiddleware.js";
+import { requireAdminPermission, requireAdminRole } from "../middleware/adminPermissionMiddleware.js";
 import { acknowledgeUnifiedReport, actionUnifiedReport, createLegalHold, exportHistory, getAdminUserDetail, getAlertSettings, getFinancialUser, getModerationPolicy, getOperationsDashboard, getUnifiedReport, holdPayouts, listAppeals, listAuditEvents, listLegalHolds, listUnifiedReports, releaseLegalHold, releasePayouts, reviewAppeal, searchGovernanceTargets, testAlertChannel, updateAlertSettings, updateModerationPolicy, enforceUser } from "../controllers/adminOperationsController.js";
 
 import { exportContentHistory, exportUserPackage } from "../controllers/adminExportController.js";
 import { listMembershipWorlds, getWorldMemberships, adminCancelMembership, adminRefundMembershipPayment } from "../controllers/adminWorldMembershipController.js";
 import { adminFinancialMutationLimit } from "../middleware/financialRateLimit.js";
+import { getMonitoringStatus } from "../controllers/monitoringController.js";
 
 const router = Router();
 router.use(protect, authorize("admin"));
+router.get("/monitoring", requireAdminRole("MAIN_ADMIN"), getMonitoringStatus);
 router.get("/operations/dashboard", requireAdminPermission("dashboard.view"), getOperationsDashboard);
 router.get("/reports", requireAdminPermission("moderation.view"), listUnifiedReports);
 router.get("/reports/:model/:id", requireAdminPermission("moderation.view"), getUnifiedReport);

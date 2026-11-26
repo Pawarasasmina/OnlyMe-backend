@@ -10,10 +10,11 @@ import {
 } from "../controllers/adminVerificationController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
-import { requireAdminPermission } from "../middleware/adminPermissionMiddleware.js";
+import { requireAdminPermission, requireIdentityReviewAccess } from "../middleware/adminPermissionMiddleware.js";
 
 const router = Router();
 router.use(protect, authorize("admin"));
+router.use(requireIdentityReviewAccess);
 router.get("/", requireAdminPermission("verification.view"), listCreatorVerifications);
 router.get("/:id", requireAdminPermission("verification.view"), getCreatorVerification);
 router.get("/:id/document/:documentType", requireAdminPermission("verification.view"), streamAdminVerificationFile);

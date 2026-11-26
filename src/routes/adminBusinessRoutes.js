@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
-import { requireAdminRole } from "../middleware/adminPermissionMiddleware.js";
+import { requireAdminRole, requireIdentityReviewAccess } from "../middleware/adminPermissionMiddleware.js";
 import { listBusinessApplications, reviewBusiness, streamBusinessDocument, supportInbox, resolveBookingDispute, listBusinessOffers, moderateBusinessOffer } from "../controllers/businessController.js";
 const router = Router();
 router.use(protect, authorize("admin"), requireAdminRole("MAIN_ADMIN", "MODERATOR"));
+router.use("/business-verifications", requireIdentityReviewAccess);
 router.get("/business-verifications", listBusinessApplications);
 router.post("/business-verifications/:id/review", reviewBusiness);
 router.get("/business-verifications/:id/document", streamBusinessDocument);
