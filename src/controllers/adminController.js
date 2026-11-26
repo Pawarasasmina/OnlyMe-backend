@@ -11,7 +11,8 @@ import Story from "../models/Story.js";
 import User from "../models/User.js";
 import MessageReport from "../models/MessageReport.js";
 import Notification from "../models/Notification.js";
-import AdminAccountAudit from "../models/AdminAccountAudit.js";
+import AdminAuditEvent from "../models/AdminAuditEvent.js";
+import { requireAccountAction } from "../validators/accountActionValidator.js";
 import { ACCOUNT_TYPES, normalizeAccountType } from "../constants/accountTypeConstants.js";
 import { storyExpiresAt } from "../services/storyExpiryService.js";
 import ApiError from "../utils/ApiError.js";
@@ -105,13 +106,13 @@ export const updateUserStatus = asyncHandler(async (req, res) => {
     throw new ApiError(400, "You cannot change your own account status");
   }
 
-  const reason = String(req.body.reason || "Administrative account status change").trim().slice(0, 500);
+  const reason = requireAccountAction(req.body);
   const previous = await User.findById(req.params.userId).select("status role dateOfBirth");
   if (previous?.role === "admin") throw new ApiError(403, "Manage staff accounts from Admin team & access");
   if (req.body.status === "active" && previous) assertAccountAge(previous);
   const user = await User.findByIdAndUpdate(req.params.userId, { $set: { status: req.body.status } }, { new: true, runValidators: true }).select("+accountType name username email role status creatorApprovalStatus isVerified avatar createdAt");
   if (!user) throw new ApiError(404, "User not found");
-  await AdminAccountAudit.create({ admin: req.user._id, user: user._id, action: "ACCOUNT_STATUS_CHANGED", previousStatus: previous?.status, status: user.status, reason });
+  await AdminAuditEvent.create({ actor: req.user._id, actorRole: effectiveAdminRole(req.user), targetType: "USER", targetId: String(user._id), action: "ACCOUNT_STATUS_CHANGED", before: { status: previous?.status }, after: { status: user.status }, reason });
 
   return sendResponse(res, 200, "User status updated", { user });
 });
@@ -125,8 +126,7 @@ export const bulkUpdateUsers = asyncHandler(async (req, res) => {
   if (accountType && !ACCOUNT_TYPES.includes(accountType)) throw new ApiError(400, "Account type must be REAL, SEED, or TEST");
   if (status && !["active", "suspended"].includes(status)) throw new ApiError(400, "Status must be active or suspended");
   if (!accountType && !status) throw new ApiError(400, "Choose an account type or status to update");
-  const reason = String(req.body.reason || "").trim();
-  if (reason.length < 3 || reason.length > 500) throw new ApiError(400, "A reason between 3 and 500 characters is required");
+  const reason = requireAccountAction(req.body);
   const users = await User.find({ _id: { $in: ids }, role: { $ne: "admin" } }).select("+accountType status role dateOfBirth");
   if (users.length !== ids.length) throw new ApiError(404, "One or more users were not found");
   if (status === "active") users.forEach(assertAccountAge);
@@ -139,10 +139,13 @@ export const bulkUpdateUsers = asyncHandler(async (req, res) => {
       { $set: { expiresAt: nextExpiry } },
     );
   }
-  await AdminAccountAudit.insertMany(users.flatMap((user) => [
-    ...(accountType && normalizeAccountType(user.accountType) !== accountType ? [{ admin: req.user._id, user: user._id, action: "ACCOUNT_TYPE_CHANGED", previousAccountType: normalizeAccountType(user.accountType), accountType, reason }] : []),
-    ...(status && user.status !== status ? [{ admin: req.user._id, user: user._id, action: "ACCOUNT_STATUS_CHANGED", previousStatus: user.status, status, reason }] : []),
-  ]));
+  await AdminAuditEvent.insertMany(users.map((user) => ({
+    actor: req.user._id, actorRole: effectiveAdminRole(req.user), targetType: "USER", targetId: String(user._id),
+    action: status && accountType ? "ACCOUNT_UPDATED" : status ? "ACCOUNT_STATUS_CHANGED" : "ACCOUNT_TYPE_CHANGED",
+    before: { status: user.status, accountType: normalizeAccountType(user.accountType) },
+    after: { status: status || user.status, accountType: accountType || normalizeAccountType(user.accountType) }, reason,
+    metadata: { bulk: true },
+  })));
   return sendResponse(res, 200, "Accounts updated", { matched: users.length, modified: users.filter((user) => (accountType && normalizeAccountType(user.accountType) !== accountType) || (status && user.status !== status)).length });
 });
 

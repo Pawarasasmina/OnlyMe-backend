@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorize } from "../middleware/roleMiddleware.js";
+import { requireIdentityReviewAccess } from "../middleware/adminPermissionMiddleware.js";
 import IdentityVerification from "../models/IdentityVerification.js";
 import User from "../models/User.js";
 import ApiError from "../utils/ApiError.js";
@@ -9,6 +10,7 @@ import { sendResponse } from "../utils/response.js";
 import { manualPayoutIdentityStatus } from "../services/manualBankService.js";
 const router = Router();
 router.use(protect);
+router.use("/admin", requireIdentityReviewAccess);
 router.get("/admin", authorize("admin"), asyncHandler(async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   const [items, total] = await Promise.all([

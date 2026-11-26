@@ -1,3 +1,5 @@
+import { walletLedgerReport } from "../services/walletReportingService.js";
+import { requireAccountAction } from "../validators/accountActionValidator.js";
 import { withMessageEvidenceUrls } from "../services/messageEvidenceService.js";
 import { normalizeMeetupPolicy } from "../services/unsafeReportService.js";
 import { assertAccountAge } from "../utils/accountAge.js";
@@ -200,7 +202,7 @@ export const getAdminUserDetail = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, "Admin user detail fetched", { user, reports, actions, logins, holds });
 });
 export const enforceUser = asyncHandler(async (req, res) => {
-  const user = await User.findById(validId(req.params.id, "user ID")); if (!user || user.role === "admin") throw new ApiError(404, "User not found"); const action = clean(req.body.action, 50).toUpperCase(); const reason = clean(req.body.reason); if (reason.length < 3) throw new ApiError(400, "A reason is required"); const days = Math.min(365, Math.max(1, Number(req.body.durationDays) || 7)); const until = new Date(Date.now() + days * 86400000); const before = { status: user.status };
+  const user = await User.findById(validId(req.params.id, "user ID")); if (!user || user.role === "admin") throw new ApiError(404, "User not found"); const action = clean(req.body.action, 50).toUpperCase(); const reason = requireAccountAction(req.body); const days = Math.min(365, Math.max(1, Number(req.body.durationDays) || 7)); const until = new Date(Date.now() + days * 86400000); const before = { status: user.status };
   if (action === "WARN") await Notification.create({ user: user._id, type: "moderation_warning", title: "Account warning", message: reason, severity: "warning", dedupeKey: `user-warning:${user._id}:${Date.now()}` });
   else if (action === "RESTRICT_POSTING") { user.postingRestrictedUntil = until; user.postingRestrictionReason = reason; }
   else if (action === "RESTRICT_SELLING") { user.sellingRestrictedUntil = until; user.sellingRestrictionReason = reason; }
@@ -257,9 +259,29 @@ export const releaseLegalHold = asyncHandler(async (req, res) => { const reason 
 
 export const exportHistory = asyncHandler(async (req, res) => { const type = clean(req.query.type, 20).toUpperCase(); const id = validId(req.query.id, "export target ID"); let payload; if (type === "USER") { const user = await User.findById(id).select("-password -resetPasswordToken -resetPasswordExpires").lean(); if (!user) throw new ApiError(404, "User not found"); const [reports, actions, ledger] = await Promise.all([MessageReport.find({ $or: [{ reporter: id }, { reportedUser: id }] }).select("+snapshot").lean(), AdminAuditEvent.find({ targetType: "USER", targetId: String(id) }).lean(), StarsLedgerEntry.find({ accountUser: id }).sort({ createdAt: 1 }).lean()]); payload = { exportedAt: new Date(), type, user, reports, actions, ledger }; } else if (type === "REPORT") { const report = await MessageReport.findById(id).select("+snapshot").lean() || await PublicationReport.findById(id).lean(); if (!report) throw new ApiError(404, "Report not found"); payload = { exportedAt: new Date(), type, report, actions: await AdminAuditEvent.find({ targetType: "REPORT", targetId: String(id) }).lean() }; } else throw new ApiError(400, "Export type must be USER or REPORT"); await audit(req, "DATA_EXPORTED", type, id, clean(req.query.reason) || "Administrative history export"); return sendResponse(res, 200, "History export generated", { export: payload }); });
 
-export const getFinancialUser = asyncHandler(async (req, res) => { const id = validId(req.params.id, "user ID"); const [user, wallet, ledger, payoutHold, worldPurchases, memberships] = await Promise.all([User.findById(id).select("name username email role status").lean(), Wallet.findOne({ user: id }).lean(), StarsLedgerEntry.find({ accountUser: id }).sort({ createdAt: -1 }).limit(500).lean(), PayoutHold.findOne({ user: id, active: true }).lean(), WorldEntitlement.find({ user: id }).populate("publication", "title kind").sort({ createdAt: -1 }).lean(), PremiumMembership.find({ user: id }).populate("premiumPublication", "title kind").sort({ createdAt: -1 }).lean()]); if (!user) throw new ApiError(404, "User not found"); return sendResponse(res, 200, "Financial user fetched", { user, wallet, ledger, payoutHold, purchases: { worlds: worldPurchases, memberships } }); });
-export const holdPayouts = asyncHandler(async (req, res) => { const user = validId(req.params.id, "user ID"); const reason = clean(req.body.reason); if (reason.length < 3) throw new ApiError(400, "A reason is required"); const hold = await PayoutHold.create({ user, reason, placedBy: req.user._id }); await audit(req, "PAYOUT_HOLD_PLACED", "USER", user, reason, null, { payoutHoldId: hold._id }); return sendResponse(res, 201, "Payouts placed on hold", { hold }); });
-export const releasePayouts = asyncHandler(async (req, res) => { const reason = clean(req.body.reason); if (reason.length < 3) throw new ApiError(400, "A reason is required"); const hold = await PayoutHold.findOneAndUpdate({ user: validId(req.params.id, "user ID"), active: true }, { $set: { active: false, releasedBy: req.user._id, releasedAt: new Date(), releaseReason: reason } }, { new: true }); if (!hold) throw new ApiError(404, "Active payout hold not found"); await audit(req, "PAYOUT_HOLD_RELEASED", "USER", req.params.id, reason, { active: true }, { active: false }); return sendResponse(res, 200, "Payout hold released", { hold }); });
+export const getFinancialUser = asyncHandler(async (req, res) => { const id = validId(req.params.id, "user ID"); const [user, wallet, ledger, payoutHold, worldPurchases, memberships] = await Promise.all([User.findById(id).select("+accountType name username email role status").lean(), Wallet.findOne({ user: id }).lean(), StarsLedgerEntry.find({ accountUser: id }).sort({ createdAt: 1, _id: 1 }).lean(), PayoutHold.findOne({ user: id, active: true }).lean(), WorldEntitlement.find({ user: id }).populate("publication", "title kind").sort({ createdAt: -1 }).lean(), PremiumMembership.find({ user: id }).populate("premiumPublication", "title kind").sort({ createdAt: -1 }).lean()]); if (!user) throw new ApiError(404, "User not found"); return sendResponse(res, 200, "Financial user fetched", { user, wallet, ledger, walletReports: { REAL_SEED: walletLedgerReport(wallet || {}, ledger), TEST: walletLedgerReport(wallet || {}, ledger, "TEST") }, payoutHold, purchases: { worlds: worldPurchases, memberships } }); });
+const payoutHoldReason = (body) => {
+  const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+  if (reason.length < 3 || reason.length > 500) throw new ApiError(400, "A reason between 3 and 500 characters is required");
+  return reason;
+};
+export const holdPayouts = asyncHandler(async (req, res) => {
+  const user = validId(req.params.id, "user ID");
+  const reason = payoutHoldReason(req.body);
+  if (!await User.exists({ _id: user })) throw new ApiError(404, "User not found");
+  let hold;
+  try { hold = await PayoutHold.create({ user, reason, placedBy: req.user._id }); }
+  catch (error) { if (error.code === 11000) throw new ApiError(409, "A payout hold is already active for this account"); throw error; }
+  await audit(req, "PAYOUT_HOLD_PLACED", "USER", user, reason, { active: false }, { active: true, payoutHoldId: hold._id });
+  return sendResponse(res, 201, "Payout hold active", { hold });
+});
+export const releasePayouts = asyncHandler(async (req, res) => {
+  const reason = payoutHoldReason(req.body);
+  const hold = await PayoutHold.findOneAndUpdate({ user: validId(req.params.id, "user ID"), active: true }, { $set: { active: false, releasedBy: req.user._id, releasedAt: new Date(), releaseReason: reason } }, { new: true });
+  if (!hold) throw new ApiError(404, "Active payout hold not found");
+  await audit(req, "PAYOUT_HOLD_RELEASED", "USER", req.params.id, reason, { active: true }, { active: false, payoutHoldId: hold._id });
+  return sendResponse(res, 200, "Payout hold released", { hold });
+});
 
 export const getOperationsDashboard = asyncHandler(async (_req, res) => {
   const now = new Date();

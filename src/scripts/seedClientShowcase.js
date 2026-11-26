@@ -707,45 +707,7 @@ async function seedGroupedActivitiesOnly() {
   console.log(`Added fresh grouped Seen and note activities for ${rows.length} showcase creators using four actors per target.`);
 }
 
-async function seedWithdrawalBalancesOnly() {
-  if (env.nodeEnv === "production") throw new Error("Refusing to seed client showcase data while NODE_ENV=production.");
-  await connectDb();
-  const starsPerUsd = await getStarExchangeRate();
-  const amount = 35 * starsPerUsd;
-  let credited = 0;
-  for (const [index, creator] of creators.entries()) {
-    const userId = objectId(`user:${creator.username}`);
-    const commandId = objectId(`withdrawal-demo-v2-command:${creator.username}`);
-    const entryId = objectId(`withdrawal-demo-v2-entry:${creator.username}`);
-    if (await StarsLedgerEntry.exists({ _id: entryId })) continue;
-    const session = await mongoose.startSession();
-    try {
-      await session.withTransaction(async () => {
-        const wallet = await Wallet.findOneAndUpdate(
-          { user: userId },
-          { $inc: { balance: amount, earnedBalance: amount, version: 1 }, $set: { reconciliationStatus: "MATCHED" } },
-          { new: true, session, runValidators: true },
-        );
-        if (!wallet) throw new Error(`Wallet missing for ${creator.username}`);
-        await FinancialCommand.create([{
-          _id: commandId, user: userId, commandType: "ADMIN_CREDIT", idempotencyKey: `${SOURCE}-withdrawal-demo-v2-${creator.username}`,
-          requestFingerprint: crypto.createHash("sha256").update(`${SOURCE}:withdrawal:v2:${creator.username}:${amount}`).digest("hex"),
-          status: "SUCCEEDED", processingLeaseExpiresAt: at(70 + index), resultReference: String(entryId), responseSnapshot: { seeded: true, starsAmount: amount }, completedAt: at(70 + index),
-        }], { session });
-        await StarsLedgerEntry.create([{
-          _id: entryId, accountUser: userId, entryType: "MANUAL_ADJUSTMENT", entryRole: "SHOWCASE_CREATOR_INCOME", direction: "CREDIT",
-          starsAmount: amount, signedAmount: amount, balanceAfter: wallet.balance, referenceType: "SHOWCASE_CREATOR_INCOME",
-          referenceId: `${SOURCE}:withdrawal-v2:${creator.username}`, commandId, idempotencyKey: `${SOURCE}-withdrawal-demo-v2-${creator.username}`,
-          metadata: { seeded: true, bucketCredit: { bonus: 0, purchased: 0, earned: amount }, starsPerUsd, usdAmount: 35 }, createdAt: at(72 + index),
-        }], { session });
-      });
-      credited += 1;
-    } finally {
-      await session.endSession();
-    }
-  }
-  console.log(`Added $35.00 (${amount} Stars at ${starsPerUsd} Stars/USD) of settled prototype withdrawal income to ${credited} new showcase wallets; all 20 remain idempotently funded.`);
-}
+async function seedWithdrawalBalancesOnly() { throw new Error("Showcase income adjustments are disabled. Use Finance-authorized TEST credits with an audit reason."); }
 
 (process.argv.includes("--statuses-only")
   ? seedStatusesOnly()

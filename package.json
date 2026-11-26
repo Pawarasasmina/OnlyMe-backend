@@ -15,8 +15,8 @@
     "seed:approve-showcase-monetization": "node src/scripts/approveShowcaseCreatorMonetization.js",
     "showcase:avatars:restore:dry-run": "node src/scripts/restoreShowcaseAvatars.js",
     "showcase:avatars:restore": "node src/scripts/restoreShowcaseAvatars.js --apply",
-    "dev": "nodemon --watch src --watch .env --watch src/controllers/.env --ext js,mjs,cjs,json,env src/server.js",
-    "start": "node src/server.js",
+    "dev": "nodemon --watch src --watch .env --watch src/controllers/.env --ext js,mjs,cjs,json,env --exec \"node --import ./src/instrument.js\" src/server.js",
+    "start": "node --import ./src/instrument.js src/server.js",
     "lint": "eslint .",
     "test": "node --test --test-concurrency=1",
     "seed:discover-friends": "node src/scripts/seedDiscoverFriendsData.js",
@@ -39,9 +39,9 @@
     "migrate:auth-identifiers:dry-run": "node src/scripts/migrateAuthIdentifierIndexes.js",
     "migrate:auth-identifiers": "node src/scripts/migrateAuthIdentifierIndexes.js --apply",
     "seed:admin-test-logins": "node src/scripts/seedReadOnlyAdminTestAccounts.js",
-    "seed:updated-wall-notes": "node src/scripts/seedUpdatedWallNotes.js"
-    ,"migrate:admin-operations:dry-run": "node src/scripts/migrateAdminOperations.js"
-    ,"migrate:admin-operations": "node src/scripts/migrateAdminOperations.js --apply"
+    "seed:updated-wall-notes": "node src/scripts/seedUpdatedWallNotes.js",
+    "migrate:admin-operations:dry-run": "node src/scripts/migrateAdminOperations.js",
+    "migrate:admin-operations": "node src/scripts/migrateAdminOperations.js --apply"
   },
   "dependencies": {
     "@deepgram/sdk": "^5.8.0",
@@ -58,6 +58,7 @@
     "mongoose": "^8.5.3",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
+    "nodemailer": "^10.6.1",
     "socket.io": "^4.8.3"
   },
   "devDependencies": {

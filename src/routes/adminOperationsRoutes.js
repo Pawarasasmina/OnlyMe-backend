@@ -5,9 +5,11 @@ import { requireAdminRole } from "../middleware/adminPermissionMiddleware.js";
 import { actionUnifiedReport, createLegalHold, exportHistory, getAdminUserDetail, getFinancialUser, getModerationPolicy, getOperationsDashboard, getUnifiedReport, holdPayouts, listAppeals, listAuditEvents, listLegalHolds, listUnifiedReports, releaseLegalHold, releasePayouts, reviewAppeal, searchGovernanceTargets, updateModerationPolicy, enforceUser } from "../controllers/adminOperationsController.js";
 
 import { exportContentHistory, exportUserPackage } from "../controllers/adminExportController.js";
+import { getMonitoringStatus } from "../controllers/monitoringController.js";
 
 const router = Router();
 router.use(protect, authorize("admin"));
+router.get("/monitoring", requireAdminRole("MAIN_ADMIN"), getMonitoringStatus);
 router.get("/operations/dashboard", requireAdminRole("MAIN_ADMIN", "MODERATOR"), getOperationsDashboard);
 router.get("/reports", requireAdminRole("MAIN_ADMIN", "MODERATOR"), listUnifiedReports);
 router.get("/reports/:model/:id", requireAdminRole("MAIN_ADMIN", "MODERATOR"), getUnifiedReport);

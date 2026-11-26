@@ -1,5 +1,7 @@
-﻿import app from "./app.js";
+import app from "./app.js";
 import http from "node:http";
+import { recordException, flushMonitoring } from "./instrument.js";
+import { startInternalMonitoring, stopInternalMonitoring } from "./services/internalMonitoringService.js";
 import { Server } from "socket.io";
 import mongoose from "mongoose";
 import { connectDb } from "./config/db.js";
@@ -36,6 +38,7 @@ function startWorker(name, task) {
       await task();
     } catch (error) {
       console.error(`${name} worker failed`, error);
+      recordException(error, { route: "/worker" });
     } finally {
       if (!shuttingDown) scheduleWorker(run, WORKER_INTERVAL_MS);
     }
@@ -58,6 +61,7 @@ async function startServer() {
   try {
     validateProductionEnv();
     await connectDb();
+    startInternalMonitoring();
     const server = http.createServer(app);
     server.requestTimeout = env.requestTimeoutMs;
     server.headersTimeout = env.headersTimeoutMs;
@@ -90,6 +94,7 @@ async function startServer() {
       server.close(async (error) => {
         try {
           io.close();
+          await stopInternalMonitoring();
           await mongoose.disconnect();
           clearTimeout(forceTimer);
           process.exit(error ? 1 : 0);
@@ -103,6 +108,8 @@ async function startServer() {
     process.once("SIGINT", () => shutdown("SIGINT"));
   } catch (error) {
     console.error("Failed to start server", error);
+    recordException(error);
+    await flushMonitoring();
     process.exit(1);
   }
 }

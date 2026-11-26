@@ -1,14 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import Wallet from "../models/Wallet.js";
-import { creditWallet, debitWallet, rebuildWalletBuckets, safeWallet, transferStars } from "./walletLedgerService.js";
+import { creditWallet, debitWallet, debitBuckets, rebuildWalletBuckets, safeWallet, transferStars } from "./walletLedgerService.js";
 
 test("Wallet projection tracks non-negative integer source balances", () => {
   for (const path of ["balance", "bonusBalance", "purchasedBalance", "earnedBalance"]) assert.equal(Wallet.schema.path(path).options.min, 0);
   assert.equal(Wallet.schema.path("version").options.default, 0);
   const invalid = new Wallet({ user: "000000000000000000000001", balance: 1.5 });
   assert.ok(invalid.validateSync());
-  assert.deepEqual(safeWallet({ balance: 9, bonusBalance: 2, purchasedBalance: 3, earnedBalance: 4, version: 2 }), { balance: 9, bonusBalance: 2, purchasedBalance: 3, earnedBalance: 4, version: 2, currency: "STARS" });
+  assert.deepEqual(safeWallet({ balance: 9, bonusBalance: 2, purchasedBalance: 3, earnedBalance: 4, version: 2 }), { balance: 5, bonusBalance: 2, purchasedBalance: 3, earnedBalance: 4, version: 2, currency: "STARS" });
+});
+
+test("spending cannot consume creator earnings", async () => {
+  const wallet = { bonusBalance: 10, purchasedBalance: 40, earnedBalance: 1000 };
+  assert.deepEqual(await debitBuckets(wallet, 50), { bonus: 10, purchased: 40, earned: 0 });
+  await assert.rejects(debitBuckets(wallet, 51), { code: "INSUFFICIENT_STARS" });
+  await assert.rejects(debitBuckets({ earnedBalance: 1000 }, 1), { code: "INSUFFICIENT_STARS" });
+  assert.deepEqual(await debitBuckets(wallet, 20, null, null, "CREATOR_EARNING_REVERSAL"), { bonus: 0, purchased: 0, earned: 20 });
 });
 
 test("historical Wallet entries rebuild bonus, purchased, and earned sources in spending order", () => {

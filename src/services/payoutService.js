@@ -19,6 +19,9 @@ export async function transitionPayout({ payoutId, status, reason = "" }) {
   if (!current) throw new ApiError(404, "Payout not found", "PAYOUT_NOT_FOUND");
   const transitions = { PENDING: ["PROCESSING", "FAILED", "CANCELED"], PROCESSING: ["PAID", "FAILED"], FAILED: ["PROCESSING"], PAID: [], CANCELED: [] };
   if (!transitions[current.status]?.includes(status)) throw new ApiError(409, `Payout cannot move from ${current.status} to ${status}`, "INVALID_PAYOUT_TRANSITION");
+  if (["PROCESSING", "PAID"].includes(status) && await PayoutHold.exists({ user: current.user, active: true })) {
+    throw new ApiError(403, "Payouts are currently on administrative hold", "PAYOUT_ON_HOLD");
+  }
   const restore = ["FAILED", "CANCELED"].includes(status);
   const key = `payout-status:${current._id}:${status}`;
   return executeFinancialCommand({ user: current.user, commandType: "RESTORE_FAILED_PAYOUT", idempotencyKey: key, requestFingerprint: fingerprint({ payoutId: String(current._id), status, reason }) }, async (session, command) => {

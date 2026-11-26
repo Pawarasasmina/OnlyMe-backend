@@ -1,5 +1,6 @@
 ﻿import mongoose from "mongoose";
 import CreatorVerification from "../models/CreatorVerification.js";
+import { auditDocumentView } from "../services/adminDocumentAccessService.js";
 import VerificationReviewHistory from "../models/VerificationReviewHistory.js";
 import User from "../models/User.js";
 import ApiError from "../utils/ApiError.js";
@@ -65,6 +66,7 @@ export const streamAdminVerificationFile = asyncHandler(async (req, res) => {
   const metadata = verification?.[documentType];
   if (!metadata) throw new ApiError(404, "Verification document not found");
   const stream = await openVerificationDocument(metadata.storageKey);
+  await auditDocumentView(req, stream, "CREATOR_VERIFICATION", verification._id, documentType);
   setPrivateDocumentHeaders(res, metadata);
   stream.on("error", (error) => res.destroy(error));
   stream.pipe(res);
