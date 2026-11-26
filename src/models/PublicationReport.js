@@ -21,7 +21,7 @@ const publicationReportSchema = new mongoose.Schema(
     reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     reviewingAt: { type: Date, default: null },
     resolvedAt: { type: Date, default: null },
-    resolution: { action: { type: String, default: "" }, note: { type: String, default: "", maxlength: 2000 } },
+    resolution: { action: { type: String, default: "" }, note: { type: String, default: "", maxlength: 2000 }, strike: { type: mongoose.Schema.Types.ObjectId, ref: "ModerationStrike", default: null }, strikeNumber: { type: Number, default: null }, automaticConsequence: { type: String, default: "" } },
     snapshot: {
       title: { type: String, trim: true, default: "" },
       summary: { type: String, trim: true, default: "" },
@@ -55,6 +55,10 @@ publicationReportSchema.post("save", async function autoHideUrgent(doc) {
 publicationReportSchema.post("save", function alertModerators(doc) {
   if (!doc.$locals.wasNew) return;
   void import("../services/moderationAlertService.js").then(({ processNewModerationAlert }) => processNewModerationAlert(doc.toObject(), "PublicationReport")).catch((error) => console.error("Immediate moderation alert failed", error));
+});
+publicationReportSchema.post("save", async function syncSeriousPayoutHold(doc) {
+  const { syncSeriousCasePayoutHoldForReport } = await import("../services/moderationEnforcementService.js");
+  await syncSeriousCasePayoutHoldForReport(doc, "PublicationReport");
 });
 
 export default mongoose.model("PublicationReport", publicationReportSchema);

@@ -44,6 +44,9 @@ const messageReportSchema = new mongoose.Schema({
     restrictionLiftedAt: { type: Date, default: null },
     restrictionLiftedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     restrictionLiftNote: { type: String, trim: true, maxlength: 2000, default: "" },
+    strike: { type: mongoose.Schema.Types.ObjectId, ref: "ModerationStrike", default: null },
+    strikeNumber: { type: Number, default: null },
+    automaticConsequence: { type: String, default: "" },
   },
 }, { timestamps: true });
 
@@ -91,6 +94,10 @@ messageReportSchema.post("save", async function autoHideUrgent(doc) {
 messageReportSchema.post("save", function alertModerators(doc) {
   if (!doc.$locals.wasNew) return;
   void import("../services/moderationAlertService.js").then(({ processNewModerationAlert }) => processNewModerationAlert(doc.toObject(), "MessageReport")).catch((error) => console.error("Immediate moderation alert failed", error));
+});
+messageReportSchema.post("save", async function syncSeriousPayoutHold(doc) {
+  const { syncSeriousCasePayoutHoldForReport } = await import("../services/moderationEnforcementService.js");
+  await syncSeriousCasePayoutHoldForReport(doc, "MessageReport");
 });
 messageReportSchema.post("save", async function updateWallReportState(doc) {
   if (doc.scope !== "FEED_POST") return;

@@ -19,6 +19,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendResponse } from "../utils/response.js";
 import { effectiveAdminRole } from "../middleware/adminPermissionMiddleware.js";
 import { CURRENT_ACCOUNT_FILTER } from "../constants/currentAccountScope.js";
+import { applyResolvedCaseStrike } from "../services/moderationEnforcementService.js";
 
 export const getAdminDashboard = asyncHandler(async (_req, res) => {
   const platformUserIds = await User.distinct("_id", CURRENT_ACCOUNT_FILTER);
@@ -332,6 +333,13 @@ export const resolveMessageReport = asyncHandler(async (req, res) => {
     await FeedPost.updateOne({ _id: report.feedPost }, { $set: { status: action === "REMOVED" ? "deleted" : "archived", ...(report.source !== "AUTOMATED_DUPLICATE" ? { moderationStatus: "REJECTED" } : {}), ...(action === "REMOVED" ? { deletedAt: new Date() } : { archivedAt: new Date() }) } });
   }
   await report.save();
+  const strike = await applyResolvedCaseStrike({ report, reportModel: "MessageReport", actorId: req.user._id, io: req.app.get("io") });
+  if (strike) {
+    report.resolution.strike = strike._id;
+    report.resolution.strikeNumber = strike.strikeNumberAtIssue;
+    report.resolution.automaticConsequence = strike.automaticConsequence;
+    await report.save();
+  }
   if (action === "WARNING") {
     await Notification.updateOne(
       { dedupeKey: `moderation-warning:${report._id}` },
