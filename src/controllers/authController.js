@@ -155,6 +155,7 @@ export const register = asyncHandler(async (req, res) => {
     profileType: "personal",
     role: "fan",
     creatorApprovalStatus: null,
+    accountType: "REAL", // B15: public sign-ups are real users; SEED/TEST only via staff or scripts
   };
 
   let user;
@@ -323,7 +324,7 @@ export const googleCallback = asyncHandler(async (req, res) => {
     const root = String(profile.name || email.split("@")[0]).toLowerCase().replace(/[^a-z0-9_]/gu, "").slice(0, 20) || "member";
     let username = root;
     for (let suffix = 0; await User.exists({ username }); suffix += 1) username = `${root.slice(0, 16)}${suffix + 1}`;
-    user = await User.create({ name: String(profile.name || email.split("@")[0]).slice(0, 100), username, email, googleId: profile.sub, avatar: profile.picture || "", password: crypto.randomBytes(32).toString("base64url"), role: "fan", profileType: "personal", creatorApprovalStatus: null });
+    user = await User.create({ name: String(profile.name || email.split("@")[0]).slice(0, 100), username, email, googleId: profile.sub, avatar: profile.picture || "", password: crypto.randomBytes(32).toString("base64url"), role: "fan", profileType: "personal", creatorApprovalStatus: null, accountType: "REAL" });
     await FanProfile.create({ user: user._id });
   }
   assertAccountAge(user);
