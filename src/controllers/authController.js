@@ -241,6 +241,7 @@ export const login = asyncHandler(async (req, res) => {
 
   return sendResponse(res, 200, "Login successful", {
     user: sanitizeUser(user),
+    ...(req.get("X-OnlyMe-Client") === "mobile" ? { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken } : {}),
   });
 });
 
@@ -359,7 +360,8 @@ export const deactivateAccount = asyncHandler(async (req, res) => {
 });
 
 export const refreshSession = asyncHandler(async (req, res) => {
-  const refreshToken = req.cookies.refreshToken;
+  const mobileClient = req.get("X-OnlyMe-Client") === "mobile";
+  const refreshToken = req.cookies.refreshToken || (mobileClient ? req.body.refreshToken : null);
   if (!refreshToken) {
     throw new ApiError(401, "Refresh token is required");
   }
@@ -382,7 +384,7 @@ export const refreshSession = asyncHandler(async (req, res) => {
 
   const tokens = issueAuthTokens(user);
   setAuthCookies(res, tokens);
-  return sendResponse(res, 200, "Session refreshed", {});
+  return sendResponse(res, 200, "Session refreshed", mobileClient ? { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken } : {});
 });
 
 export const getMe = asyncHandler(async (req, res) => {
